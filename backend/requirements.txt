@@ -1,0 +1,11 @@
+streamlit
+pandas
+openpyxl
+langchain
+langchain_deepseek
+langchain_openai
+langchain_ollama
+langgraph
+ollama
+python-dotenv
+pywebview

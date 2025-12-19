@@ -1,0 +1,87 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f0f2f5;
+  color: #333;
+}
+
+#root {
+  height: 100vh;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* 应用容器 */
+.app-container {
+  height: 100vh;
+}
+
+/* 会话列表项 */
+.session-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* 测试用例卡片 */
+.testcase-card {
+  margin-bottom: 16px;
+}
+
+.testcase-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.testcase-content {
+  margin-bottom: 8px;
+}
+
+.testcase-list {
+  margin-left: 16px;
+  margin-bottom: 8px;
+}
+
+/* 模态框内容 */
+.modal-content {
+  padding: 24px;
+}
+
+/* 表单样式 */
+.form-item {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  font-weight: bold;
+  margin-bottom: 8px;
+  display: block;
+}
