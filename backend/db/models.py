@@ -1,51 +1,49 @@
-from dataclasses import dataclass
-from typing import List, Optional, Literal
 from datetime import datetime
+from enum import Enum
+from typing import List, Optional
 
-# 定义字面量类型：仅允许 1/2/3/4
-AllowedValue = Literal[1, 2, 3, 4]
+from sqlmodel import Field, SQLModel, Relationship
 
-@dataclass
-class Session:
+
+# 定义枚举类型：仅允许 1/2/3/4
+class AllowedValue(int, Enum):
+    ONE = 1
+    TWO = 2
+    THREE = 3
+    FOUR = 4
+
+
+# 定义状态枚举类型
+class StatusValue(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+
+
+class BaseModel(SQLModel):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, sa_column_kwargs={"onupdate": datetime.utcnow})
+
+
+class Session(BaseModel, table=True):
     """会话数据模型"""
-    id: str
     name: str
-    created_at: datetime
-    updated_at: datetime
+    # 定义与测试用例的一对多关系
+    test_cases: List["TestCase"] = Relationship(back_populates="session")
 
-@dataclass
-class TestCase:
+
+from sqlalchemy.dialects.sqlite import JSON
+
+
+class TestCase(BaseModel, table=True):
     """测试用例数据模型"""
-    id: Optional[int] = None
-    case_name: str = ""
-    case_level: Optional[AllowedValue] = 4
-    preset_conditions: List[str] = None
-    steps: List[str] = None
-    expected_results: List[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    session_id: Optional[str] = None
-    status: Optional[str] = "pending"  # 测试用例状态：pending（待完成）、completed（已完成）
-    
-    def __post_init__(self):
-        """初始化默认值"""
-        if self.preset_conditions is None:
-            self.preset_conditions = []
-        if self.steps is None:
-            self.steps = []
-        if self.expected_results is None:
-            self.expected_results = []
-        if self.created_at is None:
-            self.created_at = datetime.now()
-        if self.status is None:
-            self.status = "pending"
-        
-        """验证case_level只允许1、2、3、4"""
-        allowed_levels = [1, 2, 3, 4]
-        if self.case_level is not None and self.case_level not in allowed_levels:
-            raise ValueError(f"case_level必须是{allowed_levels}中的一个，当前值：{self.case_level}")
-        
-        """验证status只允许pending或completed"""
-        allowed_status = ["pending", "completed"]
-        if self.status not in allowed_status:
-            raise ValueError(f"status必须是{allowed_status}中的一个，当前值：{self.status}")
+    case_name: str = Field(default="")
+    case_level: Optional[int] = Field(default=4, ge=1, le=4)  # 使用整数类型，添加范围约束
+    preset_conditions: List[str] = Field(default_factory=list, sa_type=JSON)
+    steps: List[str] = Field(default_factory=list, sa_type=JSON)
+    expected_results: List[str] = Field(default_factory=list, sa_type=JSON)
+    session_id: Optional[int] = Field(default=None, foreign_key="session.id")
+    status: str = Field(default="pending")  # 使用字符串类型，直接设置默认值
+
+    # 定义与会话的多对一关系
+    session: Optional[Session] = Relationship(back_populates="test_cases")

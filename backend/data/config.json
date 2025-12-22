@@ -1,6 +1,0 @@
-{
-  "model_type": "api",
-  "api_key": "",
-  "ollama_model": "llama3",
-  "ollama_base_url": "http://localhost:11434"
-}

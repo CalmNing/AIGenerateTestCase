@@ -13,7 +13,7 @@ interface SessionSidebarProps {
   onNewSessionNameChange: (value: string) => void;
   onCreateSession: () => void;
   onSelectSession: (session: Session) => void;
-  onDeleteSession: (id: string) => void;
+  onDeleteSession: (id: number) => void;
 }
 
 const SessionSidebar: React.FC<SessionSidebarProps> = ({
@@ -64,7 +64,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
       </div>
       <Menu
         mode="inline"
-        selectedKeys={selectedSession ? [selectedSession.id] : []}
+        selectedKeys={selectedSession ? [String(selectedSession.id)] : []}
         style={{ borderRight: 0, flex: 1, overflow: 'auto' }}
         items={menuItems}
       />

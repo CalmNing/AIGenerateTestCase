@@ -50,6 +50,7 @@ SYSTEM_PROMPT = """你是一位软件测试专家，你的任务是帮助用户�
 AllowedValue = Literal[1, 2, 3, 4]
 checkpointer = InMemorySaver()
 
+
 # 定义测试用例数据类
 class TestCase(BaseModel):
     """自定义 TestCase schema."""
@@ -155,7 +156,7 @@ def create_testcase_agent(
 # 生成测试用例
 def generate_testcases(
         requirement: str,
-        session_id: str,
+        session_id: int,
         model_type: str = "api",
         api_key: str = "",
         ollama_url: str = "",
@@ -217,6 +218,7 @@ def generate_testcases(
                 case_level=tc.case_level,
                 preset_conditions=tc.preset_conditions,
                 steps=tc.steps,
+                session_id=session_id,
                 expected_results=tc.expected_results
             )
             db_testcases.append(db_tc)

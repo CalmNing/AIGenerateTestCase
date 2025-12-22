@@ -14,7 +14,7 @@ interface TestCaseManagerProps {
   testcasesResponse: TestCaseResponse;
   filters: { case_name: string; status: string };
   onFiltersChange: (filters: { case_name: string; status: string }) => void;
-  onLoadTestcases: (sessionId: string, filters?: { case_name?: string; status?: string }) => void;
+  onLoadTestcases: (sessionId: number, filters?: { case_name?: string; status?: string }) => void;
   onView: (testcase: TestCase) => void;
   onEdit: (testcase: TestCase) => void;
   onComplete: (testcase: TestCase) => void;

@@ -36,13 +36,12 @@ const App: React.FC = () => {
   const [form] = Form.useForm();
   // 删除确认状态
   const [confirmDeleteVisible, setConfirmDeleteVisible] = useState(false);
-  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+  const [sessionToDelete, setSessionToDelete] = useState<number | null>(null);
 
   // 初始化数据
   useEffect(() => {
     loadSessions();
     setSelectedSession(selectedSession?.id ? selectedSession : null);
-    loadTestcases(selectedSession?.id || '');
     // 从localStorage加载设置
     const savedSettings = localStorage.getItem('appSettings');
     if (savedSettings) {
@@ -55,9 +54,7 @@ const App: React.FC = () => {
   // 加载会话列表
   const loadSessions = async () => {
     try {
-      console.log('Loading sessions...');
       const response: ApiResponse<Session[]> | any = await sessionApi.getSessions();
-      console.log('API response:', response);
       if (response.code === 200 && response.data) {
         console.log('Setting sessions:', response.data);
         setSessions(response.data);
@@ -72,7 +69,7 @@ const App: React.FC = () => {
   };
 
   // 加载测试用例
-  const loadTestcases = async (sessionId: string, filters?: { case_name?: string; status?: string }) => {
+  const loadTestcases = async (sessionId: number|any, filters?: { case_name?: string; status?: string }) => {
     try {
       const response: ApiResponse<TestCaseResponse> | any = await testcaseApi.getTestcases(sessionId, filters);
       if (response.code === 200 && response.data) {
@@ -112,7 +109,7 @@ const App: React.FC = () => {
   };
 
   // 删除会话 - 显示确认对话框
-  const handleDeleteSession = (id: string) => {
+  const handleDeleteSession = (id: number) => {
     setSessionToDelete(id);
     setConfirmDeleteVisible(true);
   };
@@ -128,7 +125,7 @@ const App: React.FC = () => {
         if (selectedSession?.id === sessionToDelete) {
           const sessionsId = sessions.length > 0 ? sessions[0] : null;
           setSelectedSession(sessionsId);
-          loadTestcases(sessionsId?.id || '');
+          loadTestcases(sessionsId?.id);
         }
       }
     } catch (error) {

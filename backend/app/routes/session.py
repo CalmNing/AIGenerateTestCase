@@ -1,0 +1,64 @@
+from typing import List
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from sqlmodel import select
+
+from backend.app.deps import SessionDep
+from backend.db.models import Session
+from backend.utils.base_response import Response
+
+
+# 请求模型
+class CreateSessionRequest(BaseModel):
+    name: str
+
+
+class UpdateSessionRequest(CreateSessionRequest):
+    ...
+
+
+router = APIRouter(prefix="/sessions", tags=["session"])
+
+
+# 会话管理API
+@router.get("/", response_model=Response[List[Session]])
+def get_sessions(session: SessionDep):
+    """获取所有会话"""
+    sessions = session.exec(select(Session)).all()
+    return Response(data=sessions)
+
+
+@router.post("/", response_model=Response)
+def create_session(create: CreateSessionRequest, session: SessionDep):
+    """创建新会话"""
+    new_session = Session(name=create.name)
+    session.add(new_session)
+    session.commit()
+    session.refresh(new_session)
+    return Response(data=new_session)
+
+
+@router.put("/{session_id}", response_model=Response[int])
+def update_session(session_id: int, update: UpdateSessionRequest, session: SessionDep):
+    """更新会话"""
+    session_db = session.get(Session, session_id)
+    if not session_db:
+        raise HTTPException(status_code=404, detail='会话不存在！')
+    session_data = update.model_dump(exclude_unset=True)
+    session_db.sqlmodel_update(session_data)
+    session.add(session_db)
+    session.commit()
+    session.refresh(session_db)
+    return Response(data=session_id)
+
+
+@router.delete("/{session_id}", response_model=Response[int])
+def delete_session(session_id: int, session: SessionDep):
+    """删除会话"""
+    sess = session.get(Session, session_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail='会话不存在！')
+    session.delete(sess)
+    session.commit()
+    return Response(data=session_id)

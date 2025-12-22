@@ -1,6 +1,6 @@
 // 会话类型
 export interface Session {
-  id: string;
+  id: number;
   name: string;
   created_at: string;
   updated_at: string;
