@@ -1,9 +1,11 @@
+import zoneinfo
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
 from sqlmodel import Field, SQLModel, Relationship
 
+cn_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
 
 # 定义枚举类型：仅允许 1/2/3/4
 class AllowedValue(int, Enum):
@@ -21,8 +23,8 @@ class StatusValue(str, Enum):
 
 class BaseModel(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now, sa_column_kwargs={"onupdate": datetime.now})
+    created_at: datetime = Field(default_factory=lambda :datetime.now(tz=cn_tz))
+    updated_at: datetime = Field(default_factory=lambda :datetime.now(tz=cn_tz), sa_column_kwargs={"onupdate": lambda :datetime.now(tz=cn_tz)})
 
 
 class Session(BaseModel, table=True):

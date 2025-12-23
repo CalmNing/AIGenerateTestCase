@@ -2,8 +2,7 @@ from typing import List, Annotated
 
 from fastapi import APIRouter, Query, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func
-from sqlmodel import select
+from sqlmodel import select, desc,func
 
 from app.deps import SessionDep
 from db.models import TestCase
@@ -33,7 +32,7 @@ def get_testcases(
         status: str = None
 ):
     """获取会话的测试用例"""
-    query = select(TestCase).where(TestCase.session_id == session_id)
+    query = select(TestCase).where(TestCase.session_id == session_id).order_by(desc(TestCase.created_at))
 
     if case_name:
         query = query.where(TestCase.case_name.contains(case_name))
