@@ -10,7 +10,7 @@ from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 
-from backend.db.models import TestCase as DBTestCase
+from db.models import TestCase as DBTestCase
 
 # 简单的 agent 缓存，key -> agent
 _AGENT_CACHE: dict = {}

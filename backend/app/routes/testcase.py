@@ -5,9 +5,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlmodel import select
 
-from backend.app.deps import SessionDep
-from backend.db.models import TestCase
-from backend.utils.base_response import Response
+from app.deps import SessionDep
+from db.models import TestCase
+from utils.base_response import Response
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
@@ -78,7 +78,7 @@ def generate_testcases(
         request: GenerateTestcasesRequest
 ):
     """生成测试用例"""
-    from backend.utils.model_utils import generate_testcases
+    from utils.model_utils import generate_testcases
 
     # 基本输入校验
     if not request.requirement or not request.requirement.strip():

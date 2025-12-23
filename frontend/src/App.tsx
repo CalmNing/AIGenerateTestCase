@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, Button, Space, Divider, notification, Form, Tabs } from 'antd';
+import { Layout, notification, Form, Tabs } from 'antd';
 import { ApiResponse, Session, TestCase, TestCaseResponse } from './types';
 import { sessionApi, testcaseApi } from './services/api';
 import HeaderComponent from './components/HeaderComponent';

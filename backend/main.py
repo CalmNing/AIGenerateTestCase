@@ -2,8 +2,8 @@ from fastapi import FastAPI, Body  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from pydantic import BaseModel
 
-from backend.app.main import api_router
-from backend.db.db import create_db_and_tables
+from app.main import api_router
+from db.db import create_db_and_tables
 
 # 创建FastAPI应用
 app = FastAPI(

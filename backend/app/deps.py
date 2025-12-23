@@ -3,7 +3,7 @@ from typing import Generator, Annotated
 from fastapi import Depends
 from sqlmodel import Session
 
-from backend.db.db import engine
+from db.db import engine
 
 
 def get_db() -> Generator[Session, None, None]:

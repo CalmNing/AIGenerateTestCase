@@ -4,9 +4,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
 
-from backend.app.deps import SessionDep
-from backend.db.models import Session
-from backend.utils.base_response import Response
+from app.deps import SessionDep
+from db.models import Session
+from utils.base_response import Response
 
 
 # 请求模型
