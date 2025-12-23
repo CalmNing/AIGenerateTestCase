@@ -10,6 +10,8 @@ services:
       - ./backend/data:/app/data
     networks:
       - app-network
+    environment:
+      - TZ=Asia/Shanghai
 
   frontend:
     build: ./frontend
