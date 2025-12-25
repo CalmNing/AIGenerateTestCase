@@ -1,6 +1,6 @@
 import React from 'react';
 import { Modal, Form, Input, Select } from 'antd';
-import { TestCase } from '../../types';
+import { TestCase, TestCaseStatus } from '../../types';
 
 interface EditTestcaseModalProps {
   visible: boolean;
@@ -37,7 +37,7 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
           initialValues={{
             case_name: selectedTestcase.case_name,
             case_level: selectedTestcase.case_level,
-            status: selectedTestcase.status || 'pending',
+            status: selectedTestcase.status || TestCaseStatus.NOT_RUN,
             preset_conditions: selectedTestcase.preset_conditions.join('\n'),
             steps: selectedTestcase.steps.join('\n'),
             expected_results: selectedTestcase.expected_results.join('\n')
@@ -71,8 +71,9 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
             rules={[{ required: true, message: '请选择测试状态' }]}
           >
             <Select>
-              <Select.Option value="pending">待执行</Select.Option>
-              <Select.Option value="completed">已执行</Select.Option>
+              <Select.Option value={TestCaseStatus.NOT_RUN}>未执行</Select.Option>
+              <Select.Option value={TestCaseStatus.PASSED}>已通过</Select.Option>
+              <Select.Option value={TestCaseStatus.FAILED}>未通过</Select.Option>
             </Select>
           </Form.Item>
 
@@ -94,7 +95,7 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
           >
             <Input.TextArea
               placeholder="请输入测试步骤，每行一个步骤"
-              rows={6}
+              rows={4}
             />
           </Form.Item>
 

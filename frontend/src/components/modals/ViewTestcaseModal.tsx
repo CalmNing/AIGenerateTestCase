@@ -1,7 +1,7 @@
 import React from 'react';
 import { Modal, Button } from 'antd';
 import { CheckOutlined } from '@ant-design/icons';
-import { TestCase } from '../../types';
+import { TestCase, TestCaseStatus } from '../../types';
 
 interface ViewTestcaseModalProps {
   visible: boolean;
@@ -22,7 +22,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
       open={visible}
       onCancel={onCancel}
       footer={[
-        selectedTestcase && selectedTestcase.status !== 'completed' && (
+        selectedTestcase && selectedTestcase.status !== TestCaseStatus.PASSED && (
           <Button type="primary" icon={<CheckOutlined />} onClick={() => {
             onCancel();
             onComplete(selectedTestcase);
@@ -45,7 +45,32 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
             <h4>用例级别: P{selectedTestcase.case_level}</h4>
           </div>
           <div style={{ marginBottom: 16 }}>
-            <h4>当前状态: {selectedTestcase.status === 'completed' ? '已执行' : '待执行'}</h4>
+            <h4>当前状态: 
+              <span style={{ 
+                color: selectedTestcase.status === TestCaseStatus.PASSED ? 'green' : 
+                      selectedTestcase.status === TestCaseStatus.FAILED ? 'red' : 'orange',
+                fontWeight: 'bold'
+              }}>
+                {selectedTestcase.status === TestCaseStatus.PASSED ? '已通过' : 
+                 selectedTestcase.status === TestCaseStatus.FAILED ? '未通过' : '未执行'}
+              </span>
+            </h4>
+          </div>
+           <div style={{ marginBottom: 16 }}>
+            <h4>
+              	Bug: {selectedTestcase.bug_id ? (
+                <a 
+                  href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${selectedTestcase.bug_id}`} 
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: '#1890ff' }}
+                >
+                  {selectedTestcase.bug_id}
+                </a>
+              ) : (
+                '无'
+              )}
+            </h4>
           </div>
           <div style={{ marginBottom: 16 }}>
             <h4>前置条件:</h4>

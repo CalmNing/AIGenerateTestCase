@@ -6,6 +6,13 @@ export interface Session {
   updated_at: string;
 }
 
+// 测试用例状态枚举
+export enum TestCaseStatus {
+  NOT_RUN = 'NOT_RUN', // 未运行
+  PASSED = 'PASSED',   // 通过
+  FAILED = 'FAILED',   // 未通过
+}
+
 // 测试用例类型
 export interface TestCase {
   id: number;
@@ -15,14 +22,16 @@ export interface TestCase {
   steps: string[];
   expected_results: string[];
   created_at: string;
-  status?: 'pending' | 'completed'; // 测试用例状态：pending（待执行）、completed（已执行）
+  status?: TestCaseStatus; // 测试用例状态：NOT_RUN（未运行）、PASSED（通过）、FAILED（未通过）
+  bug_id?: number;
 }
 
 // 测试用例类型
 export interface TestCaseResponse {
   items: TestCase[];
-  completed: number;
-  pending: number;
+  passed: number;
+  failed: number;
+  not_run: number;
   totalNumber: number;
 
 }

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import select, desc,func
 
 from app.deps import SessionDep
-from db.models import TestCase
+from db.models import TestCase, StatusValue
 from utils.base_response import Response
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
@@ -14,8 +14,9 @@ router = APIRouter(prefix="/testcases", tags=["testcases"])
 class TestCasePage(BaseModel):
     items: List[TestCase]
     totalNumber: int = Field(int, description="总条数")
-    completed: int = Field(int, description="已完成的用例数")
-    pending: int = Field(int, description="待完成的用例数")
+    passed: int = Field(int, description="已通过的用例数")
+    failed: int = Field(int, description="未通过的用例数")
+    not_run: int = Field(int, description="未执行的用例数")
     model_config = {
         "arbitrary_types_allowed": True,
     }
@@ -32,7 +33,7 @@ def get_testcases(
         status: str = None
 ):
     """获取会话的测试用例"""
-    query = select(TestCase).where(TestCase.session_id == session_id).order_by(desc(TestCase.created_at))
+    query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,desc(TestCase.created_at))
 
     if case_name:
         query = query.where(TestCase.case_name.contains(case_name))
@@ -41,22 +42,30 @@ def get_testcases(
         query = query.where(TestCase.status.contains(status))
 
     testcases_db = session.exec(query.offset(offset).limit(limit)).all()
+    # 确保 session_id 被转换为 int 类型
+    for testcase in testcases_db:
+        testcase.session_id = int(testcase.session_id) if testcase.session_id else None
 
     totalNumber = session.scalar(select(func.count()).where(TestCase.session_id == session_id))
-    completed = session.scalar(select(func.count()).where(
+    passed = session.scalar(select(func.count()).where(
         TestCase.session_id == session_id,
-        TestCase.status == "completed"
+        TestCase.status == StatusValue.PASSED
     ))
 
-    pending = session.scalar(select(func.count()).where(
+    failed = session.scalar(select(func.count()).where(
         TestCase.session_id == session_id,
-        TestCase.status == "pending"
+        TestCase.status == StatusValue.FAILED
+    ))
+    not_run = session.scalar(select(func.count()).where(
+        TestCase.session_id == session_id,
+        TestCase.status == StatusValue.NOT_RUN
     ))
     testcases = TestCasePage(
         items=testcases_db,
         totalNumber=totalNumber,
-        completed=completed,
-        pending=pending
+        passed=passed,
+        failed=failed,
+        not_run=not_run
     )
     return Response(data=testcases)
 

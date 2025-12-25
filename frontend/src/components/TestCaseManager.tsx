@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, Typography, Space, Button, Input, Select, notification } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
-import { Session, TestCase, TestCaseResponse } from '../types';
+import { Session, TestCase, TestCaseResponse, TestCaseStatus } from '../types';
 import TestCaseTable from './TestCaseTable';
 // 静态导入xlsx库
 import * as XLSX from 'xlsx';
@@ -48,11 +48,14 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       const exportData = testcases.map(tc => ({
         '用例名称': tc.case_name,
         '用例级别': `P${tc.case_level}`,
-        '状态': tc.status === 'completed' ? '已执行' : '待执行',
-        '创建时间': new Date(tc.created_at).toLocaleString(),
         '前置条件': tc.preset_conditions.join('\n'),
         '测试步骤': tc.steps.join('\n'),
-        '预期结果': tc.expected_results.join('\n')
+        '预期结果': tc.expected_results.join('\n'),
+        '状态': tc.status === TestCaseStatus.PASSED ? '已通过' : 
+               tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
+        'bug': tc.bug_id ? `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}` : '',
+        // '创建时间': new Date(tc.created_at).toLocaleString(),
+
       }));
 
       // 创建工作表
@@ -90,29 +93,37 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
           <Text type="secondary">请先从左侧选择一个会话</Text>
         </div>
-      ) : testcases.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <Text type="secondary">当前会话中没有测试用例，请先生成测试用例</Text>
-        </div>
-      ) : (
+      ) 
+      // : testcases.length === 0 ? (
+      //   <div style={{ textAlign: 'center', padding: '40px 0' }}>
+      //     <Text type="secondary">当前会话中没有测试用例，请先生成测试用例</Text>
+      //   </div>
+      // ) 
+      : (
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
           {/* 固定顶部区域：统计信息和操作按钮 */}
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, background: '#f5f5f5', borderRadius: 4 }}>
             <Space size="large">
               <div>
                 <Text strong>总用例数: </Text>
-                <Text style={{ color: '#1890ff' }}>{testcasesResponse.totalNumber}</Text>
+                <Text style={{ color: '#1890ff' , fontWeight: 'bold' }}>{testcasesResponse.totalNumber}</Text>
               </div>
               <div>
-                <Text strong>已执行: </Text>
-                <Text type="success">
-                  {testcasesResponse.completed}
+                <Text strong>已通过: </Text>
+                <Text type="success" style={{ fontWeight: 'bold' }}>
+                  {testcasesResponse.passed}
                 </Text>
               </div>
               <div>
-                <Text strong>待执行: </Text>
-                <Text type="warning">
-                  {testcasesResponse.pending}
+                <Text strong>未执行: </Text>
+                <Text type="warning" style={{ fontWeight: 'bold' }}>
+                  {testcasesResponse.not_run}
+                </Text>
+              </div>
+              <div>
+                <Text strong>未通过: </Text>
+                <Text type="warning" style={{ fontWeight: 'bold' }}>
+                  {testcasesResponse.failed}
                 </Text>
               </div>
             </Space>
@@ -151,17 +162,18 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 style={{ width: 120 }}
               >
                 <Select.Option value="">全部</Select.Option>
-                <Select.Option value="pending">待执行</Select.Option>
-                <Select.Option value="completed">已执行</Select.Option>
+                <Select.Option value={TestCaseStatus.NOT_RUN}>未执行</Select.Option>
+                <Select.Option value={TestCaseStatus.PASSED}>已通过</Select.Option>
+                <Select.Option value={TestCaseStatus.FAILED}>未通过</Select.Option>
               </Select>
               <Button type="primary" onClick={() => {
                 if (selectedSession) {
                   onLoadTestcases(selectedSession.id, filters);
-                  notification.info({
-                    message: '筛选已应用',
-                    description: '测试用例列表已根据筛选条件更新',
-                    placement: 'topRight'
-                  });
+                  // notification.info({
+                  //   message: '筛选已应用',
+                  //   description: '测试用例列表已根据筛选条件更新',
+                  //   placement: 'topRight'
+                  // });
                 }
               }}>
                 筛选
@@ -175,11 +187,11 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 if (selectedSession) {
                   onLoadTestcases(selectedSession.id, newFilters);
                 }
-                notification.info({
-                  message: '筛选已重置',
-                  description: '所有筛选条件已重置',
-                  placement: 'topRight'
-                });
+                // notification.info({
+                //   message: '筛选已重置',
+                //   description: '所有筛选条件已重置',
+                //   placement: 'topRight'
+                // });
               }}>
                 重置
               </Button>
@@ -187,13 +199,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
           </div>
 
           {/* 表格容器 */}
-          <div style={{ flex: 1 }}>
-            {/* 直接使用从后端获取的测试用例数据 */}
-            {testcases.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px 0' }}>
-                <Text type="secondary">没有符合条件的测试用例</Text>
-              </div>
-            ) : (
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+
               <TestCaseTable
                 testcases={testcases}
                 onView={onView}
@@ -201,7 +208,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 onComplete={onComplete}
                 onDelete={onDelete}
               />
-            )}
+
           </div>
         </div>
       )}

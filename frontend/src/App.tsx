@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs } from 'antd';
-import { ApiResponse, Session, TestCase, TestCaseResponse } from './types';
+import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus } from './types';
 import { sessionApi, testcaseApi } from './services/api';
 import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
@@ -23,7 +23,7 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [testcases, setTestcases] = useState<TestCase[]>([]);
-  const [testcasesResponse, setTestcasesResponse] = useState<TestCaseResponse>({ items: [], completed: 0, pending: 0, totalNumber: 0 });
+  const [testcasesResponse, setTestcasesResponse] = useState<TestCaseResponse>({ items: [], passed: 0, failed: 0, not_run: 0, totalNumber: 0 });
   const [newSessionName, setNewSessionName] = useState('');
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
@@ -217,7 +217,7 @@ const App: React.FC = () => {
         ...selectedTestcase,
         case_name: values.case_name,
         case_level: values.case_level,
-        status: values.status as 'pending' | 'completed',
+        status: values.status as TestCaseStatus,
         preset_conditions: values.preset_conditions.split('\n').filter((item: string) => item.trim()),
         steps: values.steps.split('\n').filter((item: string) => item.trim()),
         expected_results: values.expected_results.split('\n').filter((item: string) => item.trim())
@@ -320,14 +320,15 @@ const App: React.FC = () => {
   };
   
   // 确认执行测试用例
-  const handleConfirmCompleteTestcase = async () => {
+  const handleConfirmCompleteTestcase = async (status: TestCaseStatus, bugId?: number) => {
     if (!testcaseToComplete || !selectedSession) return;
     
     try {
       // 更新测试用例状态
       const updatedTestcase = {
         ...testcaseToComplete,
-        status: 'completed' as const
+        status: status,
+        bug_id: bugId
       };
       
       // 调用后端API更新测试用例
@@ -346,7 +347,7 @@ const App: React.FC = () => {
         // 显示成功通知
         notification.success({
           message: '执行成功',
-          description: '测试用例已成功标记为执行',
+          description: `测试用例已成功标记为${status === TestCaseStatus.PASSED ? '通过' : status === TestCaseStatus.FAILED ? '未通过' : '未运行'}`,
           placement: 'topRight'
         });
       }

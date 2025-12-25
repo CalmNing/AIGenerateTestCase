@@ -3,9 +3,11 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
+from pydantic import field_validator
 from sqlmodel import Field, SQLModel, Relationship
 
 cn_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
+
 
 # 定义枚举类型：仅允许 1/2/3/4
 class AllowedValue(int, Enum):
@@ -17,14 +19,16 @@ class AllowedValue(int, Enum):
 
 # 定义状态枚举类型
 class StatusValue(str, Enum):
-    PENDING = "pending"
-    COMPLETED = "completed"
+    NOT_RUN = "NOT_RUN"  # "未执行"
+    PASSED = "PASSED"  # "通过"
+    FAILED = "FAILED"  # "未通过"
 
 
 class BaseModel(SQLModel):
     id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=lambda :datetime.now(tz=cn_tz))
-    updated_at: datetime = Field(default_factory=lambda :datetime.now(tz=cn_tz), sa_column_kwargs={"onupdate": lambda :datetime.now(tz=cn_tz)})
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=cn_tz))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=cn_tz),
+                                 sa_column_kwargs={"onupdate": lambda: datetime.now(tz=cn_tz)})
 
 
 class Session(BaseModel, table=True):
@@ -45,7 +49,8 @@ class TestCase(BaseModel, table=True):
     steps: List[str] = Field(default_factory=list, sa_type=JSON)
     expected_results: List[str] = Field(default_factory=list, sa_type=JSON)
     session_id: Optional[int] = Field(default=None, foreign_key="session.id")
-    status: str = Field(default="pending")  # 使用字符串类型，直接设置默认值
+    status: str = Field(default="NOT_RUN")  # 使用字符串类型，直接设置默认值created_at
+    bug_id: Optional[int] = Field(default=None)
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
