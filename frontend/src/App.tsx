@@ -31,7 +31,7 @@ const App: React.FC = () => {
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('generate');
-  
+
   // 创建表单实例
   const [form] = Form.useForm();
   // 删除确认状态
@@ -69,7 +69,7 @@ const App: React.FC = () => {
   };
 
   // 加载测试用例
-  const loadTestcases = async (sessionId: number|any, filters?: { case_name?: string; status?: string }) => {
+  const loadTestcases = async (sessionId: number | any, filters?: { case_name?: string; status?: string }) => {
     try {
       const response: ApiResponse<TestCaseResponse> | any = await testcaseApi.getTestcases(sessionId, filters);
       if (response.code === 200 && response.data) {
@@ -84,7 +84,7 @@ const App: React.FC = () => {
   // 创建会话
   const handleCreateSession = async () => {
     if (!newSessionName.trim()) return;
-    
+
     try {
       const response: ApiResponse<Session> | any = await sessionApi.createSession(newSessionName.trim());
       if (response.code === 200 && response.data) {
@@ -113,11 +113,11 @@ const App: React.FC = () => {
     setSessionToDelete(id);
     setConfirmDeleteVisible(true);
   };
-  
+
   // 确认删除会话
   const handleConfirmDeleteSession = async () => {
     if (!sessionToDelete) return;
-    
+
     try {
       const response: ApiResponse<Session> | any = await sessionApi.deleteSession(sessionToDelete);
       if (response.code === 200) {
@@ -136,7 +136,7 @@ const App: React.FC = () => {
       setSessionToDelete(null);
     }
   };
-  
+
   // 取消删除会话
   const handleCancelDeleteSession = () => {
     setConfirmDeleteVisible(false);
@@ -147,48 +147,6 @@ const App: React.FC = () => {
   const handleSelectSession = (session: Session) => {
     setSelectedSession(session);
     loadTestcases(session.id, filters);
-  };
-
-  // 生成测试用例
-  const handleGenerateTestcases = async () => {
-    if (!selectedSession || !requirement.trim()) return;
-    
-    try {
-      setLoading(true);
-      
-      // 从localStorage获取模型配置
-      const savedSettings = localStorage.getItem('appSettings');
-      let modelConfig = undefined;
-      if (savedSettings) {
-        const settings = JSON.parse(savedSettings);
-        modelConfig = {
-          model_type: settings.setting_type,
-          api_key: settings.api_key || '',
-          ollama_url: settings.ollama_url || '',
-          ollama_model: settings.ollama_model || ''
-        };
-      }
-      
-      const response:ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(selectedSession.id, requirement.trim(), modelConfig);
-      if (response.code === 200 && response.data) {
-        loadTestcases(selectedSession.id);
-        setRequirement('');
-        notification.success({
-          message: '生成成功',
-          description: '测试用例已成功生成',
-          placement: 'topRight'
-        });
-      }
-    } catch (error:any) {
-      console.error('生成测试用例失败:', error);
-      notification.error({
-        message: '生成失败',
-        description: `${error.response.data.detail || '生成测试用例时发生错误，请重试'}`,
-        placement: 'topRight'
-      });
-    } finally {
-      setLoading(false);
-    }
   };
 
   // 查看测试用例
@@ -204,14 +162,14 @@ const App: React.FC = () => {
     // 重置表单
     form.resetFields();
   };
-  
+
   // 表单提交处理
   const handleEditSubmit = async (values: any) => {
     if (!selectedTestcase || !selectedSession) return;
-    
+
     try {
       setLoading(true);
-      
+
       // 处理表单数据
       const updatedTestcase = {
         ...selectedTestcase,
@@ -222,23 +180,23 @@ const App: React.FC = () => {
         steps: values.steps.split('\n').filter((item: string) => item.trim()),
         expected_results: values.expected_results.split('\n').filter((item: string) => item.trim())
       };
-      
+
       // 调用后端API更新测试用例
       const response: ApiResponse | any = await testcaseApi.updateTestcase(
         selectedSession.id,
         selectedTestcase.id,
         updatedTestcase
       );
-      
+
       if (response.code === 200) {
         // 更新本地状态
-        setTestcases(testcases.map(tc => 
+        setTestcases(testcases.map(tc =>
           tc.id === selectedTestcase.id ? updatedTestcase : tc
         ));
-        
+
         // 关闭模态框
         setIsEditModalVisible(false);
-        
+
         // 显示成功通知
         notification.success({
           message: '更新成功',
@@ -265,7 +223,7 @@ const App: React.FC = () => {
   // 测试用例执行状态
   const [confirmCompleteTestcaseVisible, setConfirmCompleteTestcaseVisible] = useState(false);
   const [testcaseToComplete, setTestcaseToComplete] = useState<TestCase | null>(null);
-  
+
   // 测试用例筛选条件
   const [filters, setFilters] = useState({
     case_name: '',
@@ -277,11 +235,11 @@ const App: React.FC = () => {
     setTestcaseToDelete(id);
     setConfirmDeleteTestcaseVisible(true);
   };
-  
+
   // 确认删除测试用例
   const handleConfirmDeleteTestcase = async () => {
     if (!testcaseToDelete || !selectedSession) return;
-    
+
     try {
       const response: any = await testcaseApi.deleteTestcase(selectedSession.id, testcaseToDelete);
       if (response.code === 200) {
@@ -306,7 +264,7 @@ const App: React.FC = () => {
       setTestcaseToDelete(null);
     }
   };
-  
+
   // 取消删除测试用例
   const handleCancelDeleteTestcase = () => {
     setConfirmDeleteTestcaseVisible(false);
@@ -318,11 +276,11 @@ const App: React.FC = () => {
     setTestcaseToComplete(testcase);
     setConfirmCompleteTestcaseVisible(true);
   };
-  
+
   // 确认执行测试用例
   const handleConfirmCompleteTestcase = async (status: TestCaseStatus, bugId?: number) => {
     if (!testcaseToComplete || !selectedSession) return;
-    
+
     try {
       // 更新测试用例状态
       const updatedTestcase = {
@@ -330,17 +288,17 @@ const App: React.FC = () => {
         status: status,
         bug_id: bugId
       };
-      
+
       // 调用后端API更新测试用例
       const response: any = await testcaseApi.updateTestcase(
         selectedSession.id,
         testcaseToComplete.id,
         updatedTestcase
       );
-      
+
       if (response.code === 200) {
         // 更新本地状态
-        setTestcases(testcases.map(tc => 
+        setTestcases(testcases.map(tc =>
           tc.id === testcaseToComplete.id ? updatedTestcase : tc
         ));
         loadTestcases(selectedSession.id);
@@ -363,7 +321,7 @@ const App: React.FC = () => {
       setTestcaseToComplete(null);
     }
   };
-  
+
   // 取消执行测试用例
   const handleCancelCompleteTestcase = () => {
     setConfirmCompleteTestcaseVisible(false);
@@ -375,7 +333,7 @@ const App: React.FC = () => {
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
   const [settingType, setSettingType] = useState<'api' | 'ollama'>('api');
-  
+
   // 打开设置模态框
   const handleOpenSettingModal = () => {
     setIsSettingModalVisible(true);
@@ -391,7 +349,7 @@ const App: React.FC = () => {
       setSettingType('api');
     }
   };
-  
+
   // 设置类型改变处理
   const handleSettingTypeChange = (e: any) => {
     const value = e.target.value;
@@ -408,18 +366,18 @@ const App: React.FC = () => {
       });
     }
   };
-  
+
   // 保存设置
   const handleSaveSetting = async (values: any) => {
     try {
       setLoading(true);
-      
+
       // 保存到localStorage
       localStorage.setItem('appSettings', JSON.stringify(values));
-      
+
       // 关闭模态框
       setIsSettingModalVisible(false);
-      
+
       // 显示成功通知
       notification.success({
         message: '保存成功',
@@ -437,6 +395,59 @@ const App: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // 生成测试用例
+  const handleGenerateTestcases = async () => {
+    if (!selectedSession || !requirement.trim()) return;
+
+    try {
+      setLoading(true);
+
+      // 从localStorage获取模型配置
+      const savedSettings = localStorage.getItem('appSettings');
+      let modelConfig = undefined;
+      if (!savedSettings) {
+        handleOpenSettingModal();
+      }
+      else {
+        const settings = JSON.parse(savedSettings);
+        if (settings) {
+          // if (settings.api_key == undefined && settings.api_key == '') {
+          //   handleOpenSettingModal();
+          // }
+          modelConfig = {
+            model_type: settings.setting_type,
+            api_key: settings.api_key || '',
+            ollama_url: settings.ollama_url || '',
+            ollama_model: settings.ollama_model || ''
+          };
+        }
+
+        const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(selectedSession.id, requirement.trim(), modelConfig);
+        if (response.code === 200 && response.data) {
+          loadTestcases(selectedSession.id);
+          setRequirement('');
+          notification.success({
+            message: '生成成功',
+            description: '测试用例已成功生成',
+            placement: 'topRight'
+          });
+        }
+      }
+
+    } catch (error: any) {
+      console.error('生成测试用例失败:', error);
+      notification.error({
+        message: '生成失败',
+        description: `${error.response.data.detail || '生成测试用例时发生错误，请重试'}`,
+        placement: 'topRight'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
 
   return (
     <ConfigProvider locale={zhCN}>
@@ -495,32 +506,32 @@ const App: React.FC = () => {
           </Layout>
         </Layout>
       </Layout>
-    
+
       <DeleteSessionModal
         visible={confirmDeleteVisible}
         onOk={handleConfirmDeleteSession}
         onCancel={handleCancelDeleteSession}
       />
-      
+
       <DeleteTestcaseModal
         visible={confirmDeleteTestcaseVisible}
         onOk={handleConfirmDeleteTestcase}
         onCancel={handleCancelDeleteTestcase}
       />
-      
+
       <CompleteTestcaseModal
         visible={confirmCompleteTestcaseVisible}
         onOk={handleConfirmCompleteTestcase}
         onCancel={handleCancelCompleteTestcase}
       />
-      
+
       <ViewTestcaseModal
         visible={isViewModalVisible}
         selectedTestcase={selectedTestcase}
         onCancel={() => setIsViewModalVisible(false)}
         onComplete={handleCompleteTestcase}
       />
-      
+
       <EditTestcaseModal
         visible={isEditModalVisible}
         selectedTestcase={selectedTestcase}
@@ -529,7 +540,7 @@ const App: React.FC = () => {
         onCancel={() => setIsEditModalVisible(false)}
         onFinish={handleEditSubmit}
       />
-      
+
       <SettingsModal
         visible={isSettingModalVisible}
         settingForm={settingForm}
@@ -539,7 +550,7 @@ const App: React.FC = () => {
         onFinish={handleSaveSetting}
         onSettingTypeChange={handleSettingTypeChange}
       />
-    
+
     </ConfigProvider>
   );
 };
