@@ -145,10 +145,9 @@ def create_testcase_agent(
         agent = create_agent(
             model=model,
             system_prompt=SYSTEM_PROMPT,
-            tools=[get_testcase_design_method],  # 不使用额外工具，避免agent返回tool_calls格式
-            response_format=ToolStrategy[ResponseFormat](ResponseFormat),
+            tools=[get_testcase_design_method],
+            response_format=ResponseFormat,
             checkpointer=checkpointer
-            # 移除checkpointer，使用无状态调用，避免会话状态导致的问题
         )
         return agent
 
