@@ -330,6 +330,8 @@ const App: React.FC = () => {
 
   // 设置功能
   const [isSettingModalVisible, setIsSettingModalVisible] = useState(false);
+  const [settingButtonStatus, setSettingButtonStatus] = useState(false);
+
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
   const [settingType, setSettingType] = useState<'api' | 'ollama'>('api');
@@ -423,6 +425,7 @@ const App: React.FC = () => {
           };
         }
 
+        setSettingButtonStatus(true); // 点击生成按钮设置按钮置灰
         const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(selectedSession.id, requirement.trim(), modelConfig);
         if (response.code === 200 && response.data) {
           loadTestcases(selectedSession.id);
@@ -444,6 +447,7 @@ const App: React.FC = () => {
       });
     } finally {
       setLoading(false);
+      setSettingButtonStatus(false); // 最终总会恢复按钮状态
     }
   };
 
@@ -452,7 +456,7 @@ const App: React.FC = () => {
   return (
     <ConfigProvider locale={zhCN}>
       <Layout style={{ minHeight: '100vh' }}>
-        <HeaderComponent onSettingsOpen={handleOpenSettingModal} />
+        <HeaderComponent onSettingsOpen={handleOpenSettingModal} settingButtonStatus={settingButtonStatus} />
         <Layout>
           <SessionSidebar
             sessions={sessions}

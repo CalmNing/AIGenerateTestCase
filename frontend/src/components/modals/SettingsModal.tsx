@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect} from 'react';
 import { Modal, Form, Input, Radio } from 'antd';
 
 interface SettingsModalProps {
@@ -20,6 +20,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onFinish,
   onSettingTypeChange
 }) => {
+  useEffect(() => {
+    settingForm.setFieldsValue({
+      ollama_url: settingForm.getFieldValue('ollama_url') || 'http://localhost:11434',
+      ollama_model: settingForm.getFieldValue('ollama_model') || 'gpt-oss:120b-cloud'
+    });
+  }, []);
   return (
     <Modal
       title="设置"

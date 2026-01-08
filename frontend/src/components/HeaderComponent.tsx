@@ -7,16 +7,17 @@ const { Title } = Typography;
 
 interface HeaderComponentProps {
   onSettingsOpen: () => void;
+  settingButtonStatus: boolean;
 }
 
-const HeaderComponent: React.FC<HeaderComponentProps> = ({ onSettingsOpen }) => {
+const HeaderComponent: React.FC<HeaderComponentProps> = ({ onSettingsOpen, settingButtonStatus }) => {
   return (
     <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0' }}>
       <Title level={3} style={{ margin: 0, color: '#1890ff' }}>测试用例生成工具</Title>
       <div>
         <Space>
           {/* <Button type="primary" icon={<PlusOutlined />}>新建会话</Button> */}
-          <Button type="default" onClick={onSettingsOpen}>设置</Button>
+          <Button type="default" onClick={onSettingsOpen} disabled={settingButtonStatus}>设置</Button>
         </Space>
       </div>
     </Header>
