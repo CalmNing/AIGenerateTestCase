@@ -60,8 +60,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (status: TestCaseStatus) => {
         let statusText = '';
         let statusColor = '';
-        
-        switch(status) {
+
+        switch (status) {
           case TestCaseStatus.PASSED:
             statusText = '已通过';
             statusColor = 'green';
@@ -76,7 +76,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             statusColor = 'orange';
             break;
         }
-        
+
         return <span style={{ color: statusColor, display: 'inline-block', width: '100%', textAlign: 'center' }}>{statusText}</span>;
       },
     },
@@ -100,8 +100,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (bugId: number | undefined) => {
         if (bugId) {
           return (
-            <a 
-              href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`} 
+            <a
+              href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{ color: '#1890ff', display: 'inline-block', width: '100%', textAlign: 'center' }}
@@ -124,15 +124,15 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
           <Space size="middle">
             <Button type="text" icon={<EyeOutlined />} onClick={() => onView(record)}>查看</Button>
             <Button type="text" icon={<EditOutlined />} onClick={() => onEdit(record)}>编辑</Button>
-            <Button 
-              type="primary" 
-              icon={<CheckOutlined />} 
+            <Button
+              type="primary"
+              icon={<CheckOutlined />}
               onClick={() => onComplete(record)}
-              disabled={record.status === TestCaseStatus.PASSED}
+            // disabled={record.status === TestCaseStatus.PASSED}
             >
               执行
             </Button>
-            <Button type="text" danger icon={<DeleteOutlined />} onClick={() => onDelete(record.id)}>删除</Button>
+            <Button type="text" disabled={record.status !== TestCaseStatus.NOT_RUN} danger icon={<DeleteOutlined />} onClick={() => onDelete(record.id)}>删除</Button>
           </Space>
         </div>
       ),

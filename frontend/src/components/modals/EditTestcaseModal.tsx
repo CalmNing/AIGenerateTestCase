@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Modal, Form, Input, Select } from 'antd';
 import { TestCase, TestCaseStatus } from '../../types';
 
@@ -19,6 +19,19 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
   onCancel,
   onFinish
 }) => {
+  console.log(222222, selectedTestcase);
+
+  useEffect(() => {
+    form.setFieldsValue({
+      case_name: selectedTestcase?.case_name,
+      case_level: selectedTestcase?.case_level,
+      status: selectedTestcase?.status || TestCaseStatus.NOT_RUN,
+      preset_conditions: selectedTestcase?.preset_conditions.join('\n'),
+      steps: selectedTestcase?.steps.join('\n'),
+      expected_results: selectedTestcase?.expected_results.join('\n')
+    });
+  }, [selectedTestcase, form]);
+  
   return (
     <Modal
       title="编辑测试用例"
@@ -34,14 +47,14 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
         <Form
           form={form}
           layout="vertical"
-          initialValues={{
-            case_name: selectedTestcase.case_name,
-            case_level: selectedTestcase.case_level,
-            status: selectedTestcase.status || TestCaseStatus.NOT_RUN,
-            preset_conditions: selectedTestcase.preset_conditions.join('\n'),
-            steps: selectedTestcase.steps.join('\n'),
-            expected_results: selectedTestcase.expected_results.join('\n')
-          }}
+          // initialValues={{
+          //   case_name: selectedTestcase.case_name,
+          //   case_level: selectedTestcase.case_level,
+          //   status: selectedTestcase.status || TestCaseStatus.NOT_RUN,
+          //   preset_conditions: selectedTestcase.preset_conditions.join('\n'),
+          //   steps: selectedTestcase.steps.join('\n'),
+          //   expected_results: selectedTestcase.expected_results.join('\n')
+          // }}
           onFinish={onFinish}
         >
           <Form.Item
@@ -70,7 +83,7 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
             label="测试状态"
             rules={[{ required: true, message: '请选择测试状态' }]}
           >
-            <Select>
+            <Select disabled={selectedTestcase.status !== TestCaseStatus.NOT_RUN}>
               <Select.Option value={TestCaseStatus.NOT_RUN}>未执行</Select.Option>
               <Select.Option value={TestCaseStatus.PASSED}>已通过</Select.Option>
               <Select.Option value={TestCaseStatus.FAILED}>未通过</Select.Option>

@@ -24,6 +24,7 @@ export interface TestCase {
   created_at: string;
   status?: TestCaseStatus; // 测试用例状态：NOT_RUN（未运行）、PASSED（通过）、FAILED（未通过）
   bug_id?: number;
+  session_id: number;
 }
 
 // 测试用例类型

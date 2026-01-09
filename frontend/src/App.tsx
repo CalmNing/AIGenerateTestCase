@@ -152,11 +152,28 @@ const App: React.FC = () => {
   // 查看测试用例
   const handleViewTestcase = (testcase: TestCase) => {
     setSelectedTestcase(testcase);
+    
     setIsViewModalVisible(true);
+    const index_demo = testcases.findIndex(tc => tc.id === testcase?.id);
+    // 重置索引
+    setCurrentIndex(index_demo);
+    // 重置按钮状态
+    if (index_demo === 0) {
+      setPrevButtonDisabled(true);
+    } else {
+      setPrevButtonDisabled(false);
+    }
+    if (index_demo === testcases.length - 1) {
+      setNextButtonDisabled(true);
+    } else {
+      setNextButtonDisabled(false);
+    }
   };
 
   // 编辑测试用例
   const handleEditTestcase = (testcase: TestCase) => {
+    console.log("111111",testcase);
+    
     setSelectedTestcase(testcase);
     setIsEditModalVisible(true);
     // 重置表单
@@ -272,7 +289,8 @@ const App: React.FC = () => {
   };
 
   // 执行测试用例 - 显示确认对话框
-  const handleCompleteTestcase = (testcase: TestCase) => {
+  const handleCompleteTestcase = (testcase: TestCase | null) => {
+    if (!testcase) return;
     setTestcaseToComplete(testcase);
     setConfirmCompleteTestcaseVisible(true);
   };
@@ -302,6 +320,8 @@ const App: React.FC = () => {
           tc.id === testcaseToComplete.id ? updatedTestcase : tc
         ));
         loadTestcases(selectedSession.id);
+        setSelectedTestcase(updatedTestcase);
+        setCurrentIndex(testcases.findIndex(tc => tc.id === updatedTestcase.id));
         // 显示成功通知
         notification.success({
           message: '执行成功',
@@ -450,7 +470,34 @@ const App: React.FC = () => {
       setSettingButtonStatus(false); // 最终总会恢复按钮状态
     }
   };
+  const [nextButtonDisabled, setNextButtonDisabled] = useState(false);
+  const [prevButtonDisabled, setPrevButtonDisabled] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const handleNextCase = async () => {     
+    if (!selectedSession || !selectedTestcase) return;
 
+    if (currentIndex === testcases.length - 2) {
+      setNextButtonDisabled(true);
+    };
+    const nextIndex = currentIndex + 1;
+    const nextTestcase = testcases[nextIndex];
+    setSelectedTestcase(nextTestcase);
+    setCurrentIndex(nextIndex);
+    setPrevButtonDisabled(false);
+  };
+  const handlePrevCase = async () => { 
+    if (!selectedSession || !selectedTestcase) return;
+    setNextButtonDisabled(false);
+    if (currentIndex === 1) {
+      setPrevButtonDisabled(true);
+    }
+
+    const prevIndex = currentIndex - 1;
+    const prevTestcase = testcases[prevIndex];
+    setSelectedTestcase(prevTestcase);
+    setCurrentIndex(prevIndex);
+    setNextButtonDisabled(false);
+  };
 
 
   return (
@@ -459,6 +506,7 @@ const App: React.FC = () => {
         <HeaderComponent onSettingsOpen={handleOpenSettingModal} settingButtonStatus={settingButtonStatus} />
         <Layout>
           <SessionSidebar
+            testcases={testcases}
             sessions={sessions}
             selectedSession={selectedSession}
             newSessionName={newSessionName}
@@ -532,18 +580,27 @@ const App: React.FC = () => {
       <ViewTestcaseModal
         visible={isViewModalVisible}
         selectedTestcase={selectedTestcase}
+        nextButtonDisabled={nextButtonDisabled}
+        prevButtonDisabled={prevButtonDisabled}
+        onNext={handleNextCase}
+        onPrev={handlePrevCase}
         onCancel={() => setIsViewModalVisible(false)}
         onComplete={handleCompleteTestcase}
       />
 
-      <EditTestcaseModal
-        visible={isEditModalVisible}
-        selectedTestcase={selectedTestcase}
-        form={form}
-        loading={loading}
-        onCancel={() => setIsEditModalVisible(false)}
-        onFinish={handleEditSubmit}
-      />
+      {
+        isEditModalVisible && (
+          <EditTestcaseModal
+            visible={isEditModalVisible}
+            selectedTestcase={selectedTestcase}
+            form={form}
+            loading={loading}
+            onCancel={() => setIsEditModalVisible(false)}
+            onFinish={handleEditSubmit}
+          />
+        )
+      }
+      
 
       <SettingsModal
         visible={isSettingModalVisible}
