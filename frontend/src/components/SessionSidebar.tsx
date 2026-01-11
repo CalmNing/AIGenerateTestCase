@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Layout, Menu, Typography, Button, Input, Space, Tooltip } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseStatus } from '../types';
@@ -28,6 +28,20 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onDeleteSession
 }) => {
   const disableTipText = "存在「已执行」的测试用例，无法删除";
+  const [buttonSelectedSession, setButtonSelectedSession] = useState(false)
+  const [selectedSessionId, setSelectedSessionId] = useState<Number | undefined>(0)
+  useEffect(() => {
+    if (testcases){
+      setButtonSelectedSession(false)
+    }
+    if (testcases.some(tc => tc.status === TestCaseStatus.PASSED|| tc.status===TestCaseStatus.FAILED)) {
+      setButtonSelectedSession(true)
+    }
+    else {
+      setButtonSelectedSession(false)
+    }
+    setSelectedSessionId(selectedSession?.id)
+  }, [testcases])
 
   const menuItems = sessions.map(session => ({
     key: session.id,
@@ -44,27 +58,24 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
           overflow: "hidden", // 4. 隐藏超出容器宽度的内容
           textOverflow: "ellipsis", // 5. 可选：超出部分显示省略号（...），优化用户体验
         }}>{session.name}</span>
-        {testcases.some(tc => tc.session_id === session.id) && <Tooltip
-          // 核心：仅当 disabled 为 true 时，才显示提示（启用状态下隐藏 tooltip）
+       <Tooltip
           title={disableTipText}
-          // 关键：设置 disabled 状态下 tooltip 可正常触发（解决禁用元素鼠标事件被阻止的问题）
           mouseEnterDelay={0.2} // 可选：设置 hover 延迟，避免误触
           placement="top" // 可选：设置提示显示位置（top/bottom/left/right）
-          // 控制 tooltip 是否生效：与 button 的 disabled 状态保持一致
-          open={testcases.some(tc => tc.status !== TestCaseStatus.NOT_RUN)}
         >
-          <Button
+          {selectedSessionId === session?.id && <Button
             type="text"
             danger
             icon={<DeleteOutlined />}
             size="small"
-            disabled={testcases.some(tc => tc.status !== TestCaseStatus.NOT_RUN)}
+            disabled={buttonSelectedSession}
             onClick={(e) => {
               e.stopPropagation();
               onDeleteSession(session.id);
+              setSelectedSessionId(session.id)
             }}
-          />
-        </Tooltip>}
+          />}
+        </Tooltip>
       </Space>
     ),
     onClick: () => onSelectSession(session)
