@@ -2,7 +2,7 @@ from typing import List, Annotated
 
 from fastapi import APIRouter, Query, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlmodel import select, desc,func
+from sqlmodel import select, desc, func
 
 from app.deps import SessionDep
 from db.models import TestCase, StatusValue
@@ -33,7 +33,8 @@ def get_testcases(
         status: str = None
 ):
     """获取会话的测试用例"""
-    query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,desc(TestCase.created_at))
+    query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
+                                                                               desc(TestCase.created_at))
 
     if case_name:
         query = query.where(TestCase.case_name.contains(case_name))
@@ -147,6 +148,15 @@ def delete_testcase(
         session_id: int,
         testcase_id: int
 ):
+    testcase_status = session.exec(
+        select(TestCase.status)
+        .where(
+            TestCase.id == testcase_id,
+            TestCase.status != StatusValue.NOT_RUN
+        )
+    ).first()
+    if testcase_status:
+        return Response(code=status.HTTP_400_BAD_REQUEST, data="用例已执行，删除失败！")
     """删除测试用例"""
     testcase = session.exec(
         select(TestCase)
@@ -156,7 +166,7 @@ def delete_testcase(
         )
     ).first()
     if not testcase:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="测试用例不存在")
+        return Response(code=status.HTTP_404_NOT_FOUND, data="测试用例不存在")
     session.delete(testcase)
     session.commit()
     return Response(data="删除测试用例成功")

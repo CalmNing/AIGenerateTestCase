@@ -1,11 +1,12 @@
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
+from starlette import status
 
 from app.deps import SessionDep
-from db.models import Session
+from db.models import Session, TestCase, StatusValue
 from utils.base_response import Response
 
 
@@ -53,12 +54,20 @@ def update_session(session_id: int, update: UpdateSessionRequest, session: Sessi
     return Response(data=session_id)
 
 
-@router.delete("/{session_id}", response_model=Response[int])
+@router.delete("/{session_id}", response_model=Response[Union[int, str]])
 def delete_session(session_id: int, session: SessionDep):
     """删除会话"""
+    session_status = session.exec(
+        select(TestCase.status).where(
+        TestCase.session_id == session_id,
+            TestCase.status != StatusValue.NOT_RUN
+        )
+    ).first()
+    if session_status:
+        return Response(code=status.HTTP_400_BAD_REQUEST,data="当前会话下存在已执行的测试用例，删除失败！")
     sess = session.get(Session, session_id)
     if not sess:
-        raise HTTPException(status_code=404, detail='会话不存在！')
+        return Response(code=status.HTTP_404_NOT_FOUND,data="会话不存在！")
     session.delete(sess)
     session.commit()
     return Response(data=session_id)
