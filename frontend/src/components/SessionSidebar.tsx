@@ -28,17 +28,21 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onDeleteSession
 }) => {
   const disableTipText = "存在「已执行」的测试用例，无法删除";
+  const [disableTip, setDisableTip] = useState('')
   const [buttonSelectedSession, setButtonSelectedSession] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<Number | undefined>(0)
   useEffect(() => {
     if (testcases){
       setButtonSelectedSession(false)
+      setDisableTip('')
     }
     if (testcases.some(tc => tc.status === TestCaseStatus.PASSED|| tc.status===TestCaseStatus.FAILED)) {
       setButtonSelectedSession(true)
+      setDisableTip(disableTipText)
     }
     else {
       setButtonSelectedSession(false)
+      setDisableTip('')
     }
     setSelectedSessionId(selectedSession?.id)
   }, [testcases])
@@ -59,7 +63,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
           textOverflow: "ellipsis", // 5. 可选：超出部分显示省略号（...），优化用户体验
         }}>{session.name}</span>
        <Tooltip
-          title={disableTipText}
+          title={disableTip}
           mouseEnterDelay={0.2} // 可选：设置 hover 延迟，避免误触
           placement="top" // 可选：设置提示显示位置（top/bottom/left/right）
         >
