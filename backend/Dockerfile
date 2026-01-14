@@ -1,4 +1,4 @@
-FROM python:3.11
+FROM python:3.11-bookworm
 WORKDIR /app
 # 避免构建过程中出现交互性弹窗（时区配置等），优化构建体验
 ENV DEBIAN_FRONTEND=noninteractive
