@@ -1,6 +1,8 @@
-from typing import List, Annotated
+from typing import List, Annotated, Optional
 
-from fastapi import APIRouter, Query, HTTPException, status
+import base64
+
+from fastapi import APIRouter, Query, HTTPException, status, File, Form, Depends, UploadFile
 from pydantic import BaseModel, Field
 from sqlmodel import select, desc, func
 
@@ -73,42 +75,87 @@ def get_testcases(
 
 # 请求模型
 class GenerateTestcasesRequest(BaseModel):
-    requirement: str
     model_type: str = "api"  # "api" 或 "ollama"
     api_key: str = ""  # API 密钥（当 model_type 为 "api" 时使用）
     ollama_url: str = ""  # Ollama URL（当 model_type 为 "ollama" 时使用）
-    ollama_model: str = ""  # Ollama 模型名称（当 model_type 为 "ollama" 时使用）
+    ollama_model: str = ""  # Ollama 模型名称（当 model_type 为 "ollama" 时使用")
+    requirement: Optional[str]
 
 
-@router.post("/{session_id}/testcases", response_model=Response[str])
-def generate_testcases(
+@router.post("/{session_id}/testcases")
+async def generate_testcases(
         session: SessionDep,
         session_id: int,
-        request: GenerateTestcasesRequest
+        # 调整参数顺序，与前端发送的FormData顺序一致
+        requirement: Optional[str] = Form(None),
+        model_type: str = Form("api"),
+        api_key: str = Form(""),
+        ollama_url: str = Form(""),
+        ollama_model: str = Form(""),
+        file: Optional[UploadFile] = File(None),
 ):
     """生成测试用例"""
     from utils.model_utils import generate_testcases
+    
+    # 添加详细的调试日志
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"接收到生成测试用例请求")
+    logger.info(f"  session_id: {session_id}")
+    logger.info(f"  requirement: {'有值' if requirement else 'None'} (长度: {len(requirement) if requirement else 0})")
+    logger.info(f"  model_type: {model_type}")
+    logger.info(f"  api_key: {'有值' if api_key else 'None'}")
+    logger.info(f"  file: {'有文件' if file else 'None'}")
+    logger.info(f"  file.filename: {file.filename if file else 'None'}")
+    logger.info(f"  file.content_type: {file.content_type if file else 'None'}")
+    
+    # 处理图像数据
+    image_data = None
+    if file:
+        logger.info(f"  开始读取文件内容")
+        # 验证文件类型
+        if not file.content_type.startswith('image/'):
+            return Response(code=status.HTTP_400_BAD_REQUEST, data="请上传图片文件")
+        # 读取上传的图像数据 - 使用 await 处理协程
+        image_bytes = await file.read()
+        logger.info(f"  文件读取完成，大小: {len(image_bytes)} 字节")
+        image_data = base64.b64encode(image_bytes).decode('utf-8')
 
-    # 基本输入校验
-    if not request.requirement or not request.requirement.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="requirement 不能为空")
+    # 基本输入校验 - 修复
+    # 检查是否至少有一个有效输入
+    has_valid_input = False
+    
+    # 检查是否有文件 - 修复：检查file是否为None
+    if file is not None:
+        has_valid_input = True
+        logger.info(f"  文件上传成功: {file.filename}")
+    
+    # 检查是否有有效的requirement
+    if requirement and requirement.strip():
+        has_valid_input = True
+        logger.info(f"  有有效的requirement")
+    
+    logger.info(f"  验证结果: has_valid_input={has_valid_input}")
+    
+    # 如果没有有效输入，返回错误
+    if not has_valid_input:
+        logger.error(f"  验证失败: 请上传图片文件或输入requirement")
+        return Response(code=status.HTTP_400_BAD_REQUEST, data="请上传图片文件或输入requirement")
 
-    # 回退配置：如果请求未提供 api_key/ollama 配置，则从 config_manager 读取
-    api_key = request.api_key
-    ollama_url = request.ollama_url
-    ollama_model = request.ollama_model
 
     # 模型参数校验
-    if request.model_type == "api" and not api_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="api_key 未提供!")
-    if request.model_type == "ollama" and (not ollama_url or not ollama_model):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Ollama 配置不完整（ollama_url/ollama_model）")
+    if model_type == "api" and not api_key:
+        return Response(code=status.HTTP_400_BAD_REQUEST, data="api_key 未提供!")
+    if model_type == "ollama" and (not ollama_url or not ollama_model):
+        return Response(code=status.HTTP_400_BAD_REQUEST,
+                            data="Ollama 配置不完整（ollama_url/ollama_model）")
 
     testcases = generate_testcases(
-        request.requirement,
+        requirement=requirement,
         session_id=session_id,
-        model_type=request.model_type,
+        image_data=image_data,
+        is_base64=True,
+        model_type=model_type,
         api_key=api_key,
         ollama_url=ollama_url,
         ollama_model=ollama_model,

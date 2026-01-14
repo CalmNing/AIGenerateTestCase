@@ -1,15 +1,21 @@
+import base64
 import logging
 import time
 from typing import List, Optional, Literal
 
+from starlette import status
+
+from utils.base_response import Response
 from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
+from langchain.messages import HumanMessage, SystemMessage
 from langchain.tools import tool
+from langchain_core.exceptions import OutputParserException
 from langchain_deepseek import ChatDeepSeek
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field
 
+from app.services.ocr_service import OCRService
 from db.models import TestCase as DBTestCase
 
 # 简单的 agent 缓存，key -> agent
@@ -114,11 +120,10 @@ def create_local_model(
         model=ollama_model,
         base_url=ollama_url,
         temperature=0,
-        format="json",
+        format=ResponseFormat.model_json_schema(),
     )
     logger.info(f"ollama模型初始化成功: ollama_model={ollama_model}")
-    model_with_structure = model.with_structured_output(ResponseFormat)
-    return model_with_structure
+    return model
 
 
 # 创建并返回agent
@@ -145,7 +150,7 @@ def create_testcase_agent(
         agent = create_agent(
             model=model,
             system_prompt=SYSTEM_PROMPT,
-            tools=[get_testcase_design_method],
+            tools=[],
             response_format=ResponseFormat,
             checkpointer=checkpointer
         )
@@ -154,8 +159,10 @@ def create_testcase_agent(
 
 # 生成测试用例
 def generate_testcases(
-        requirement: str,
         session_id: int,
+        requirement: Optional[str],
+        image_data: str = None,
+        is_base64: bool = True,
         model_type: str = "api",
         api_key: str = "",
         ollama_url: str = "",
@@ -164,6 +171,22 @@ def generate_testcases(
     """根据需求生成测试用例"""
     # 调用模型并记录耗时与错误（不要在日志中记录 api_key）
     start = time.time()
+    if image_data is not None:
+        try:
+            ocr_service = OCRService(engine='paddleocr')
+            # image_data 已经是字符串格式，直接传入
+            ocr_result = ocr_service.extract_text(image_data, is_base64=is_base64)
+            logger.info(f"OCR识别结果: {ocr_result}")
+            if requirement is None:
+                requirement = ocr_result['text']
+            else:
+                requirement = requirement + ocr_result['text']
+            logger.info(f"最总需求: {requirement}")
+        except Exception as e:
+            logger.error(f"OCR服务调用失败: error={e}")
+            return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            data="OCR服务调用失败")
+
     if model_type == "api":
         try:
             # 所有模型类型都使用Agent调用，因为必须使用Agent规定响应格式
@@ -172,6 +195,11 @@ def generate_testcases(
                 api_key=api_key,
             )
             # 调用agent，使用规定的响应格式
+            logger.info(f"调用agent: requirement={requirement}")
+            if requirement is None:
+                return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            data="模型需求入参不能为空")
+            # 修复：直接传入HumanMessage对象，而不是列表
             response = agent.invoke(
                 {"messages": [{"role": "user", "content": requirement}]},
                 config={"configurable": {"thread_id": f"{session_id}"}},
@@ -179,6 +207,7 @@ def generate_testcases(
         except Exception as e:
             logger.error(f"模型调用失败: type={model_type} error={e}")
             # 检测特定错误信息，把问题抛给前端
+            raise ValueError(f"模型调用失败: {str(e)}")
     else:
         model = create_local_model(
             ollama_url=ollama_url,
@@ -196,18 +225,37 @@ def generate_testcases(
         logger.info(f"本地模型调用: type={model_type}")
     duration = time.time() - start
     logger.info(f"模型调用完成: type={model_type} duration={duration:.2f}s")
+    logger.info(f"模型返回结果类型: {type(response).__name__}")
+    logger.info(f"模型返回结果: {response}")
+    
     # 获取生成的测试用例
     try:
-        # 尝试不同的响应格式解析
-        if isinstance(response, dict) and 'structured_response' in response:
-            # 格式1: 使用structured_response字段（API模型）
-            local_testcases = response['structured_response'].response
+        local_testcases = None
+        
+        # 增加更多的响应格式处理逻辑
+        if isinstance(response, dict):
+            if 'structured_response' in response:
+                # 格式1: 使用structured_response字段（API模型）
+                local_testcases = response['structured_response'].response
+            elif 'response' in response:
+                # 格式2: 直接包含response字段
+                local_testcases = response['response']
         elif isinstance(response, ResponseFormat):
-            # 格式1: 使用structured_response字段（API模型）
+            # 格式3: ResponseFormat对象
+            local_testcases = response.response
+        elif hasattr(response, 'response'):
+            # 格式4: 具有response属性的对象
             local_testcases = response.response
         else:
-            # 格式2: 其他格式
+            # 格式5: 直接返回的列表
+            # 这种情况通常不会发生，但为了容错，我们也处理一下
+            logger.warning(f"模型返回了非预期的响应格式: {type(response).__name__}")
             raise ValueError(f"不支持的响应格式: {type(response).__name__}")
+        
+        # 验证local_testcases是否为列表
+        if not isinstance(local_testcases, list):
+            raise ValueError(f"测试用例必须是列表类型，实际类型: {type(local_testcases).__name__}")
+        
         # 转换为DBTestCase对象
         db_testcases = []
         for tc in local_testcases:

@@ -31,6 +31,8 @@ const App: React.FC = () => {
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('generate');
+  // 图片状态管理
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
 
   // 创建表单实例
   const [form] = Form.useForm();
@@ -152,7 +154,7 @@ const App: React.FC = () => {
   // 查看测试用例
   const handleViewTestcase = (testcase: TestCase) => {
     setSelectedTestcase(testcase);
-    
+
     setIsViewModalVisible(true);
     const index_demo = testcases.findIndex(tc => tc.id === testcase?.id);
     // 重置索引
@@ -172,8 +174,8 @@ const App: React.FC = () => {
 
   // 编辑测试用例
   const handleEditTestcase = (testcase: TestCase) => {
-    console.log("111111",testcase);
-    
+    console.log("111111", testcase);
+
     setSelectedTestcase(testcase);
     setIsEditModalVisible(true);
     // 重置表单
@@ -420,7 +422,7 @@ const App: React.FC = () => {
 
   // 生成测试用例
   const handleGenerateTestcases = async () => {
-    if (!selectedSession || !requirement.trim()) return;
+    if (!selectedSession || (!requirement.trim()) && !imageBase64) return;
 
     try {
       setLoading(true);
@@ -446,13 +448,37 @@ const App: React.FC = () => {
         }
 
         setSettingButtonStatus(true); // 点击生成按钮设置按钮置灰
-        const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(selectedSession.id, requirement.trim(), modelConfig);
-        if (response.code === 200 && response.data) {
-          loadTestcases(selectedSession.id);
-          setRequirement('');
-          notification.success({
-            message: '生成成功',
-            description: '测试用例已成功生成',
+        // 只有当requirement非空或imageBase64非空时才调用API
+        if (requirement.trim() || imageBase64) {
+          console.log('调用API前的状态:', {
+            sessionId: selectedSession.id,
+            requirement: requirement.trim(),
+            hasModelConfig: !!modelConfig,
+            hasImageBase64: !!imageBase64,
+            imageBase64Length: imageBase64?.length || 0
+          });
+          
+          // 调用API
+          const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
+            selectedSession.id, 
+            requirement.trim(), 
+            modelConfig, 
+            imageBase64 // 传递图片base64数据
+          );
+          if (response.code === 200 && response.data) {
+            loadTestcases(selectedSession.id);
+            setRequirement('');
+            setImageBase64(null); // 清空图片数据
+            notification.success({
+              message: '生成成功',
+              description: '测试用例已成功生成',
+              placement: 'topRight'
+            });
+          }
+        } else {
+          notification.error({
+            message: '生成失败',
+            description: '请上传图片文件或输入需求描述',
             placement: 'topRight'
           });
         }
@@ -473,7 +499,7 @@ const App: React.FC = () => {
   const [nextButtonDisabled, setNextButtonDisabled] = useState(false);
   const [prevButtonDisabled, setPrevButtonDisabled] = useState(false);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const handleNextCase = async () => {     
+  const handleNextCase = async () => {
     if (!selectedSession || !selectedTestcase) return;
 
     if (currentIndex === testcases.length - 2) {
@@ -485,7 +511,7 @@ const App: React.FC = () => {
     setCurrentIndex(nextIndex);
     setPrevButtonDisabled(false);
   };
-  const handlePrevCase = async () => { 
+  const handlePrevCase = async () => {
     if (!selectedSession || !selectedTestcase) return;
     setNextButtonDisabled(false);
     if (currentIndex === 1) {
@@ -531,6 +557,8 @@ const App: React.FC = () => {
                         loading={loading}
                         onRequirementChange={setRequirement}
                         onGenerate={handleGenerateTestcases}
+                        imageBase64={imageBase64}
+                        onImageChange={setImageBase64}
                       />
                     ),
                   },
@@ -600,7 +628,7 @@ const App: React.FC = () => {
           />
         )
       }
-      
+
 
       <SettingsModal
         visible={isSettingModalVisible}

@@ -5,9 +5,7 @@ import { Session, TestCase, ApiResponse, TestCaseResponse } from '../types';
 const api = axios.create({
   baseURL: '/api',
   timeout: 300000, // 增加超时时间到300秒
-  headers: {
-    'Content-Type': 'application/json'
-  }
+  // 移除默认的Content-Type，让axios根据请求数据自动设置
 });
 
 // 请求拦截器
@@ -60,15 +58,68 @@ export const testcaseApi = {
     api_key?: string;
     ollama_url?: string;
     ollama_model?: string;
-  }) => {
-    const data: any = { requirement };
+  }, imageBase64?: string | null) => {
+    // 创建FormData
+    const formData = new FormData();
+    
+    // 始终添加requirement，即使为空字符串，与后端预期一致
+    formData.append('requirement', requirement);
+    
+    // 添加模型配置
     if (modelConfig) {
-      data.model_type = modelConfig.model_type;
-      if (modelConfig.api_key) data.api_key = modelConfig.api_key;
-      if (modelConfig.ollama_url) data.ollama_url = modelConfig.ollama_url;
-      if (modelConfig.ollama_model) data.ollama_model = modelConfig.ollama_model;
+      formData.append('model_type', modelConfig.model_type);
+      if (modelConfig.api_key) {
+        formData.append('api_key', modelConfig.api_key);
+      }
+      if (modelConfig.ollama_url) {
+        formData.append('ollama_url', modelConfig.ollama_url);
+      }
+      if (modelConfig.ollama_model) {
+        formData.append('ollama_model', modelConfig.ollama_model);
+      }
     }
-    return api.post<ApiResponse<TestCase[]>>(`/testcases/${sessionId}/testcases`, data);
+    
+    // 处理图片数据 - 修复
+    if (imageBase64) {
+      console.log('准备上传图片，base64长度:', imageBase64.length);
+      try {
+        // 将base64转换为Blob
+        const byteCharacters = atob(imageBase64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/png' });
+        
+        console.log('转换后的Blob:', { size: blob.size, type: blob.type });
+        
+        // 添加到FormData
+        formData.append('file', blob, 'image.png');
+        console.log('图片Blob已添加到FormData');
+        
+        // 验证FormData中是否包含file字段
+        console.log('FormData中是否包含file:', formData.has('file'));
+      } catch (error) {
+        console.error('图片转换或添加到FormData失败:', error);
+      }
+    } else {
+      console.log('没有图片数据需要上传');
+    }
+    
+    // 打印FormData中的所有字段，用于调试
+    console.log('FormData内容:');
+    formData.forEach((value, key) => {
+      if (value instanceof Blob) {
+        console.log(`  ${key}: Blob (${value.type}, ${value.size} bytes)`);
+      } else {
+        console.log(`  ${key}: ${value}`);
+      }
+    });
+    
+    // 发送请求，axios会自动设置正确的Content-Type头
+    // 包括multipart/form-data和边界信息
+    return api.post<ApiResponse<TestCase[]>>(`/testcases/${sessionId}/testcases`, formData);
   },
   
   // 更新测试用例
