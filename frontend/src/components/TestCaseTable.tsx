@@ -1,5 +1,5 @@
 import React from 'react';
-import { Table, Space, Button } from 'antd';
+import { Table, Space, Button, PaginationProps } from 'antd';
 import { EyeOutlined, EditOutlined, CheckOutlined, DeleteOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../types';
 
@@ -10,6 +10,10 @@ interface TestCaseTableProps {
   onComplete: (testcase: TestCase) => void;
   onDelete: (id: number) => void;
 }
+
+const onShowSizeChange: PaginationProps['onShowSizeChange'] = (current, pageSize) => {
+  console.log(current, pageSize);
+};
 
 const TestCaseTable: React.FC<TestCaseTableProps> = ({
   testcases,
@@ -141,17 +145,19 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
 
   return (
     <Table
+      
       columns={testcaseColumns}
       dataSource={testcases}
       rowKey="id"
       pagination={{
-        pageSize: 20,
-        position: ['bottomRight']
+        position: ['bottomRight'],
+        onShowSizeChange,
+        defaultPageSize: 20,
       }}
-      scroll={{ x: 800, y: 400 }}
-      style={{ marginTop: 16, height: '100%' }}
+      scroll={{ x: 800, y: '47vh' }}
+      // style={{ marginTop: 16, height: '100%' }}
       tableLayout="fixed"
-      size="small"
+      size="middle"
       bordered
       locale={{
         emptyText: '暂无数据'

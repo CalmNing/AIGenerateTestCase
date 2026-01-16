@@ -1,10 +1,12 @@
-FROM python:3.11-bookworm
+FROM python:3.11
 WORKDIR /app
 # 避免构建过程中出现交互性弹窗（时区配置等），优化构建体验
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 安装 Tesseract OCR 及可选依赖
-RUN apt-get update && \
+# 配置正确的 Debian 13 (trixie) 仓库源
+RUN echo 'Types: deb\nURIs: https://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main contrib non-free non-free-firmware\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' > /etc/apt/sources.list.d/debian.sources && \
+    echo 'Types: deb\nURIs: https://deb.debian.org/debian-security\nSuites: trixie-security\nComponents: main contrib non-free non-free-firmware\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' > /etc/apt/sources.list.d/debian-security.sources && \
+    apt-get update && \
     # 安装核心包，--no-install-recommends 减小镜像体积（仅安装必需依赖）
     apt-get install -y --no-install-recommends \
         tesseract-ocr \
