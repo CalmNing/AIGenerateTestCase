@@ -34,6 +34,7 @@ export interface TestCaseResponse {
   failed: number;
   not_run: number;
   totalNumber: number;
+  totalBugs: number;
 
 }
 

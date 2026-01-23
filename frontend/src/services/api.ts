@@ -45,10 +45,12 @@ export const sessionApi = {
 // 测试用例管理API
 export const testcaseApi = {
   // 获取会话的测试用例
-  getTestcases: (sessionId: number, filters?: { case_name?: string; status?: string }) => {
+  getTestcases: (sessionId: number, filters?: { case_name?: string; status?: string; bug_id?: string; exist_bug?: boolean }) => {
     const params = new URLSearchParams();
     if (filters?.case_name) params.append('case_name', filters.case_name);
     if (filters?.status) params.append('status', filters.status);
+    if (filters?.bug_id) params.append('bug_id', filters.bug_id);
+    if (filters?.exist_bug !== undefined) params.append('exist_bug', filters.exist_bug.toString());
     return api.get<ApiResponse<TestCaseResponse>>(`/testcases/${sessionId}/testcases?${params.toString()}`);
   },
   

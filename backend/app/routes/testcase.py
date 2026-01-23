@@ -19,6 +19,7 @@ class TestCasePage(BaseModel):
     passed: int = Field(int, description="已通过的用例数")
     failed: int = Field(int, description="未通过的用例数")
     not_run: int = Field(int, description="未执行的用例数")
+    totalBugs: int = Field(int, description="Bug数")
     model_config = {
         "arbitrary_types_allowed": True,
     }
@@ -32,7 +33,9 @@ def get_testcases(
         offset: int = 0,
         limit: Annotated[int, Query(le=100)] = 100,
         case_name: str = None,
-        status: str = None
+        status: str = None,
+        bug_id: str = None,
+        exist_bug: bool = False
 ):
     """获取会话的测试用例"""
     query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
@@ -40,9 +43,12 @@ def get_testcases(
 
     if case_name:
         query = query.where(TestCase.case_name.contains(case_name))
-
     if status:
         query = query.where(TestCase.status.contains(status))
+    if bug_id:
+        query = query.where(TestCase.bug_id.contains(bug_id))
+    if exist_bug:
+        query = query.where(TestCase.bug_id != None)
 
     testcases_db = session.exec(query.offset(offset).limit(limit)).all()
     # 确保 session_id 被转换为 int 类型
@@ -63,12 +69,17 @@ def get_testcases(
         TestCase.session_id == session_id,
         TestCase.status == StatusValue.NOT_RUN
     ))
+    totalBugs = session.scalar(select(func.count()).where(
+        TestCase.session_id == session_id,
+        TestCase.bug_id != None
+    ))
     testcases = TestCasePage(
         items=testcases_db,
         totalNumber=totalNumber,
         passed=passed,
         failed=failed,
-        not_run=not_run
+        not_run=not_run,
+        totalBugs=totalBugs
     )
     return Response(data=testcases)
 

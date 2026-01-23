@@ -23,7 +23,7 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [testcases, setTestcases] = useState<TestCase[]>([]);
-  const [testcasesResponse, setTestcasesResponse] = useState<TestCaseResponse>({ items: [], passed: 0, failed: 0, not_run: 0, totalNumber: 0 });
+  const [testcasesResponse, setTestcasesResponse] = useState<TestCaseResponse>({ items: [], passed: 0, failed: 0, not_run: 0, totalNumber: 0, totalBugs: 0 });
   const [newSessionName, setNewSessionName] = useState('');
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
@@ -71,7 +71,7 @@ const App: React.FC = () => {
   };
 
   // 加载测试用例
-  const loadTestcases = async (sessionId: number | any, filters?: { case_name?: string; status?: string }) => {
+  const loadTestcases = async (sessionId: number | any, filters?: { case_name?: string; status?: string; bug_id?: string }) => {
     try {
       const response: ApiResponse<TestCaseResponse> | any = await testcaseApi.getTestcases(sessionId, filters);
       if (response.code === 200 && response.data) {
@@ -245,9 +245,14 @@ const App: React.FC = () => {
   // 测试用例筛选条件
   const [filters, setFilters] = useState({
     case_name: '',
-    status: ''
+    status: '',
+    bug_id: '',
   });
 
+  // 测试用例筛选条件变更处理
+  useEffect(() => {
+    loadTestcases(selectedSession?.id, filters);
+  }, [filters]);
   // 删除测试用例 - 显示确认对话框
   const handleDeleteTestcase = (id: number) => {
     setTestcaseToDelete(id);
