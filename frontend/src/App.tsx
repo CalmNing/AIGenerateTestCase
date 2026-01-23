@@ -71,7 +71,7 @@ const App: React.FC = () => {
   };
 
   // 加载测试用例
-  const loadTestcases = async (sessionId: number | any, filters?: { case_name?: string; status?: string; bug_id?: string }) => {
+  const loadTestcases = async (sessionId: number | any, filters?: { case_name?: string; status?: string; bug_id?: string ;exist_bug?: boolean }) => {
     try {
       const response: ApiResponse<TestCaseResponse> | any = await testcaseApi.getTestcases(sessionId, filters);
       if (response.code === 200 && response.data) {
@@ -148,7 +148,14 @@ const App: React.FC = () => {
   // 选择会话
   const handleSelectSession = (session: Session) => {
     setSelectedSession(session);
-    loadTestcases(session.id);
+    const NewFilters = {
+      case_name: '',
+      status: '',
+      bug_id: '',
+      exist_bug: false
+    };
+    setFilters(NewFilters);
+    loadTestcases(session.id, filters);
   };
 
   // 查看测试用例
