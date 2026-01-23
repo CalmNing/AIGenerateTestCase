@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Select, Input } from 'antd';
 import { TestCaseStatus } from '../../types';
 
@@ -13,8 +13,15 @@ const CompleteTestcaseModal: React.FC<CompleteTestcaseModalProps> = ({
   onOk,
   onCancel
 }) => {
-  const [selectedStatus, setSelectedStatus] = useState<TestCaseStatus | undefined>(undefined);
+  const [selectedStatus, setSelectedStatus] = useState<TestCaseStatus | undefined>(TestCaseStatus.PASSED);
   const [bugId, setBugId] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    // 重置状态
+    setSelectedStatus(TestCaseStatus.PASSED);
+    setBugId(undefined);
+  }, [visible]);
+
 
   const handleOk = () => {
     if (selectedStatus !== undefined) {
@@ -68,18 +75,18 @@ const CompleteTestcaseModal: React.FC<CompleteTestcaseModalProps> = ({
           ]}
         />
 
-      {selectedStatus === TestCaseStatus.FAILED && (
-        <div style={{ marginTop: 16 }}>
-          <label>Bug ID：</label>
-          <Input
-            style={{ width: '100%', marginTop: 8 }}
-            type="number"
-            value={bugId || ''}
-            onChange={(e) => setBugId(e.target.value ? Number(e.target.value) : undefined)}
-            placeholder="请输入Bug ID"
-            status={bugId === undefined || bugId <= 0 ? 'error' : ''}
-          />
-        </div>)}
+        {selectedStatus === TestCaseStatus.FAILED && (
+          <div style={{ marginTop: 16 }}>
+            <label>Bug ID：</label>
+            <Input
+              style={{ width: '100%', marginTop: 8 }}
+              type="number"
+              value={bugId || ''}
+              onChange={(e) => setBugId(e.target.value ? Number(e.target.value) : undefined)}
+              placeholder="请输入Bug ID"
+              status={bugId === undefined || bugId <= 0 ? 'error' : ''}
+            />
+          </div>)}
       </div>
     </Modal>
   );

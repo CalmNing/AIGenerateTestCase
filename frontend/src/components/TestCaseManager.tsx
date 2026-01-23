@@ -199,7 +199,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
           </div>
 
           {/* 表格容器 */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
 
               <TestCaseTable
                 testcases={testcases}

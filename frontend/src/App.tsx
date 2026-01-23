@@ -148,7 +148,7 @@ const App: React.FC = () => {
   // 选择会话
   const handleSelectSession = (session: Session) => {
     setSelectedSession(session);
-    loadTestcases(session.id, filters);
+    loadTestcases(session.id);
   };
 
   // 查看测试用例
@@ -174,7 +174,6 @@ const App: React.FC = () => {
 
   // 编辑测试用例
   const handleEditTestcase = (testcase: TestCase) => {
-    console.log("111111", testcase);
 
     setSelectedTestcase(testcase);
     setIsEditModalVisible(true);
@@ -263,7 +262,7 @@ const App: React.FC = () => {
       const response: any = await testcaseApi.deleteTestcase(selectedSession.id, testcaseToDelete);
       if (response.code === 200) {
         setTestcases(testcases.filter(testcase => testcase.id !== testcaseToDelete));
-        loadTestcases(selectedSession.id);
+        loadTestcases(selectedSession.id, filters);
 
         notification.success({
           message: '删除成功',
@@ -321,7 +320,7 @@ const App: React.FC = () => {
         setTestcases(testcases.map(tc =>
           tc.id === testcaseToComplete.id ? updatedTestcase : tc
         ));
-        loadTestcases(selectedSession.id);
+        loadTestcases(selectedSession.id, filters);
         setSelectedTestcase(updatedTestcase);
         setCurrentIndex(testcases.findIndex(tc => tc.id === updatedTestcase.id));
         // 显示成功通知
@@ -457,12 +456,12 @@ const App: React.FC = () => {
             hasImageBase64: !!imageBase64,
             imageBase64Length: imageBase64?.length || 0
           });
-          
+
           // 调用API
           const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
-            selectedSession.id, 
-            requirement.trim(), 
-            modelConfig, 
+            selectedSession.id,
+            requirement.trim(),
+            modelConfig,
             imageBase64 // 传递图片base64数据
           );
           if (response.code === 200 && response.data) {
@@ -598,13 +597,11 @@ const App: React.FC = () => {
         onOk={handleConfirmDeleteTestcase}
         onCancel={handleCancelDeleteTestcase}
       />
-
-      <CompleteTestcaseModal
+      {/* <CompleteTestcaseModal
         visible={confirmCompleteTestcaseVisible}
         onOk={handleConfirmCompleteTestcase}
         onCancel={handleCancelCompleteTestcase}
-      />
-
+      /> */}
       <ViewTestcaseModal
         visible={isViewModalVisible}
         selectedTestcase={selectedTestcase}
@@ -614,6 +611,11 @@ const App: React.FC = () => {
         onPrev={handlePrevCase}
         onCancel={() => setIsViewModalVisible(false)}
         onComplete={handleCompleteTestcase}
+      />
+      <CompleteTestcaseModal
+        visible={confirmCompleteTestcaseVisible}
+        onOk={handleConfirmCompleteTestcase}
+        onCancel={handleCancelCompleteTestcase}
       />
 
       {
