@@ -1,6 +1,5 @@
-import React from 'react';
-import { Table, Space, Button, PaginationProps } from 'antd';
-import { EyeOutlined, EditOutlined, CheckOutlined, DeleteOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { Table, Space, Button, PaginationProps, TableProps, message, Modal } from 'antd';
 import { TestCase, TestCaseStatus } from '../types';
 
 interface TestCaseTableProps {
@@ -9,6 +8,7 @@ interface TestCaseTableProps {
   onEdit: (testcase: TestCase) => void;
   onComplete: (testcase: TestCase) => void;
   onDelete: (id: number) => void;
+  onBatchDelete: (ids: number[]) => void;
 }
 
 const onShowSizeChange: PaginationProps['onShowSizeChange'] = (current, pageSize) => {
@@ -20,8 +20,12 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onView,
   onEdit,
   onComplete,
-  onDelete
+  onDelete,
+  onBatchDelete
 }) => {
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [isBatchDeleteModalVisible, setIsBatchDeleteModalVisible] = useState(false);
+
   const testcaseColumns = [
     {
       title: '序号',
@@ -36,14 +40,14 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       dataIndex: 'case_name',
       key: 'case_name',
       ellipsis: true,
-      width: 300,
+      width: 200,
       // align: 'center',
     },
     {
       title: '用例级别',
       dataIndex: 'case_level',
       key: 'case_level',
-      width: 100,
+      width: 70,
       align: 'center' as 'center' | 'left' | 'right',
       render: (level: number) => {
         const levelMap: Record<number, string> = {
@@ -59,7 +63,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
+      width: 70,
       align: 'center' as 'center' | 'left' | 'right',
       render: (status: TestCaseStatus) => {
         let statusText = '';
@@ -88,7 +92,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      width: 150,
+      width: 110,
       align: 'center' as 'center' | 'left' | 'right',
       render: (time: string) => {
         const date = new Date(time);
@@ -99,7 +103,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       title: 'Bug',
       dataIndex: 'bug_id',
       key: 'bug_id',
-      width: 100,
+      width: 70,
       align: 'center' as 'center' | 'left' | 'right',
       render: (bugId: number | undefined) => {
         if (bugId) {
@@ -121,48 +125,103 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
     {
       title: '操作',
       key: 'action',
-      width: 300,
+      width: 150,
       align: 'center' as 'center' | 'left' | 'right',
       render: (_: any, record: TestCase) => (
         <div style={{ textAlign: 'center' }}>
-          <Space size="middle">
-            <Button type="text" icon={<EyeOutlined />} onClick={() => onView(record)}>查看</Button>
-            <Button type="text" icon={<EditOutlined />} onClick={() => onEdit(record)}>编辑</Button>
+          <Space size='small'>
+            <Button size='small' type="link" onClick={() => onView(record)}>查看</Button>
+            <Button size='small' type="link" onClick={() => onEdit(record)}>编辑</Button>
             <Button
-              type="primary"
-              icon={<CheckOutlined />}
+              size='small'
+              type="link"
+              style={{ color: '#46ac65' }}
+              // icon={<CheckOutlined />}
               onClick={() => onComplete(record)}
             // disabled={record.status === TestCaseStatus.PASSED}
             >
               执行
             </Button>
-            <Button type="text" disabled={record.status !== TestCaseStatus.NOT_RUN} danger icon={<DeleteOutlined />} onClick={() => onDelete(record.id)}>删除</Button>
+            <Button size='small' type="link" disabled={record.status !== TestCaseStatus.NOT_RUN} danger onClick={() => onDelete(record.id)}>删除</Button>
           </Space>
         </div>
       ),
     },
   ];
+  const rowSelection: TableProps<TestCase>['rowSelection'] = {
+    selectedRowKeys,
+    onChange: (selectedRowKeys: React.Key[], selectedRows: TestCase[]) => {
+      console.log(`selectedRowKeys: ${selectedRowKeys}`, 'selectedRows: ', selectedRows);
+      setSelectedRowKeys(selectedRowKeys);
+    },
+    getCheckboxProps: (record: TestCase) => ({
+      disabled: record.status !== TestCaseStatus.NOT_RUN,
+    }),
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请选择要删除的测试用例');
+      return;
+    }
+    setIsBatchDeleteModalVisible(true);
+  };
+
+  const handleConfirmBatchDelete = () => {
+    const selectedIds = selectedRowKeys.map(key => Number(key));
+    onBatchDelete(selectedIds);
+    setSelectedRowKeys([]);
+    setIsBatchDeleteModalVisible(false);
+  };
+
+  const handleCancelBatchDelete = () => {
+    setIsBatchDeleteModalVisible(false);
+  };
 
   return (
-    <Table
-      
-      columns={testcaseColumns}
-      dataSource={testcases}
-      rowKey="id"
-      pagination={{
-        position: ['bottomRight'],
-        onShowSizeChange,
-        defaultPageSize: 20,
-      }}
-      scroll={{ x: 800, y: '47vh' }}
-      // style={{ marginTop: 16, height: '100%' }}
-      tableLayout="fixed"
-      size="middle"
-      bordered
-      locale={{
-        emptyText: '暂无数据'
-      }}
-    />
+    <>
+     {selectedRowKeys.length > 0 && <Space style={{ marginBottom: 16, textAlign: 'left' }}>
+        <Button 
+          danger 
+          onClick={handleBatchDelete}
+          // disabled={selectedRowKeys.length === 0}
+        >
+          批量删除 ({selectedRowKeys.length})
+        </Button>
+      </Space>}
+      <Table
+        rowSelection={{ type: "checkbox", ...rowSelection }}
+        columns={testcaseColumns}
+        dataSource={testcases}
+        rowKey="id"
+        pagination={{
+          position: ['bottomRight'],
+          onShowSizeChange,
+          defaultPageSize: 20,
+        }}
+        scroll={{ x: 800, y: '47vh' }}
+        // style={{ marginTop: 16, height: '100%' }}
+        tableLayout="fixed"
+        size="middle"
+        bordered
+        locale={{
+          emptyText: '暂无数据'
+        }}
+      />
+
+      <Modal
+        title="批量删除确认"
+        open={isBatchDeleteModalVisible}
+        onOk={handleConfirmBatchDelete}
+        onCancel={handleCancelBatchDelete}
+        okText="确认删除"
+        cancelText="取消"
+        okType="danger"
+      >
+        <p>您确定要删除选中的 {selectedRowKeys.length} 个测试用例吗？</p>
+        <p style={{ color: '#ff4d4f' }}>此操作不可恢复，请谨慎操作！</p>
+      </Modal>
+    </>
   );
 };
 

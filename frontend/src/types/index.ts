@@ -38,9 +38,32 @@ export interface TestCaseResponse {
 
 }
 
+// 更新会话请求类型
+export interface UpdateSessionRequest {
+  name: string;
+}
+
 // API响应类型
 export interface ApiResponse<T = any> {
   code: number;
   message: string;
   data?: T;
+}
+
+// 模块类型
+export interface Module {
+  id: number | null;
+  module_name: string;
+  session_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// 刷选条件参数类型
+export interface TestCaseFilters {
+  case_name?: string;
+  status?: TestCaseStatus;
+  bug_id?: string;
+  exist_bug?: boolean;
+  module_id?: number | string;
 }

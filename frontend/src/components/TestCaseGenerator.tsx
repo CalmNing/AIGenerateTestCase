@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Card, Typography, Input, Button, message } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
-import { Session } from '../types';
+import { Session, Module } from '../types';
 
 const { Text } = Typography;
 
 interface TestCaseGeneratorProps {
   selectedSession: Session | null;
+  modules: Module[]; // 模块列表
+  selectedModule: number|string; // 当前选中的模块
   requirement: string;
   loading: boolean;
   onRequirementChange: (value: string) => void;
@@ -17,6 +19,8 @@ interface TestCaseGeneratorProps {
 
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   selectedSession,
+  modules,
+  selectedModule,
   requirement,
   loading,
   onRequirementChange,
@@ -129,6 +133,16 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
           <div style={{ marginBottom: '16px' }}>
             <Text strong>当前会话:</Text> <Text>{selectedSession.name}</Text>
           </div>
+          {!selectedModule ? (
+            <div style={{ marginBottom: '16px' }}>
+              <Text strong>当前模块:</Text> <Text>无</Text>
+            </div>
+          ) : (
+            <div style={{ marginBottom: '16px' }}>
+              <Text strong>当前模块:</Text> <Text>{modules.find(m => m.id === selectedModule)?.module_name || '无'}</Text>
+            </div>
+          )}
+
 
           {/* 需求输入区域 */}
           <div style={{ marginBottom: '16px' }}>

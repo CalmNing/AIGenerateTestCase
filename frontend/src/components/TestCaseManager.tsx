@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, Typography, Space, Button, Input, Select, notification, Switch } from 'antd';
 import { DownloadOutlined } from '@ant-design/icons';
-import { Session, TestCase, TestCaseResponse, TestCaseStatus } from '../types';
+import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../types';
 import TestCaseTable from './TestCaseTable';
 // 静态导入xlsx库
 import * as XLSX from 'xlsx';
@@ -10,19 +10,23 @@ const { Text } = Typography;
 
 interface TestCaseManagerProps {
   selectedSession: Session | null;
+  modules: Module[]; // 模块列表
+  selectedModule: number|string; // 当前选中的模块
   testcases: TestCase[];
   testcasesResponse: TestCaseResponse;
-  filters: { case_name: string; status: string; bug_id: string; exist_bug?: boolean };
-  onFiltersChange: (filters: { case_name: string; status: string; bug_id: string; exist_bug?: boolean }) => void;
-  onLoadTestcases: (sessionId: number, filters?: { case_name?: string; status?: string; bug_id?: string; exist_bug?: boolean }) => void;
+  filters?: TestCaseFilters;
+  onFiltersChange: (filters: TestCaseFilters) => void;
+  onLoadTestcases: (sessionId: number | undefined, filters?: TestCaseFilters) => void;
   onView: (testcase: TestCase) => void;
   onEdit: (testcase: TestCase) => void;
   onComplete: (testcase: TestCase) => void;
   onDelete: (id: number) => void;
+  onBatchDelete: (ids: number[]) => void;
 }
 
 const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   selectedSession,
+  selectedModule,
   testcases,
   testcasesResponse,
   filters,
@@ -31,7 +35,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onView,
   onEdit,
   onComplete,
-  onDelete
+  onDelete,
+  onBatchDelete
 }) => {
   const handleExportExcel = () => {
     if (testcases.length === 0) {
@@ -90,7 +95,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   return (
     <Card variant="borderless">
       {!selectedSession ? (
-        <div style={{ textAlign: 'center', padding: '40px 0' }}>
+        <div style={{ textAlign: 'center', padding: '20px 0' }}>
           <Text type="secondary">请先从左侧选择一个会话</Text>
         </div>
       )
@@ -110,7 +115,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                       case_name: '',
                       bug_id: '',
                       exist_bug: false,
-                      status: ""
+                      status: undefined,
+                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
                     };
                     onFiltersChange(newFilters);
                   }}
@@ -125,7 +131,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                       case_name: '',
                       bug_id: '',
                       exist_bug: false,
-                      status: TestCaseStatus.PASSED
+                      status: TestCaseStatus.PASSED,
+                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
                     };
                     onFiltersChange(newFilters);
                   }}
@@ -144,7 +151,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                       case_name: '',
                       bug_id: '',
                       exist_bug: false,
-                      status: TestCaseStatus.NOT_RUN
+                      status: TestCaseStatus.NOT_RUN,
+                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
                     };
                     onFiltersChange(newFilters);
                   }}
@@ -162,7 +170,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                       case_name: '',
                       bug_id: '',
                       exist_bug: false,
-                      status: TestCaseStatus.FAILED
+                      status: TestCaseStatus.FAILED,
+                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
                     };
                     onFiltersChange(newFilters);
                   }}
@@ -179,7 +188,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                       case_name: '',
                       bug_id: '',
                       exist_bug: true,
-                      status: ""
+                      status: undefined,
+                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
                     };
                     onFiltersChange(newFilters);
                   }}
@@ -205,7 +215,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 <label>用例名称: </label>
                 <Input
                   placeholder="请输入用例名称"
-                  value={filters.case_name}
+                  value={filters?.case_name ?? ''}
                   onChange={(e) => {
                     const newFilters = { ...filters, case_name: e.target.value };
                     onFiltersChange(newFilters);
@@ -220,7 +230,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 <label>用例状态: </label>
                 <Select
                   placeholder="用例状态"
-                  value={filters.status}
+                  value={filters?.status ?? undefined}
                   onChange={(value) => {
                     const newFilters = { ...filters, status: value };
                     onFiltersChange(newFilters);
@@ -235,7 +245,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 <label>BugId: </label>
                 <Input
                   placeholder="请输入BugId"
-                  value={filters.bug_id}
+                  value={filters?.bug_id ?? ''}
                   onChange={(e) => {
                     const newFilters = { ...filters, bug_id: e.target.value };
                     onFiltersChange(newFilters);
@@ -249,7 +259,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 />
                 <label>只看bug: </label>
                 <Switch
-                  checked={filters.exist_bug}
+                  checked={filters?.exist_bug ?? false}
                   onChange={(checked) => {
                     const newFilters = { ...filters, exist_bug: checked };
                     onFiltersChange(newFilters);
@@ -274,8 +284,10 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                   onClick={() => {
                     const newFilters = {
                       case_name: '',
-                      status: '',
-                      bug_id: ''
+                      status: undefined,
+                      bug_id: '',
+                      exist_bug: false,
+                      module_id: filters?.module_id ?? undefined
                     };
                     onFiltersChange(newFilters);
                     if (selectedSession) {
@@ -301,6 +313,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 onEdit={onEdit}
                 onComplete={onComplete}
                 onDelete={onDelete}
+                onBatchDelete={onBatchDelete}
               />
 
             </div>

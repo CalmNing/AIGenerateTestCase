@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Layout, Menu, Typography, Button, Input, Space, Tooltip } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import React from 'react';
+import { Layout, Menu, Typography, Button, Input, Space, Popover } from 'antd';
+import { PlusOutlined, MessageTwoTone, EllipsisOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseStatus } from '../types';
 
 const { Sider } = Layout;
@@ -15,6 +15,8 @@ interface SessionSidebarProps {
   onCreateSession: () => void;
   onSelectSession: (session: Session) => void;
   onDeleteSession: (id: number) => void;
+  onOpenAddModuleModal: () => void;
+  onOpenEditSessionModal: (session: Session) => void;
 }
 
 const SessionSidebar: React.FC<SessionSidebarProps> = ({
@@ -25,27 +27,11 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onNewSessionNameChange,
   onCreateSession,
   onSelectSession,
-  onDeleteSession
+  onDeleteSession,
+  onOpenAddModuleModal,
+  onOpenEditSessionModal
 }) => {
-  const disableTipText = "存在「已执行」的测试用例，无法删除";
-  const [disableTip, setDisableTip] = useState('')
-  const [buttonSelectedSession, setButtonSelectedSession] = useState(false)
-  const [selectedSessionId, setSelectedSessionId] = useState<Number | undefined>(0)
-  useEffect(() => {
-    if (testcases){
-      setButtonSelectedSession(false)
-      setDisableTip('')
-    }
-    if (testcases.some(tc => tc.status === TestCaseStatus.PASSED|| tc.status===TestCaseStatus.FAILED)) {
-      setButtonSelectedSession(true)
-      setDisableTip(disableTipText)
-    }
-    else {
-      setButtonSelectedSession(false)
-      setDisableTip('')
-    }
-    setSelectedSessionId(selectedSession?.id)
-  }, [testcases])
+  // 组件现在不再需要这些状态变量，直接在Popover中计算禁用状态
 
   const menuItems = sessions.map(session => ({
     key: session.id,
@@ -54,34 +40,67 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
         <span style={{
           fontSize: "16px",
           lineHeight: "1.5",
-          width: "160px", // 1. 设置固定宽度（必填，可根据需求调整，如 300px、50% 等）
-          height: "40px", // 固定容器高度
-          display: "flex", // 开启 flex 布局
-          alignItems: "center", // 垂直方向（上下）居中对齐
-          whiteSpace: "nowrap", // 3. 禁止文本换行，保持单行显示
-          overflow: "hidden", // 4. 隐藏超出容器宽度的内容
-          textOverflow: "ellipsis", // 5. 可选：超出部分显示省略号（...），优化用户体验
+          width: "140px",
+          height: "40px",
+          display: "flex",
+          alignItems: "center",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
         }}>{session.name}</span>
-       <Tooltip
-          title={disableTip}
-          mouseEnterDelay={0.2} // 可选：设置 hover 延迟，避免误触
-          placement="top" // 可选：设置提示显示位置（top/bottom/left/right）
+
+        <Popover
+          content={(
+            <Space direction="vertical" size="small">
+              <Button
+                type="text"
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenEditSessionModal(session);
+                }}
+              >
+                编辑会话
+              </Button>
+              <Button
+                type="text"
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenAddModuleModal();
+                }}
+              >
+                新增模块
+              </Button>
+
+              <Button
+                type="text"
+                danger
+                size="small"
+                disabled={testcases.some(tc => tc.session_id === session.id && (tc.status === TestCaseStatus.PASSED || tc.status === TestCaseStatus.FAILED))}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteSession(session.id);
+                }}
+              >
+                删除会话
+              </Button>
+            </Space>
+          )}
+          // title="操作"
+          trigger="click"
+          placement="bottom"
         >
-          {selectedSessionId === session?.id && <Button
+          <Button
             type="text"
-            danger
-            icon={<DeleteOutlined />}
+            icon={<EllipsisOutlined />}
             size="small"
-            disabled={buttonSelectedSession}
-            onClick={(e) => {
-              e.stopPropagation();
-              onDeleteSession(session.id);
-              setSelectedSessionId(session.id)
-            }}
-          />}
-        </Tooltip>
+            onClick={(e) => e.stopPropagation()}
+          />
+        </Popover>
       </Space>
     ),
+    icon: <MessageTwoTone />,
     onClick: () => onSelectSession(session)
   }));
 
@@ -103,9 +122,9 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
         </div>
       </div>
       <Menu
-        mode="inline"
+        mode="vertical"
+        style={{ margin: '0' }}
         selectedKeys={selectedSession ? [String(selectedSession.id)] : []}
-        style={{ borderRight: 0, flex: 1, overflow: 'auto' }}
         items={menuItems}
       />
     </Sider>

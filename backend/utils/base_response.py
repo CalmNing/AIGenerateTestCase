@@ -9,7 +9,7 @@ T = TypeVar("T")
 class Response(BaseModel, Generic[T]):
     code: int = 200
     message: str = "Success"
-    data: Optional[T] = "null"
+    data: Optional[T] = None
     model_config = {
         "arbitrary_types_allowed": True,
     }

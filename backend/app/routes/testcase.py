@@ -1,9 +1,9 @@
+import base64
 from typing import List, Annotated, Optional
 
-import base64
-
-from fastapi import APIRouter, Query, HTTPException, status, File, Form, Depends, UploadFile
+from fastapi import APIRouter, Query, status, File, Form, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy import delete
 from sqlmodel import select, desc, func
 
 from app.deps import SessionDep
@@ -30,6 +30,7 @@ class TestCasePage(BaseModel):
 def get_testcases(
         session_id: int,
         session: SessionDep,
+        module_id: int = None,
         offset: int = 0,
         limit: Annotated[int, Query(le=100)] = 100,
         case_name: str = None,
@@ -40,6 +41,8 @@ def get_testcases(
     """获取会话的测试用例"""
     query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
                                                                                desc(TestCase.created_at))
+    if module_id:
+        query = query.where(TestCase.module_id == module_id)
 
     if case_name:
         query = query.where(TestCase.case_name.contains(case_name))
@@ -55,24 +58,38 @@ def get_testcases(
     for testcase in testcases_db:
         testcase.session_id = int(testcase.session_id) if testcase.session_id else None
 
-    totalNumber = session.scalar(select(func.count()).where(TestCase.session_id == session_id))
-    passed = session.scalar(select(func.count()).where(
-        TestCase.session_id == session_id,
-        TestCase.status == StatusValue.PASSED
-    ))
+    # 构建基础查询条件
+    count_query_base = [TestCase.session_id == session_id]
+    if module_id is not None:
+        count_query_base.append(TestCase.module_id == module_id)
+        # 统计总数
+    totalNumber = session.scalar(select(func.count()).where(*count_query_base))
 
-    failed = session.scalar(select(func.count()).where(
-        TestCase.session_id == session_id,
-        TestCase.status == StatusValue.FAILED
-    ))
-    not_run = session.scalar(select(func.count()).where(
-        TestCase.session_id == session_id,
-        TestCase.status == StatusValue.NOT_RUN
-    ))
-    totalBugs = session.scalar(select(func.count()).where(
-        TestCase.session_id == session_id,
-        TestCase.bug_id != None
-    ))
+    # 统计已通过的用例数
+    passed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.PASSED]
+    if module_id is not None:
+        passed_query.append(TestCase.module_id == module_id)
+    passed = session.scalar(select(func.count()).where(*passed_query))
+
+    # 统计未通过的用例数
+    failed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.FAILED]
+    if module_id is not None:
+        failed_query.append(TestCase.module_id == module_id)
+    failed = session.scalar(select(func.count()).where(*failed_query))
+
+    # 统计未执行的用例数
+    not_run_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.NOT_RUN]
+    if module_id is not None:
+        not_run_query.append(TestCase.module_id == module_id)
+    not_run = session.scalar(select(func.count()).where(*not_run_query))
+
+    # 统计 Bug 数
+    total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None]
+    if module_id is not None:
+        total_bugs_query.append(TestCase.module_id == module_id)
+    totalBugs = session.scalar(select(func.count()).where(*total_bugs_query))
+
+
     testcases = TestCasePage(
         items=testcases_db,
         totalNumber=totalNumber,
@@ -104,22 +121,25 @@ async def generate_testcases(
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
         file: Optional[UploadFile] = File(None),
+        module_id: Optional[int] = Form(""),
+
 ):
     """生成测试用例"""
     from utils.model_utils import generate_testcases
-    
+
     # 添加详细的调试日志
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"接收到生成测试用例请求")
     logger.info(f"  session_id: {session_id}")
+    logger.info(f"  module_id: {module_id}")
     logger.info(f"  requirement: {'有值' if requirement else 'None'} (长度: {len(requirement) if requirement else 0})")
     logger.info(f"  model_type: {model_type}")
     logger.info(f"  api_key: {'有值' if api_key else 'None'}")
     logger.info(f"  file: {'有文件' if file else 'None'}")
     logger.info(f"  file.filename: {file.filename if file else 'None'}")
     logger.info(f"  file.content_type: {file.content_type if file else 'None'}")
-    
+
     # 处理图像数据
     image_data = None
     if file:
@@ -135,35 +155,35 @@ async def generate_testcases(
     # 基本输入校验 - 修复
     # 检查是否至少有一个有效输入
     has_valid_input = False
-    
+
     # 检查是否有文件 - 修复：检查file是否为None
     if file is not None:
         has_valid_input = True
         logger.info(f"  文件上传成功: {file.filename}")
-    
+
     # 检查是否有有效的requirement
     if requirement and requirement.strip():
         has_valid_input = True
         logger.info(f"  有有效的requirement")
-    
+
     logger.info(f"  验证结果: has_valid_input={has_valid_input}")
-    
+
     # 如果没有有效输入，返回错误
     if not has_valid_input:
         logger.error(f"  验证失败: 请上传图片文件或输入requirement")
         return Response(code=status.HTTP_400_BAD_REQUEST, data="请上传图片文件或输入requirement")
-
 
     # 模型参数校验
     if model_type == "api" and not api_key:
         return Response(code=status.HTTP_400_BAD_REQUEST, data="api_key 未提供!")
     if model_type == "ollama" and (not ollama_url or not ollama_model):
         return Response(code=status.HTTP_400_BAD_REQUEST,
-                            data="Ollama 配置不完整（ollama_url/ollama_model）")
+                        data="Ollama 配置不完整（ollama_url/ollama_model）")
 
     testcases = generate_testcases(
         requirement=requirement,
         session_id=session_id,
+        module_id=module_id,
         image_data=image_data,
         is_base64=True,
         model_type=model_type,
@@ -174,10 +194,10 @@ async def generate_testcases(
     )
     session.add_all(testcases)
     session.commit()
-    return Response(data="生成测试用例成功")
+    return Response(message="生成测试用例成功")
 
 
-@router.put("/{session_id}/testcases/{testcase_id}", response_model=Response[str])
+@router.put("/{session_id}/testcases/{testcase_id}", response_model=Response)
 def update_testcase(
         session: SessionDep,
         session_id: int,
@@ -188,7 +208,7 @@ def update_testcase(
 
     testcase_db = session.get(TestCase, testcase_id)
     if not testcase_db:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="测试用例不存在")
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     testcase_data = testcase.model_dump(exclude_unset=True)
     testcase_data.pop("created_at")
@@ -197,34 +217,31 @@ def update_testcase(
     session.add(testcase_db)
     session.commit()
     session.refresh(testcase_db)
-    return Response(data="更新测试用例成功")
+    return Response(message="更新测试用例成功")
 
 
-@router.delete("/{session_id}/testcases/{testcase_id}", response_model=Response[str])
+@router.delete("/{session_id}/testcases", response_model=Response[str])
 def delete_testcase(
         session: SessionDep,
         session_id: int,
-        testcase_id: int
+        testcases: List[int]
 ):
     testcase_status = session.exec(
         select(TestCase.status)
         .where(
-            TestCase.id == testcase_id,
+            TestCase.id.in_(testcases),
             TestCase.status != StatusValue.NOT_RUN
         )
     ).first()
     if testcase_status:
-        return Response(code=status.HTTP_400_BAD_REQUEST, data="用例已执行，删除失败！")
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="存在已执行的用例，删除失败！")
     """删除测试用例"""
-    testcase = session.exec(
-        select(TestCase)
-        .where(
-            TestCase.id == testcase_id,
-            TestCase.session_id == session_id
-        )
-    ).first()
-    if not testcase:
-        return Response(code=status.HTTP_404_NOT_FOUND, data="测试用例不存在")
-    session.delete(testcase)
+
+    # 批量删除测试用例
+    statement = delete(TestCase).where(
+        TestCase.id.in_(testcases),
+        TestCase.session_id == session_id
+    )
+    session.exec(statement)
     session.commit()
-    return Response(data="删除测试用例成功")
+    return Response(message="删除测试用例成功")

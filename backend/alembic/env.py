@@ -20,6 +20,12 @@ from db.models import BaseModel
 target_metadata = BaseModel.metadata
 # target_metadata = None
 
+# -------- 新增 SQLite 适配配置 --------
+from alembic.operations import ops
+from alembic.runtime.environment import EnvironmentContext
+from alembic.script import ScriptDirectory
+
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -65,7 +71,11 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+                # -------- 关键配置 --------
+            render_as_batch = True,  # 启用批处理模式，适配 SQLite
+            dialect_opts = {"paramstyle": "named"},
         )
 
         with context.begin_transaction():

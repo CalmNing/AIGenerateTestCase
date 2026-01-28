@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, notification, Form, Tabs } from 'antd';
-import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus } from './types';
-import { sessionApi, testcaseApi } from './services/api';
+import { Layout, notification, Form, Tabs, Modal, Input } from 'antd';
+import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
+import { sessionApi, testcaseApi, moduleApi } from './services/api';
 import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/TestCaseGenerator';
@@ -14,6 +14,7 @@ import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
 import ViewTestcaseModal from './components/modals/ViewTestcaseModal';
 import EditTestcaseModal from './components/modals/EditTestcaseModal';
 import SettingsModal from './components/modals/SettingsModal';
+import ModuleSidebar from './components/ModuleSidebar';
 
 const { Content } = Layout;
 
@@ -21,15 +22,25 @@ const App: React.FC = () => {
 
   // 状态管理
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [modules, setModules] = useState<Module[]>([]);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
+  const [selectedModule, setSelectedModule] = useState<number|string>(0);
   const [testcases, setTestcases] = useState<TestCase[]>([]);
   const [testcasesResponse, setTestcasesResponse] = useState<TestCaseResponse>({ items: [], passed: 0, failed: 0, not_run: 0, totalNumber: 0, totalBugs: 0 });
   const [newSessionName, setNewSessionName] = useState('');
+  const [editSessionName, setEditSessionName] = useState('');
+  const [newModuleName, setNewModuleName] = useState('');
+  const [editModuleName, setEditModuleName] = useState('');
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [isEditSessionModalVisible, setIsEditSessionModalVisible] = useState(false);
+  const [isEditModuleModalVisible, setIsEditModuleModalVisible] = useState(false);
+  const [sessionToEdit, setSessionToEdit] = useState<Session | null>(null);
+  const [moduleToEdit, setModuleToEdit] = useState<Module | null>(null);
+  const [isAddModuleModalVisible, setIsAddModuleModalVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('generate');
   // 图片状态管理
   const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -44,6 +55,7 @@ const App: React.FC = () => {
   useEffect(() => {
     loadSessions();
     setSelectedSession(selectedSession?.id ? selectedSession : null);
+    setSelectedModule(selectedModule ? selectedModule : 0);
     // 从localStorage加载设置
     const savedSettings = localStorage.getItem('appSettings');
     if (savedSettings) {
@@ -62,6 +74,7 @@ const App: React.FC = () => {
         setSessions(response.data);
         if (response.data.length > 0) {
           setSelectedSession(response.data[0]);
+          loadModules(response.data[0].id);
           loadTestcases(response.data[0].id);
         }
       }
@@ -71,12 +84,12 @@ const App: React.FC = () => {
   };
 
   // 加载测试用例
-  const loadTestcases = async (sessionId: number | any, filters?: { case_name?: string; status?: string; bug_id?: string ;exist_bug?: boolean }) => {
+  const loadTestcases = async (sessionId: number | any, filters?: TestCaseFilters) => {
     try {
       const response: ApiResponse<TestCaseResponse> | any = await testcaseApi.getTestcases(sessionId, filters);
       if (response.code === 200 && response.data) {
-        setTestcases(response.data.items);
-        setTestcasesResponse(response.data);
+        setTestcases(response.data.items || []);
+        setTestcasesResponse(response.data || {});
       }
     } catch (error) {
       console.error('加载测试用例失败:', error);
@@ -110,6 +123,194 @@ const App: React.FC = () => {
     }
   };
 
+  // 打开新增模块对话框
+  const handleOpenAddModuleModal = () => {
+    setIsAddModuleModalVisible(true);
+  };
+
+  // 创建模块
+  const handleCreateModule = async () => {
+    if (!selectedSession || !newModuleName.trim()) return;
+
+    try {
+      const response: ApiResponse<Module> | any = await moduleApi.createModule({
+        module_name: newModuleName.trim(),
+        session_id: selectedSession.id
+      });
+
+      if (response.code === 200 && response.data) {
+        setModules([...modules, response.data]);
+        setNewModuleName('');
+        setIsAddModuleModalVisible(false);
+        notification.success({
+          message: '创建成功',
+          description: '模块已成功创建',
+          placement: 'topRight'
+        });
+      }
+    } catch (error) {
+      console.error('创建模块失败:', error);
+      notification.error({
+        message: '创建失败',
+        description: '模块创建失败，请重试',
+        placement: 'topRight'
+      });
+    }
+  };
+
+  // 加载模块列表
+  const loadModules = async (sessionId: number | any) => {
+    try {
+      const response: ApiResponse<Module[]> | any = await moduleApi.getModules(sessionId);
+      if (response.code === 200 && response.data) {
+        setModules(response.data);
+        setSelectedModule('all'); // 重置选中的模块
+      }
+    } catch (error) {
+      console.error('加载模块失败:', error);
+    }
+  };
+
+  // 选择模块
+  const handleSelectModule = (module: Module) => {
+    setSelectedModule(module.id!);
+    // 可以在这里添加根据模块筛选测试用例的逻辑
+    loadTestcases(selectedSession?.id ?? undefined, { module_id: module.id || 'all' });
+    setFilters({ case_name: '', bug_id: '', exist_bug: false, status: undefined, module_id: module.id || 'all' });
+  };
+
+  // 选择全部模块
+  const handleSelectAllModules = () => {
+    setSelectedModule(0);
+    // 清空模块筛选
+    loadTestcases(selectedSession?.id ?? undefined, { ...filters, module_id: undefined });
+  };
+
+  // 打开编辑模块对话框
+  const handleEditModule = (module: Module) => {
+    setModuleToEdit(module);
+    setEditModuleName(module.module_name);
+    setIsEditModuleModalVisible(true);
+  };
+
+  // 更新模块
+  const handleUpdateModule = async () => {
+    if (!moduleToEdit || !editModuleName.trim()) return;
+
+    try {
+      const response: ApiResponse<Module> | any = await moduleApi.updateModule(moduleToEdit.id!, {
+        ...moduleToEdit,
+        module_name: editModuleName.trim()
+      });
+
+      if (response.code === 200 && response.data) {
+        // 更新本地状态
+        setModules(modules.map(m => m.id === moduleToEdit.id ? response.data : m));
+        if (selectedModule === moduleToEdit.id) {
+          setSelectedModule(response.data.id!);
+        }
+        setIsEditModuleModalVisible(false);
+        notification.success({
+          message: '更新成功',
+          description: response.message || '模块已成功更新',
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '更新失败',
+          description: response.message || '模块更新失败，请重试',
+          placement: 'topRight'
+        });
+      }
+    } catch (error) {
+      console.error('更新模块失败:', error);
+      notification.error({
+        message: '更新失败',
+        description: '模块更新失败，请重试',
+        placement: 'topRight'
+      });
+    }
+  };
+
+  // 删除模块
+  const handleDeleteModule = async (moduleId: number) => {
+    try {
+      const response: ApiResponse | any = await moduleApi.deleteModule(moduleId);
+      if (response.code === 200) {
+        setModules(modules.filter(module => module.id !== moduleId));
+        if (selectedModule === moduleId) {
+          setSelectedModule(0);
+        }
+        notification.success({
+          message: '删除成功',
+          description: response.message || '模块已成功删除',
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '删除失败',
+          description: response.message || '模块删除失败，请重试',
+          placement: 'topRight'
+        });
+      }
+    } catch (error) {
+      console.error('删除模块失败:', error);
+      notification.error({
+        message: '删除失败',
+        description: '模块删除失败，请重试',
+        placement: 'topRight'
+      });
+    }
+  };
+
+  // 打开编辑会话对话框
+  const handleOpenEditSessionModal = (session: Session) => {
+    setSessionToEdit(session);
+    setEditSessionName(session.name);
+    setIsEditSessionModalVisible(true);
+  };
+
+  // 编辑会话
+  const handleEditSession = async () => {
+    if (!sessionToEdit || !editSessionName.trim()) return;
+
+    try {
+      // 调用更新会话API
+      const response: ApiResponse<Session> | any = await sessionApi.updateSession(sessionToEdit.id, { name: editSessionName.trim() });
+      if (response.code === 200 && response.data) {
+        // 更新本地状态
+        setSessions(sessions.map(s => s.id === sessionToEdit.id ? response.data : s));
+        if (selectedSession?.id === sessionToEdit.id) {
+          setSelectedSession(response.data);
+        }
+        setIsEditSessionModalVisible(false);
+        notification.success({
+          message: '更新成功',
+          description: response.message || '会话已成功更新',
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '更新失败',
+          description: response.message || '会话更新失败，请重试',
+          placement: 'topRight'
+        });
+      }
+    } catch (error) {
+      console.error('更新会话失败:', error);
+      notification.error({
+        message: '更新失败',
+        description: '会话更新失败，请重试',
+        placement: 'topRight'
+      });
+    } finally {
+      // 刷新测试用例列表
+      loadSessions();
+      loadTestcases(selectedSession?.id);
+      loadModules(selectedSession?.id);
+    }
+  };
+
   // 删除会话 - 显示确认对话框
   const handleDeleteSession = (id: number) => {
     setSessionToDelete(id);
@@ -123,13 +324,25 @@ const App: React.FC = () => {
     try {
       const response: ApiResponse<Session> | any = await sessionApi.deleteSession(sessionToDelete);
       if (response.code === 200) {
+        notification.success({
+          message: '删除成功',
+          description: response.message || '会话已成功删除',
+          placement: 'topRight'
+        });
         setSessions(sessions.filter(session => session.id !== sessionToDelete));
         if (selectedSession?.id === sessionToDelete) {
           const sessionsId = sessions.length > 0 ? sessions[0] : null;
           setSelectedSession(sessionsId);
           loadTestcases(sessionsId?.id);
         }
+      } else {
+        notification.error({
+          message: '删除失败',
+          description: response.message || '会话删除失败，请重试',
+          placement: 'topRight'
+        });
       }
+
     } catch (error) {
       console.error('删除会话失败:', error);
     } finally {
@@ -148,14 +361,16 @@ const App: React.FC = () => {
   // 选择会话
   const handleSelectSession = (session: Session) => {
     setSelectedSession(session);
-    const NewFilters = {
-      case_name: '',
-      status: '',
-      bug_id: '',
-      exist_bug: false
-    };
-    setFilters(NewFilters);
-    loadTestcases(session.id, filters);
+    // const NewFilters = {
+    //   case_name: '',
+    //   status: undefined,
+    //   bug_id: '',
+    //   exist_bug: false,
+    //   module_id: undefined
+    // };
+    // setFilters({ ...NewFilters });
+    loadTestcases(session.id,);
+    loadModules(session.id);
   };
 
   // 查看测试用例
@@ -225,7 +440,13 @@ const App: React.FC = () => {
         // 显示成功通知
         notification.success({
           message: '更新成功',
-          description: '测试用例已成功更新',
+          description: response.message || '测试用例已成功更新',
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '更新失败',
+          description: response.message || '测试用例更新失败，请重试',
           placement: 'topRight'
         });
       }
@@ -250,20 +471,55 @@ const App: React.FC = () => {
   const [testcaseToComplete, setTestcaseToComplete] = useState<TestCase | null>(null);
 
   // 测试用例筛选条件
-  const [filters, setFilters] = useState({
-    case_name: '',
-    status: '',
-    bug_id: '',
-  });
+  const [filters, setFilters] = useState<TestCaseFilters>();
 
   // 测试用例筛选条件变更处理
-  useEffect(() => {
-    loadTestcases(selectedSession?.id, filters);
-  }, [filters]);
+  // useEffect(() => {
+  //   loadTestcases(selectedSession?.id ?? undefined, { ...filters, module_id: selectedModule === 0 ? undefined : selectedModule });
+  // }, [selectedModule]);
   // 删除测试用例 - 显示确认对话框
   const handleDeleteTestcase = (id: number) => {
     setTestcaseToDelete(id);
     setConfirmDeleteTestcaseVisible(true);
+  };
+
+  // 批量删除测试用例
+  const handleBatchDeleteTestcases = async (ids: number[]) => {
+    if (!selectedSession) return;
+
+    try {
+      // 循环删除每个测试用例
+      // for (const id of ids) {
+      //   await testcaseApi.deleteTestcase(selectedSession.id, id);
+      // }
+
+      const response: ApiResponse | any = await testcaseApi.deleteTestcase(selectedSession.id, ids);
+      if (response.code === 200) {
+        // 更新本地状态
+        // setTestcases(testcases.filter(testcase => !ids.includes(testcase.id)));
+        // 重新加载测试用例
+        loadTestcases(selectedSession.id, filters);
+        // 显示成功通知
+        notification.success({
+          message: '删除成功',
+          description: response.message || `已成功删除 ${ids.length} 个测试用例`,
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '删除失败',
+          description: response.message || `删除 ${ids.length} 个测试用例失败，请重试`,
+          placement: 'topRight'
+        });
+      }
+    } catch (error) {
+      console.error('批量删除测试用例失败:', error);
+      notification.error({
+        message: '删除失败',
+        description: '批量删除测试用例失败，请重试',
+        placement: 'topRight'
+      });
+    }
   };
 
   // 确认删除测试用例
@@ -271,14 +527,20 @@ const App: React.FC = () => {
     if (!testcaseToDelete || !selectedSession) return;
 
     try {
-      const response: any = await testcaseApi.deleteTestcase(selectedSession.id, testcaseToDelete);
+      const response: any = await testcaseApi.deleteTestcase(selectedSession.id, [testcaseToDelete]);
       if (response.code === 200) {
-        setTestcases(testcases.filter(testcase => testcase.id !== testcaseToDelete));
-        loadTestcases(selectedSession.id, filters);
+        // setTestcases(testcases.filter(testcase => testcase.id !== testcaseToDelete));
+        loadTestcases(selectedSession.id, { ...filters, module_id: selectedModule === 0 ? undefined : Number(selectedModule) });
 
         notification.success({
           message: '删除成功',
-          description: '测试用例已成功删除',
+          description: response.message || '测试用例已成功删除',
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '删除失败',
+          description: response.message || '测试用例删除失败，请重试',
           placement: 'topRight'
         });
       }
@@ -339,6 +601,12 @@ const App: React.FC = () => {
         notification.success({
           message: '执行成功',
           description: `测试用例已成功标记为${status === TestCaseStatus.PASSED ? '通过' : status === TestCaseStatus.FAILED ? '未通过' : '未运行'}`,
+          placement: 'topRight'
+        });
+      } else {
+        notification.error({
+          message: '执行失败',
+          description: response.message || '测试用例标记执行失败，请重试',
           placement: 'topRight'
         });
       }
@@ -474,7 +742,8 @@ const App: React.FC = () => {
             selectedSession.id,
             requirement.trim(),
             modelConfig,
-            imageBase64 // 传递图片base64数据
+            imageBase64, // 传递图片base64数据
+            selectedModule === 0 ? undefined : Number(selectedModule) // 传递模块ID
           );
           if (response.code === 200 && response.data) {
             loadTestcases(selectedSession.id);
@@ -551,9 +820,20 @@ const App: React.FC = () => {
             onCreateSession={handleCreateSession}
             onSelectSession={handleSelectSession}
             onDeleteSession={handleDeleteSession}
+            onOpenAddModuleModal={handleOpenAddModuleModal}
+            onOpenEditSessionModal={handleOpenEditSessionModal}
           />
-          <Layout style={{ padding: '16px' }}>
-            <Content style={{ background: '#fff', padding: '24px', margin: 0 }}>
+          <ModuleSidebar
+            modules={modules}
+            selectedModule={selectedModule}
+            onSelectModule={handleSelectModule}
+            onSelectAllModules={handleSelectAllModules}
+            onDeleteModule={handleDeleteModule}
+            onEditModule={handleEditModule}
+            onOpenAddModuleModal={handleOpenAddModuleModal}
+          />
+          <Layout style={{ padding: '4px' }}>
+            <Content style={{ background: '#fff', padding: '10px', margin: 0 }}>
               <Tabs
                 activeKey={activeTab}
                 onChange={setActiveTab}
@@ -564,6 +844,8 @@ const App: React.FC = () => {
                     children: (
                       <TestCaseGenerator
                         selectedSession={selectedSession}
+                        modules={modules}
+                        selectedModule={selectedModule}
                         requirement={requirement}
                         loading={loading}
                         onRequirementChange={setRequirement}
@@ -579,15 +861,27 @@ const App: React.FC = () => {
                     children: (
                       <TestCaseManager
                         testcasesResponse={testcasesResponse}
+                        modules={modules}
                         selectedSession={selectedSession}
+                        selectedModule={selectedModule}
                         testcases={testcases}
-                        filters={filters}
-                        onFiltersChange={setFilters}
+                        filters={filters ?? undefined}
+                        onFiltersChange={(newFilters) => {
+                          // 合并当前选中的模块ID到过滤器中
+                          const mergedFilters = {
+                            ...newFilters,
+                            module_id: selectedModule === 0 ? undefined : Number(selectedModule)
+                          };
+                          setFilters(mergedFilters);
+                          // 重新加载测试用例
+                          loadTestcases(selectedSession?.id ?? undefined, mergedFilters);
+                        }}
                         onLoadTestcases={loadTestcases}
                         onView={handleViewTestcase}
                         onEdit={handleEditTestcase}
                         onComplete={handleCompleteTestcase}
                         onDelete={handleDeleteTestcase}
+                        onBatchDelete={handleBatchDeleteTestcases}
                       />
                     ),
                   },
@@ -643,6 +937,54 @@ const App: React.FC = () => {
         )
       }
 
+
+      <Modal
+        title="新增模块"
+        open={isAddModuleModalVisible}
+        onOk={handleCreateModule}
+        onCancel={() => setIsAddModuleModalVisible(false)}
+        confirmLoading={loading}
+      >
+        <Input
+          placeholder="请输入模块名称"
+          value={newModuleName}
+          onChange={(e) => setNewModuleName(e.target.value)}
+          onPressEnter={handleCreateModule}
+          style={{ marginBottom: '8px' }}
+        />
+      </Modal>
+
+      <Modal
+        title="编辑模块"
+        open={isEditModuleModalVisible}
+        onOk={handleUpdateModule}
+        onCancel={() => setIsEditModuleModalVisible(false)}
+        confirmLoading={loading}
+      >
+        <Input
+          placeholder="请输入模块名称"
+          value={editModuleName}
+          onChange={(e) => setEditModuleName(e.target.value)}
+          onPressEnter={handleUpdateModule}
+          style={{ marginBottom: '8px' }}
+        />
+      </Modal>
+
+      <Modal
+        title="编辑会话"
+        open={isEditSessionModalVisible}
+        onOk={handleEditSession}
+        onCancel={() => setIsEditSessionModalVisible(false)}
+        confirmLoading={loading}
+      >
+        <Input
+          placeholder="请输入会话名称"
+          value={editSessionName}
+          onChange={(e) => setEditSessionName(e.target.value)}
+          onPressEnter={handleEditSession}
+          style={{ marginBottom: '8px' }}
+        />
+      </Modal>
 
       <SettingsModal
         visible={isSettingModalVisible}

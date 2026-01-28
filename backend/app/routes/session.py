@@ -45,7 +45,7 @@ def update_session(session_id: int, update: UpdateSessionRequest, session: Sessi
     """更新会话"""
     session_db = session.get(Session, session_id)
     if not session_db:
-        raise HTTPException(status_code=404, detail='会话不存在！')
+        return Response(code=status.HTTP_404_NOT_FOUND, message='会话不存在！')
     session_data = update.model_dump(exclude_unset=True)
     session_db.sqlmodel_update(session_data)
     session.add(session_db)
@@ -64,10 +64,10 @@ def delete_session(session_id: int, session: SessionDep):
         )
     ).first()
     if session_status:
-        return Response(code=status.HTTP_400_BAD_REQUEST,data="当前会话下存在已执行的测试用例，删除失败！")
+        return Response(code=status.HTTP_400_BAD_REQUEST,message="当前会话下存在已执行的测试用例，删除失败！")
     sess = session.get(Session, session_id)
     if not sess:
-        return Response(code=status.HTTP_404_NOT_FOUND,data="会话不存在！")
+        return Response(code=status.HTTP_404_NOT_FOUND,message="会话不存在！")
     session.delete(sess)
     session.commit()
     return Response(data=session_id)

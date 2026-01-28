@@ -1,22 +1,18 @@
-import base64
 import logging
 import time
 from typing import List, Optional, Literal
 
-from starlette import status
-
-from utils.base_response import Response
 from langchain.agents import create_agent
-from langchain.messages import HumanMessage, SystemMessage
 from langchain.tools import tool
-from langchain_core.exceptions import OutputParserException
 from langchain_deepseek import ChatDeepSeek
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
+from starlette import status
 
 from app.services.ocr_service import OCRService
 from db.models import TestCase as DBTestCase
+from utils.base_response import Response
 
 # 简单的 agent 缓存，key -> agent
 _AGENT_CACHE: dict = {}
@@ -84,30 +80,6 @@ class TestCaseDesignMethod(BaseModel):
     method: str
     description: str | None = None
 
-
-# Define tools
-@tool
-def get_testcase_design_method() -> List[TestCaseDesignMethod]:
-    """获取测试用例设计方法"""
-    methods = [
-        TestCaseDesignMethod(method="等价类划分法",
-                             description="等价类划分法是一种黑盒测试方法，通过将输入数据划分为若干等价类，从每个类中选取具有代表性的数据进行测试。有效等价类包含合理的输入数据，无效等价类则包含不合理的数据。此方法适用于输入数据范围明确的场景，例如输入框的长度限制。"),
-        TestCaseDesignMethod(method="边界值分析法",
-                             description="边界值分析法专注于测试输入或输出的边界点，因为大量错误往往发生在边界附近。此方法通常与等价类划分法结合使用，测试边界上的点、边界内的点以及边界外的点。例如，测试密码长度为6-18位时，边界值包括6、18以及5、19。"),
-        TestCaseDesignMethod(method="判定表法",
-                             description="判定表法适用于输入条件和输出结果存在多种组合的场景。通过列出所有可能的条件组合及其对应的结果，生成判定表并转化为测试用例。例如，订单优惠条件的判定可以通过此方法明确各种输入组合下的输出结果。"),
-        TestCaseDesignMethod(method="因果图法",
-                             description="因果图法通过图形化的方式分析复杂的输入和输出条件组合，适用于条件间存在逻辑关系的场景。此方法通常与判定表法结合使用，以提高分析的直观性。"),
-        TestCaseDesignMethod(method="场景法 ",
-                             description="场景法以用户操作流程为导向，模拟实际使用场景，适用于系统测试或验收测试阶段。通过分析基本流和备选流，设计覆盖用户正常操作和异常操作的测试用例。例如，模拟ATM取款的各种可能场景。"),
-        TestCaseDesignMethod(method="错误推测法",
-                             description="错误推测法基于测试人员的经验和直觉，推测可能存在的错误并设计针对性的测试用例。此方法适用于补充其他方法未覆盖的测试场景，例如特殊字符处理或异常数据输入。"),
-        TestCaseDesignMethod(method="流程图法",
-                             description="流程图法通过绘制流程图展示用户操作路径，并基于流程路径设计测试用例。此方法适用于复杂业务流程的测试，例如ATM取款功能的业务流程图。"),
-    ]
-    return methods
-
-
 # 初始化模型
 def create_local_model(
         ollama_url: str = None,
@@ -141,7 +113,7 @@ def create_testcase_agent(
         model = ChatDeepSeek(
             model="deepseek-chat",
             temperature=0,
-            api_key=api_key,
+            api_key=SecretStr(api_key),
             max_tokens=None,
             timeout=None,
             max_retries=2,
@@ -150,7 +122,6 @@ def create_testcase_agent(
         agent = create_agent(
             model=model,
             system_prompt=SYSTEM_PROMPT,
-            tools=[],
             response_format=ResponseFormat,
             checkpointer=checkpointer
         )
@@ -160,6 +131,7 @@ def create_testcase_agent(
 # 生成测试用例
 def generate_testcases(
         session_id: int,
+        module_id: int,
         requirement: Optional[str],
         image_data: str = None,
         is_base64: bool = True,
@@ -198,7 +170,7 @@ def generate_testcases(
             logger.info(f"调用agent: requirement={requirement}")
             if requirement is None:
                 return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            data="模型需求入参不能为空")
+                                data="模型需求入参不能为空")
             # 修复：直接传入HumanMessage对象，而不是列表
             response = agent.invoke(
                 {"messages": [{"role": "user", "content": requirement}]},
@@ -227,11 +199,11 @@ def generate_testcases(
     logger.info(f"模型调用完成: type={model_type} duration={duration:.2f}s")
     logger.info(f"模型返回结果类型: {type(response).__name__}")
     logger.info(f"模型返回结果: {response}")
-    
+
     # 获取生成的测试用例
     try:
         local_testcases = None
-        
+
         # 增加更多的响应格式处理逻辑
         if isinstance(response, dict):
             if 'structured_response' in response:
@@ -251,11 +223,11 @@ def generate_testcases(
             # 这种情况通常不会发生，但为了容错，我们也处理一下
             logger.warning(f"模型返回了非预期的响应格式: {type(response).__name__}")
             raise ValueError(f"不支持的响应格式: {type(response).__name__}")
-        
+
         # 验证local_testcases是否为列表
         if not isinstance(local_testcases, list):
             raise ValueError(f"测试用例必须是列表类型，实际类型: {type(local_testcases).__name__}")
-        
+
         # 转换为DBTestCase对象
         db_testcases = []
         for tc in local_testcases:
@@ -266,6 +238,7 @@ def generate_testcases(
                 preset_conditions=tc.preset_conditions,
                 steps=tc.steps,
                 session_id=session_id,
+                module_id=module_id,
                 expected_results=tc.expected_results
             )
             db_testcases.append(db_tc)
