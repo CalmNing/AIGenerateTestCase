@@ -92,3 +92,18 @@ class Module(BaseModel, table=True):
 
     # 添加与会话的一对多关系
     session: Optional[Session] = Relationship(back_populates="modules")
+
+
+class SavedRequest(BaseModel, table=True):
+    """保存的请求配置数据模型"""
+    name: str = Field(default="")
+    method: str = Field(default="GET")
+    url: str = Field(default="")
+    headers: List[dict] = Field(default_factory=list, sa_type=JSON)
+    parameters: List[dict] = Field(default_factory=list, sa_type=JSON)
+    body: Optional[str] = Field(default=None)
+    user_id: Optional[int] = Field(default=None)  # 可以根据需要添加用户关联
+
+    # 定义与会话的多对一关系（可选）
+    # session_id: Optional[int] = Field(default=None, foreign_key="session.id")
+    # session: Optional[Session] = Relationship(back_populates="saved_requests")

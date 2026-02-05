@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, notification, Form, Tabs, Modal, Input } from 'antd';
+import { Layout, notification, Form, Tabs, Modal, Input, Button } from 'antd';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi } from './services/api';
+import HomePage from './components/HomePage';
+import IoTMockPlatform from './components/IoTMockPlatform';
 import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/TestCaseGenerator';
@@ -19,6 +21,13 @@ import ModuleSidebar from './components/ModuleSidebar';
 const { Content } = Layout;
 
 const App: React.FC = () => {
+
+  // 导航状态管理
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock'>(() => {
+    // 从localStorage加载上次的平台状态
+    const savedPlatform = localStorage.getItem('currentPlatform');
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock') || 'home';
+  });
 
   // 状态管理
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -805,197 +814,225 @@ const App: React.FC = () => {
     setNextButtonDisabled(false);
   };
 
+  // 导航函数
+  const navigateToHome = () => {
+    setCurrentPlatform('home');
+    localStorage.setItem('currentPlatform', 'home');
+  };
+
+  const navigateToAITestcase = () => {
+    setCurrentPlatform('ai-testcase');
+    localStorage.setItem('currentPlatform', 'ai-testcase');
+  };
+
+  const navigateToIoTMock = () => {
+    setCurrentPlatform('iot-mock');
+    localStorage.setItem('currentPlatform', 'iot-mock');
+  };
+
 
   return (
     <ConfigProvider locale={zhCN}>
-      <Layout style={{ minHeight: '100vh' }}>
-        <HeaderComponent onSettingsOpen={handleOpenSettingModal} settingButtonStatus={settingButtonStatus} />
-        <Layout>
-          <SessionSidebar
-            testcases={testcases}
-            sessions={sessions}
-            selectedSession={selectedSession}
-            newSessionName={newSessionName}
-            onNewSessionNameChange={setNewSessionName}
-            onCreateSession={handleCreateSession}
-            onSelectSession={handleSelectSession}
-            onDeleteSession={handleDeleteSession}
-            onOpenAddModuleModal={handleOpenAddModuleModal}
-            onOpenEditSessionModal={handleOpenEditSessionModal}
+      {currentPlatform === 'home' ? (
+        <HomePage 
+          onNavigateToAI={navigateToAITestcase} 
+          onNavigateToIoT={navigateToIoTMock} 
+        />
+      ) : currentPlatform === 'iot-mock' ? (
+        <div>
+          <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h1 style={{ margin: 0 }}>IoT Mock 平台</h1>
+            <Button onClick={navigateToHome}>返回首页</Button>
+          </div>
+          <IoTMockPlatform />
+        </div>
+      ) : (
+        <Layout style={{ minHeight: '100vh' }}>
+          <HeaderComponent 
+            onSettingsOpen={handleOpenSettingModal} 
+            settingButtonStatus={settingButtonStatus} 
+            onBackToHome={navigateToHome}
           />
-          <ModuleSidebar
-            modules={modules}
-            selectedModule={selectedModule}
-            onSelectModule={handleSelectModule}
-            onSelectAllModules={handleSelectAllModules}
-            onDeleteModule={handleDeleteModule}
-            onEditModule={handleEditModule}
-            onOpenAddModuleModal={handleOpenAddModuleModal}
-          />
-          <Layout style={{ padding: '4px' }}>
-            <Content style={{ background: '#fff', padding: '10px', margin: 0 }}>
-              <Tabs
-                activeKey={activeTab}
-                onChange={setActiveTab}
-                items={[
-                  {
-                    key: 'generate',
-                    label: '生成测试用例',
-                    children: (
-                      <TestCaseGenerator
-                        selectedSession={selectedSession}
-                        modules={modules}
-                        selectedModule={selectedModule}
-                        requirement={requirement}
-                        loading={loading}
-                        onRequirementChange={setRequirement}
-                        onGenerate={handleGenerateTestcases}
-                        imageBase64={imageBase64}
-                        onImageChange={setImageBase64}
-                      />
-                    ),
-                  },
-                  {
-                    key: 'manage',
-                    label: '管理测试用例',
-                    children: (
-                      <TestCaseManager
-                        testcasesResponse={testcasesResponse}
-                        modules={modules}
-                        selectedSession={selectedSession}
-                        selectedModule={selectedModule}
-                        testcases={testcases}
-                        filters={filters ?? undefined}
-                        onFiltersChange={(newFilters) => {
-                          // 合并当前选中的模块ID到过滤器中
-                          const mergedFilters = {
-                            ...newFilters,
-                            module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                          };
-                          setFilters(mergedFilters);
-                          // 重新加载测试用例
-                          loadTestcases(selectedSession?.id ?? undefined, mergedFilters);
-                        }}
-                        onLoadTestcases={loadTestcases}
-                        onView={handleViewTestcase}
-                        onEdit={handleEditTestcase}
-                        onComplete={handleCompleteTestcase}
-                        onDelete={handleDeleteTestcase}
-                        onBatchDelete={handleBatchDeleteTestcases}
-                      />
-                    ),
-                  },
-                ]}
-              />
-            </Content>
+          <Layout>
+            <SessionSidebar
+              testcases={testcases}
+              sessions={sessions}
+              selectedSession={selectedSession}
+              newSessionName={newSessionName}
+              onNewSessionNameChange={setNewSessionName}
+              onCreateSession={handleCreateSession}
+              onSelectSession={handleSelectSession}
+              onDeleteSession={handleDeleteSession}
+              onOpenAddModuleModal={handleOpenAddModuleModal}
+              onOpenEditSessionModal={handleOpenEditSessionModal}
+            />
+            <ModuleSidebar
+              modules={modules}
+              selectedModule={selectedModule}
+              onSelectModule={handleSelectModule}
+              onSelectAllModules={handleSelectAllModules}
+              onDeleteModule={handleDeleteModule}
+              onEditModule={handleEditModule}
+              onOpenAddModuleModal={handleOpenAddModuleModal}
+            />
+            <Layout style={{ padding: '4px' }}>
+              <Content style={{ background: '#fff', padding: '10px', margin: 0 }}>
+                <Tabs
+                  activeKey={activeTab}
+                  onChange={setActiveTab}
+                  items={[
+                    {
+                      key: 'generate',
+                      label: '生成测试用例',
+                      children: (
+                        <TestCaseGenerator
+                          selectedSession={selectedSession}
+                          modules={modules}
+                          selectedModule={selectedModule}
+                          requirement={requirement}
+                          loading={loading}
+                          onRequirementChange={setRequirement}
+                          onGenerate={handleGenerateTestcases}
+                          imageBase64={imageBase64}
+                          onImageChange={setImageBase64}
+                        />
+                      ),
+                    },
+                    {
+                      key: 'manage',
+                      label: '管理测试用例',
+                      children: (
+                        <TestCaseManager
+                          testcasesResponse={testcasesResponse}
+                          modules={modules}
+                          selectedSession={selectedSession}
+                          selectedModule={selectedModule}
+                          testcases={testcases}
+                          filters={filters ?? undefined}
+                          onFiltersChange={(newFilters) => {
+                            // 合并当前选中的模块ID到过滤器中
+                            const mergedFilters = {
+                              ...newFilters,
+                              module_id: selectedModule === 0 ? undefined : Number(selectedModule)
+                            };
+                            setFilters(mergedFilters);
+                            // 重新加载测试用例
+                            loadTestcases(selectedSession?.id ?? undefined, mergedFilters);
+                          }}
+                          onLoadTestcases={loadTestcases}
+                          onView={handleViewTestcase}
+                          onEdit={handleEditTestcase}
+                          onComplete={handleCompleteTestcase}
+                          onDelete={handleDeleteTestcase}
+                          onBatchDelete={handleBatchDeleteTestcases}
+                        />
+                      ),
+                    },
+                  ]}
+                />
+              </Content>
+            </Layout>
           </Layout>
-        </Layout>
-      </Layout>
 
-      <DeleteSessionModal
-        visible={confirmDeleteVisible}
-        onOk={handleConfirmDeleteSession}
-        onCancel={handleCancelDeleteSession}
-      />
-
-      <DeleteTestcaseModal
-        visible={confirmDeleteTestcaseVisible}
-        onOk={handleConfirmDeleteTestcase}
-        onCancel={handleCancelDeleteTestcase}
-      />
-      {/* <CompleteTestcaseModal
-        visible={confirmCompleteTestcaseVisible}
-        onOk={handleConfirmCompleteTestcase}
-        onCancel={handleCancelCompleteTestcase}
-      /> */}
-      <ViewTestcaseModal
-        visible={isViewModalVisible}
-        selectedTestcase={selectedTestcase}
-        nextButtonDisabled={nextButtonDisabled}
-        prevButtonDisabled={prevButtonDisabled}
-        onNext={handleNextCase}
-        onPrev={handlePrevCase}
-        onCancel={() => setIsViewModalVisible(false)}
-        onComplete={handleCompleteTestcase}
-      />
-      <CompleteTestcaseModal
-        visible={confirmCompleteTestcaseVisible}
-        onOk={handleConfirmCompleteTestcase}
-        onCancel={handleCancelCompleteTestcase}
-      />
-
-      {
-        isEditModalVisible && (
-          <EditTestcaseModal
-            visible={isEditModalVisible}
-            selectedTestcase={selectedTestcase}
-            form={form}
-            loading={loading}
-            onCancel={() => setIsEditModalVisible(false)}
-            onFinish={handleEditSubmit}
+          <DeleteSessionModal
+            visible={confirmDeleteVisible}
+            onOk={handleConfirmDeleteSession}
+            onCancel={handleCancelDeleteSession}
           />
-        )
-      }
 
+          <DeleteTestcaseModal
+            visible={confirmDeleteTestcaseVisible}
+            onOk={handleConfirmDeleteTestcase}
+            onCancel={handleCancelDeleteTestcase}
+          />
+          <ViewTestcaseModal
+            visible={isViewModalVisible}
+            selectedTestcase={selectedTestcase}
+            nextButtonDisabled={nextButtonDisabled}
+            prevButtonDisabled={prevButtonDisabled}
+            onNext={handleNextCase}
+            onPrev={handlePrevCase}
+            onCancel={() => setIsViewModalVisible(false)}
+            onComplete={handleCompleteTestcase}
+          />
+          <CompleteTestcaseModal
+            visible={confirmCompleteTestcaseVisible}
+            onOk={handleConfirmCompleteTestcase}
+            onCancel={handleCancelCompleteTestcase}
+          />
 
-      <Modal
-        title="新增模块"
-        open={isAddModuleModalVisible}
-        onOk={handleCreateModule}
-        onCancel={() => setIsAddModuleModalVisible(false)}
-        confirmLoading={loading}
-      >
-        <Input
-          placeholder="请输入模块名称"
-          value={newModuleName}
-          onChange={(e) => setNewModuleName(e.target.value)}
-          onPressEnter={handleCreateModule}
-          style={{ marginBottom: '8px' }}
-        />
-      </Modal>
+          {
+            isEditModalVisible && (
+              <EditTestcaseModal
+                visible={isEditModalVisible}
+                selectedTestcase={selectedTestcase}
+                form={form}
+                loading={loading}
+                onCancel={() => setIsEditModalVisible(false)}
+                onFinish={handleEditSubmit}
+              />
+            )
+          }
 
-      <Modal
-        title="编辑模块"
-        open={isEditModuleModalVisible}
-        onOk={handleUpdateModule}
-        onCancel={() => setIsEditModuleModalVisible(false)}
-        confirmLoading={loading}
-      >
-        <Input
-          placeholder="请输入模块名称"
-          value={editModuleName}
-          onChange={(e) => setEditModuleName(e.target.value)}
-          onPressEnter={handleUpdateModule}
-          style={{ marginBottom: '8px' }}
-        />
-      </Modal>
+          <Modal
+            title="新增模块"
+            open={isAddModuleModalVisible}
+            onOk={handleCreateModule}
+            onCancel={() => setIsAddModuleModalVisible(false)}
+            confirmLoading={loading}
+          >
+            <Input
+              placeholder="请输入模块名称"
+              value={newModuleName}
+              onChange={(e) => setNewModuleName(e.target.value)}
+              onPressEnter={handleCreateModule}
+              style={{ marginBottom: '8px' }}
+            />
+          </Modal>
 
-      <Modal
-        title="编辑会话"
-        open={isEditSessionModalVisible}
-        onOk={handleEditSession}
-        onCancel={() => setIsEditSessionModalVisible(false)}
-        confirmLoading={loading}
-      >
-        <Input
-          placeholder="请输入会话名称"
-          value={editSessionName}
-          onChange={(e) => setEditSessionName(e.target.value)}
-          onPressEnter={handleEditSession}
-          style={{ marginBottom: '8px' }}
-        />
-      </Modal>
+          <Modal
+            title="编辑模块"
+            open={isEditModuleModalVisible}
+            onOk={handleUpdateModule}
+            onCancel={() => setIsEditModuleModalVisible(false)}
+            confirmLoading={loading}
+          >
+            <Input
+              placeholder="请输入模块名称"
+              value={editModuleName}
+              onChange={(e) => setEditModuleName(e.target.value)}
+              onPressEnter={handleUpdateModule}
+              style={{ marginBottom: '8px' }}
+            />
+          </Modal>
 
-      <SettingsModal
-        visible={isSettingModalVisible}
-        settingForm={settingForm}
-        settingType={settingType}
-        loading={loading}
-        onCancel={() => setIsSettingModalVisible(false)}
-        onFinish={handleSaveSetting}
-        onSettingTypeChange={handleSettingTypeChange}
-      />
+          <Modal
+            title="编辑会话"
+            open={isEditSessionModalVisible}
+            onOk={handleEditSession}
+            onCancel={() => setIsEditSessionModalVisible(false)}
+            confirmLoading={loading}
+          >
+            <Input
+              placeholder="请输入会话名称"
+              value={editSessionName}
+              onChange={(e) => setEditSessionName(e.target.value)}
+              onPressEnter={handleEditSession}
+              style={{ marginBottom: '8px' }}
+            />
+          </Modal>
 
+          <SettingsModal
+            visible={isSettingModalVisible}
+            settingForm={settingForm}
+            settingType={settingType}
+            loading={loading}
+            onCancel={() => setIsSettingModalVisible(false)}
+            onFinish={handleSaveSetting}
+            onSettingTypeChange={handleSettingTypeChange}
+          />
+        </Layout>
+      )}
     </ConfigProvider>
   );
 };
