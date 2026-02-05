@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Select, Input, Button, Tabs, Space, Table, message, InputNumber, Divider, Modal } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import { Card, Form, Select, Input, Button, Tabs, Space, Table, message, Modal } from 'antd';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons';
+import axios, { AxiosRequestConfig } from 'axios';
 
 interface HeaderItem {
   key: string;
