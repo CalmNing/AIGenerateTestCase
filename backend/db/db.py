@@ -1,6 +1,6 @@
 import logging
 
-from sqlmodel import create_engine, SQLModel
+from sqlmodel import create_engine, SQLModel, Session as SQLSession
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -19,11 +19,19 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 
 # 导入所有模型
-from db.models import Session, TestCase, SavedRequest
+from db.models import Session, TestCase, SavedRequest, GlobalParameter
 
 # 创建所有表
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+
+# 获取数据库会话
+def get_db():
+    db = SQLSession(engine)
+    try:
+        yield db
+    finally:
+        db.close()
 
 # 应用启动时调用此函数
 create_db_and_tables()

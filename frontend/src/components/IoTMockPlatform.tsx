@@ -13,6 +13,12 @@ interface ParameterItem {
   value: string;
 }
 
+interface Environment {
+  id: string;
+  name: string;
+  parameters: ParameterItem[];
+}
+
 interface SavedRequest {
   id: number;
   name: string;
@@ -49,10 +55,18 @@ const IoTMockPlatform: React.FC = () => {
   const [saveRequestName, setSaveRequestName] = useState('');
   const [editingRequest, setEditingRequest] = useState<SavedRequest | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]); // 标签页列表
+  const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]); // 环境列表
+  const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>('env-1'); // 当前选中的环境
+  const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false); // 全局参数模态框
 
   // 从后端API获取保存的请求配置
   useEffect(() => {
     fetchSavedRequests();
+  }, []);
+
+  // 从后端API获取全局参数配置
+  useEffect(() => {
+    fetchGlobalParameters();
   }, []);
 
   // 初始化默认标签页
@@ -70,6 +84,126 @@ const IoTMockPlatform: React.FC = () => {
     setTabs([defaultTab]);
     setActiveTabId(defaultTab.id);
   }, []);
+
+  // 获取当前环境
+  const getCurrentEnvironment = (): Environment => {
+    return environments.find(env => env.id === currentEnvironmentId) || environments[0];
+  };
+
+  // 处理环境参数变更
+  const handleEnvironmentParameterChange = async (index: number, field: 'key' | 'value', value: string) => {
+    const newEnvironments = [...environments];
+    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
+    if (envIndex !== -1) {
+      const newParameters = [...newEnvironments[envIndex].parameters];
+      newParameters[index] = { ...newParameters[index], [field]: value };
+      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
+      setEnvironments(newEnvironments);
+
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+    }
+  };
+
+  // 添加环境参数
+  const handleAddEnvironmentParameter = async () => {
+    const newEnvironments = [...environments];
+    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
+    if (envIndex !== -1) {
+      const newParameters = [...newEnvironments[envIndex].parameters, { key: '', value: '' }];
+      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
+      setEnvironments(newEnvironments);
+
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+    }
+  };
+
+  // 删除环境参数
+  const handleRemoveEnvironmentParameter = async (index: number) => {
+    const newEnvironments = [...environments];
+    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
+    if (envIndex !== -1) {
+      const newParameters = newEnvironments[envIndex].parameters.filter((_, i) => i !== index);
+      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
+      setEnvironments(newEnvironments);
+
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+    }
+  };
+
+  // 新环境名称状态
+  const [newEnvironmentName, setNewEnvironmentName] = useState('');
+  const [isAddEnvModalVisible, setIsAddEnvModalVisible] = useState(false);
+
+  // 打开添加环境模态框
+  const handleAddEnvironment = () => {
+    setNewEnvironmentName('');
+    setIsAddEnvModalVisible(true);
+  };
+
+  // 确认添加环境
+  const handleConfirmAddEnvironment = async () => {
+    if (!newEnvironmentName || newEnvironmentName.trim() === '') {
+      message.error('环境名称不能为空');
+      return;
+    }
+
+    const newEnv: Environment = {
+      id: `env-${Date.now()}`,
+      name: newEnvironmentName.trim(),
+      parameters: []
+    };
+
+    // 保存到后端
+    const savedEnv = await saveEnvironmentToBackend(newEnv);
+    if (savedEnv) {
+      // 使用后端返回的ID
+      const updatedEnv = {
+        ...newEnv,
+        id: savedEnv.id.toString()
+      };
+      setEnvironments([...environments, updatedEnv]);
+      setCurrentEnvironmentId(updatedEnv.id);
+      setIsAddEnvModalVisible(false);
+    }
+  };
+
+  // 删除环境
+  const handleRemoveEnvironment = async (envId: string) => {
+    if (environments.length <= 1) {
+      message.warning('至少需要保留一个环境');
+      return;
+    }
+
+    // 从后端删除
+    const deleted = await deleteEnvironmentFromBackend(envId);
+    if (deleted) {
+      const newEnvironments = environments.filter(env => env.id !== envId);
+      setEnvironments(newEnvironments);
+
+      // 如果删除的是当前环境，切换到第一个环境
+      if (currentEnvironmentId === envId) {
+        setCurrentEnvironmentId(newEnvironments[0].id);
+      }
+    }
+  };
+
+  // 切换环境
+  const handleSwitchEnvironment = async (envId: string) => {
+    setCurrentEnvironmentId(envId);
+
+    // 更新默认环境设置
+    const currentEnv = environments.find(env => env.id === envId);
+    if (currentEnv) {
+      const updatedEnv = {
+        ...currentEnv,
+        is_default: true
+      };
+      await saveEnvironmentToBackend(updatedEnv);
+    }
+  };
 
   // 当活跃标签页变化时，更新表单数据
   useEffect(() => {
@@ -98,12 +232,79 @@ const IoTMockPlatform: React.FC = () => {
     }
   };
 
+  // 从后端API获取全局参数配置
+  const fetchGlobalParameters = async () => {
+    try {
+      const response = await axios.get('/api/global-parameters');
+      if (response.data.code === 200 && response.data.data) {
+        const backendEnvironments = response.data.data.map((env: any) => ({
+          id: env.id.toString(),
+          name: env.name,
+          parameters: env.parameters || []
+        }));
+        if (backendEnvironments.length > 0) {
+          setEnvironments(backendEnvironments);
+          // 找到默认环境或第一个环境
+          const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
+          setCurrentEnvironmentId(defaultEnv.id);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch global parameters:', error);
+      // 如果获取失败，使用默认环境
+      console.log('Using default environment');
+    }
+  };
+
+  // 保存环境配置到后端
+  const saveEnvironmentToBackend = async (environment: any) => {
+    try {
+      // 检查环境是否已存在（通过id判断）
+      if (parseInt(environment.id)) {
+        // 更新现有环境
+        const response = await axios.put(`/api/global-parameters/${parseInt(environment.id)}`, {
+          name: environment.name,
+          parameters: environment.parameters,
+          is_default: environment.is_default || false
+        });
+        return response.data.data;
+      } else {
+        // 创建新环境
+        const response = await axios.post('/api/global-parameters', {
+          name: environment.name,
+          parameters: environment.parameters,
+          is_default: environment.is_default || false
+        });
+        return response.data.data;
+      }
+    } catch (error) {
+      console.error('Failed to save environment:', error);
+      message.error('保存环境配置失败');
+      return null;
+    }
+  };
+
+  // 删除环境配置
+  const deleteEnvironmentFromBackend = async (environmentId: string) => {
+    try {
+      if (parseInt(environmentId)) {
+        await axios.delete(`/api/global-parameters/${parseInt(environmentId)}`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to delete environment:', error);
+      message.error('删除环境配置失败');
+      return false;
+    }
+  };
+
   const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
 
   const handleRemoveHeader = (index: number) => {
     const newHeaders = headers.filter((_, i) => i !== index);
     setHeaders(newHeaders);
-    
+
     // 更新当前标签页的请求头
     updateCurrentTab({
       headers: newHeaders
@@ -114,7 +315,7 @@ const IoTMockPlatform: React.FC = () => {
     const newHeaders = [...headers];
     newHeaders[index] = { ...newHeaders[index], [field]: value };
     setHeaders(newHeaders);
-    
+
     // 更新当前标签页的请求头
     updateCurrentTab({
       headers: newHeaders
@@ -124,7 +325,7 @@ const IoTMockPlatform: React.FC = () => {
   const handleAddHeader = () => {
     const newHeaders = [...headers, { key: '', value: '' }];
     setHeaders(newHeaders);
-    
+
     // 更新当前标签页的请求头
     updateCurrentTab({
       headers: newHeaders
@@ -134,7 +335,7 @@ const IoTMockPlatform: React.FC = () => {
   const handleAddParameter = () => {
     const newParameters = [...parameters, { key: '', value: '' }];
     setParameters(newParameters);
-    
+
     // 更新当前标签页的参数
     updateCurrentTab({
       parameters: newParameters
@@ -144,7 +345,7 @@ const IoTMockPlatform: React.FC = () => {
   const handleRemoveParameter = (index: number) => {
     const newParameters = parameters.filter((_, i) => i !== index);
     setParameters(newParameters);
-    
+
     // 更新当前标签页的参数
     updateCurrentTab({
       parameters: newParameters
@@ -155,7 +356,7 @@ const IoTMockPlatform: React.FC = () => {
     const newParameters = [...parameters];
     newParameters[index] = { ...newParameters[index], [field]: value };
     setParameters(newParameters);
-    
+
     // 更新当前标签页的参数
     updateCurrentTab({
       parameters: newParameters
@@ -164,7 +365,7 @@ const IoTMockPlatform: React.FC = () => {
 
   // 更新当前标签页的内容
   const updateCurrentTab = (updates: Partial<Tab>) => {
-    setTabs(prevTabs => prevTabs.map(tab => 
+    setTabs(prevTabs => prevTabs.map(tab =>
       tab.id === activeTabId ? { ...tab, ...updates, hasUnsavedChanges: true } : tab
     ));
   };
@@ -181,7 +382,7 @@ const IoTMockPlatform: React.FC = () => {
       body: '',
       hasUnsavedChanges: false
     };
-    
+
     setTabs(prevTabs => [...prevTabs, newTab]);
     setActiveTabId(newTab.id);
     setEditingRequest(null); // 新标签页不是编辑模式
@@ -193,7 +394,7 @@ const IoTMockPlatform: React.FC = () => {
       message.warning('至少需要保留一个标签页');
       return;
     }
-    
+
     // 检查是否有未保存的更改
     const tabToClose = tabs.find(tab => tab.id === tabId);
     if (tabToClose?.hasUnsavedChanges) {
@@ -207,7 +408,7 @@ const IoTMockPlatform: React.FC = () => {
         onOk: () => {
           const newTabs = tabs.filter(tab => tab.id !== tabId);
           setTabs(newTabs);
-          
+
           // 如果关闭的是当前活跃标签页，切换到第一个标签页
           if (tabId === activeTabId) {
             setActiveTabId(newTabs[0].id);
@@ -217,7 +418,7 @@ const IoTMockPlatform: React.FC = () => {
     } else {
       const newTabs = tabs.filter(tab => tab.id !== tabId);
       setTabs(newTabs);
-      
+
       // 如果关闭的是当前活跃标签页，切换到第一个标签页
       if (tabId === activeTabId) {
         setActiveTabId(newTabs[0].id);
@@ -238,7 +439,7 @@ const IoTMockPlatform: React.FC = () => {
       savedRequestId: request.id,
       hasUnsavedChanges: false
     };
-    
+
     setTabs(prevTabs => [...prevTabs, newTab]);
     setActiveTabId(newTab.id);
     setEditingRequest(request); // 设置为编辑模式
@@ -255,6 +456,16 @@ const IoTMockPlatform: React.FC = () => {
 
       // Create parameter map for substitution
       const paramMap = new Map<string, string>();
+
+      // Add current environment parameters first
+      const currentEnv = getCurrentEnvironment();
+      currentEnv.parameters.forEach(p => {
+        if (p.key && p.value) {
+          paramMap.set(p.key, p.value);
+        }
+      });
+
+      // Add local parameters (override global if same key)
       parameters.forEach(p => {
         if (p.key && p.value) {
           paramMap.set(p.key, p.value);
@@ -264,17 +475,17 @@ const IoTMockPlatform: React.FC = () => {
       // Function to substitute variables in string
       const substituteVariables = (str: string): string => {
         if (!str) return str;
-        
+
         // Replace {{variable}} syntax
         let result = str.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
           return paramMap.get(key.trim()) || match;
         });
-        
+
         // Replace ${variable} syntax
         result = result.replace(/\$\{([^}]+)\}/g, (match, key) => {
           return paramMap.get(key.trim()) || match;
         });
-        
+
         return result;
       };
 
@@ -314,13 +525,13 @@ const IoTMockPlatform: React.FC = () => {
         data: config.data,
         params: config.params
       });
-      
+
       // 更新当前标签页的内容
       updateCurrentTab({
         method,
         url
       });
-      
+
       const endTime = Date.now();
       const timeTaken = endTime - startTime;
 
@@ -372,12 +583,12 @@ const IoTMockPlatform: React.FC = () => {
   // 打开保存请求配置模态框
   const handleOpenSaveModal = () => {
     setIsSaveModalVisible(true);
-    
+
     // 如果当前标签页已经关联了保存的请求，设置为编辑模式
     const activeTab = tabs.find(tab => tab.id === activeTabId);
     if (activeTab) {
       setSaveRequestName(activeTab.name);
-      
+
       // 查找对应的保存请求
       if (activeTab.savedRequestId) {
         const savedRequest = savedRequests.find(req => req.id === activeTab.savedRequestId);
@@ -395,7 +606,7 @@ const IoTMockPlatform: React.FC = () => {
     try {
       const values = await form.validateFields();
       const { method, url, body } = values;
-      
+
       if (!saveRequestName.trim()) {
         message.error('请输入请求配置名称');
         return;
@@ -413,24 +624,24 @@ const IoTMockPlatform: React.FC = () => {
           parameters,
           body
         };
-        
+
         const response = await axios.put(`/api/saved-requests/${editingRequest.id}`, updatedRequest);
         if (response.data.code === 200 && response.data.data) {
           // 更新本地状态
-          const updatedRequests = savedRequests.map(req => 
+          const updatedRequests = savedRequests.map(req =>
             req.id === editingRequest.id ? response.data.data : req
           );
           setSavedRequests(updatedRequests);
-          
+
           // 更新当前标签页的名称和关联的保存请求ID
-          setTabs(prevTabs => prevTabs.map(tab => 
-            tab.id === activeTabId ? { 
-              ...tab, 
+          setTabs(prevTabs => prevTabs.map(tab =>
+            tab.id === activeTabId ? {
+              ...tab,
               name: saveRequestName.trim(),
               method,
               url,
               savedRequestId: response.data.data.id,
-              hasUnsavedChanges: false 
+              hasUnsavedChanges: false
             } : tab
           ));
           message.success('请求配置已更新');
@@ -445,24 +656,24 @@ const IoTMockPlatform: React.FC = () => {
           parameters,
           body
         };
-        
+
         const response = await axios.post('/api/saved-requests', newRequest);
         if (response.data.code === 200 && response.data.data) {
           setSavedRequests([response.data.data, ...savedRequests]);
           message.success('请求配置已保存');
-          
+
           // 更新当前标签页的名称和关联的保存请求ID
-          setTabs(prevTabs => prevTabs.map(tab => 
-            tab.id === activeTabId ? { 
-              ...tab, 
+          setTabs(prevTabs => prevTabs.map(tab =>
+            tab.id === activeTabId ? {
+              ...tab,
               name: saveRequestName.trim(),
               method,
               url,
               savedRequestId: response.data.data.id,
-              hasUnsavedChanges: false 
+              hasUnsavedChanges: false
             } : tab
           ));
-          
+
           // 设置为编辑模式，下次保存时更新
           setEditingRequest(response.data.data);
         }
@@ -515,20 +726,20 @@ const IoTMockPlatform: React.FC = () => {
       dataIndex: 'name',
       key: 'name',
       ellipsis: true,
-      width: 120,
+      width: 200,
     },
-    {
-      title: '方法',
-      dataIndex: 'method',
-      key: 'method',
-      width: 60,
-    },
-    {
-      title: 'URL',
-      dataIndex: 'url',
-      key: 'url',
-      ellipsis: true,
-    },
+    // {
+    //   title: '方法',
+    //   dataIndex: 'method',
+    //   key: 'method',
+    //   width: 60,
+    // },
+    // {
+    //   title: 'URL',
+    //   dataIndex: 'url',
+    //   key: 'url',
+    //   ellipsis: true,
+    // },
     {
       title: '操作',
       key: 'action',
@@ -547,42 +758,52 @@ const IoTMockPlatform: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '20px', minHeight: '80vh', background: '#f0f2f5' }}>
-      <Card 
+    <div style={{ padding: '10px', minHeight: '70vh', maxHeight: '100vh', background: '#f0f2f5' }}>
+      <Card
         title={
           <Space style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>IoT Mock 平台</span>
-            <Button 
-              type="default" 
-              icon={<PlusOutlined />} 
-              onClick={addNewTab}
-              size="middle"
-            >
-              新增请求
-            </Button>
+            <span></span>
+            <Space>
+              <Button
+                type="default"
+                icon={<SyncOutlined />}
+                onClick={() => setIsGlobalParamsModalVisible(true)}
+                size="middle"
+              >
+                全局参数
+              </Button>
+              <Button
+                type="default"
+                icon={<PlusOutlined />}
+                onClick={addNewTab}
+                size="middle"
+              >
+                新增请求
+              </Button>
+            </Space>
           </Space>
-        } 
-        style={{ 
+        }
+        style={{
           marginBottom: '20px',
           boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
           borderRadius: '8px'
         }}
       >
-        <div style={{ display: 'flex', gap: '20px' }}>
-          {/* 左侧：发送请求 */}
-          <div style={{ flex: 1, minWidth: 300 }}>
-            <Tabs 
-              activeKey={activeTabId} 
+        <div style={{ display: 'flex', gap: '20px', height: '76vh', overflow: 'auto' }}>
+          {/* 左侧：请求配置 */}
+          <div style={{ flex: 2, minWidth: 400, display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
+            <Tabs
+              activeKey={activeTabId}
               onChange={setActiveTabId}
               items={tabs.map(tab => ({
                 key: tab.id,
                 label: (
                   <Space>
                     {tab.name}
-                    <Button 
-                      size="small" 
-                      type="text" 
-                      danger 
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
                       onClick={(e) => {
                         e.stopPropagation();
                         closeTab(tab.id);
@@ -593,167 +814,188 @@ const IoTMockPlatform: React.FC = () => {
                   </Space>
                 ),
                 children: (
-                  <Form form={form} layout="vertical">
-                    <Form.Item label="请求配置">
-                      <Space style={{ width: '100%', flexWrap: 'wrap' }}>
-                        <Form.Item name="method" noStyle initialValue="GET">
-                          <Select 
-                            style={{ width: 120 }} 
+                  <div style={{ height: '100%', overflow: 'auto', padding: '10px' }}>
+                    <Form form={form} layout="vertical">
+                      <Form.Item label="请求配置">
+                        <Space style={{ width: '100%', flexWrap: 'wrap' }}>
+                          <Form.Item name="method" noStyle>
+                            <Select
+                              style={{ width: 120 }}
+                              size="middle"
+                              onChange={(value: string) => updateCurrentTab({ method: value })}
+                            >
+                              {methods.map(method => (
+                                <Select.Option key={method} value={method}>{method}</Select.Option>
+                              ))}
+                            </Select>
+                          </Form.Item>
+                          <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
+                            <Input
+                              placeholder="请输入请求URL"
+                              style={{ flex: 1, minWidth: 300 }}
+                              size="middle"
+                              onChange={(e) => updateCurrentTab({ url: e.target.value })}
+                            />
+                          </Form.Item>
+                          <Button
+                            type="primary"
+                            icon={<SendOutlined />}
+                            onClick={handleSendRequest}
+                            loading={loading}
                             size="middle"
-                            onChange={(value: string) => updateCurrentTab({ method: value })}
+                            style={{ marginLeft: '8px' }}
                           >
-                            {methods.map(method => (
-                              <Select.Option key={method} value={method}>{method}</Select.Option>
-                            ))}
-                          </Select>
-                        </Form.Item>
-                        <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
-                          <Input 
-                            placeholder="请输入请求URL" 
-                            style={{ flex: 1, minWidth: 300 }}
+                            发送
+                          </Button>
+                          <Button
+                            type="default"
+                            icon={<SaveOutlined />}
+                            onClick={handleOpenSaveModal}
                             size="middle"
-                            onChange={(e) => updateCurrentTab({ url: e.target.value })}
-                          />
-                        </Form.Item>
-                        <Button 
-                          type="primary" 
-                          icon={<SendOutlined />} 
-                          onClick={handleSendRequest} 
-                          loading={loading}
-                          size="middle"
-                          style={{ marginLeft: '8px' }}
-                        >
-                          发送
-                        </Button>
-                        <Button 
-                          type="default" 
-                          icon={<SaveOutlined />} 
-                          onClick={handleOpenSaveModal}
-                          size="middle"
-                          style={{ marginLeft: '8px' }}
-                        >
-                          保存
-                        </Button>
-                      </Space>
-                    </Form.Item>
-
-                    <Form.Item label="请求头">
-                      <div style={{ padding: '12px', background: '#fafafa', borderRadius: '4px' }}>
-                        {headers.map((header, index) => (
-                          <Space 
-                            key={index} 
-                            style={{ width: '100%', marginBottom: '8px' }}
-                            align="center"
+                            style={{ marginLeft: '8px' }}
                           >
-                            <Input 
-                              placeholder="Key" 
-                              value={header.key} 
-                              onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
-                              style={{ width: 200 }}
-                              size="middle"
-                            />
-                            <Input 
-                              placeholder="Value" 
-                              value={header.value} 
-                              onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
-                              style={{ flex: 1 }}
-                              size="middle"
-                            />
-                            <Button 
-                              icon={<MinusOutlined />} 
-                              danger 
-                              onClick={() => handleRemoveHeader(index)}
-                              size="small"
-                            />
-                          </Space>
-                        ))}
-                        <Button 
-                          type="dashed" 
-                          icon={<PlusOutlined />} 
-                          onClick={handleAddHeader}
-                          style={{ marginTop: '8px' }}
-                          size="middle"
-                        >
-                          添加请求头
-                        </Button>
-                      </div>
-                    </Form.Item>
-
-                    <Form.Item label="请求参数">
-                      <div style={{ padding: '12px', background: '#fafafa', borderRadius: '4px' }}>
-                        {parameters.map((param, index) => (
-                          <Space 
-                            key={index} 
-                            style={{ width: '100%', marginBottom: '8px' }}
-                            align="center"
-                          >
-                            <Input 
-                              placeholder="参数名" 
-                              value={param.key} 
-                              onChange={(e) => handleParameterChange(index, 'key', e.target.value)}
-                              style={{ width: 200 }}
-                              size="middle"
-                            />
-                            <Input 
-                              placeholder="参数值" 
-                              value={param.value} 
-                              onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
-                              style={{ flex: 1 }}
-                              size="middle"
-                            />
-                            <Button 
-                              icon={<MinusOutlined />} 
-                              danger 
-                              onClick={() => handleRemoveParameter(index)}
-                              size="small"
-                            />
-                          </Space>
-                        ))}
-                        <Button 
-                          type="dashed" 
-                          icon={<PlusOutlined />} 
-                          onClick={handleAddParameter}
-                          style={{ marginTop: '8px' }}
-                          size="middle"
-                        >
-                          添加参数
-                        </Button>
-                      </div>
-                    </Form.Item>
-
-                    <Form.Item label="请求体">
-                      <Form.Item name="body" noStyle>
-                        <Input.TextArea 
-                          rows={6} 
-                          placeholder="请输入请求体（JSON格式）"
-                          style={{ 
-                            fontFamily: 'monospace',
-                            borderRadius: '4px',
-                            border: '1px solid #d9d9d9'
-                          }}
-                          size="middle"
-                          onChange={(e) => updateCurrentTab({ body: e.target.value })}
-                        />
+                            保存
+                          </Button>
+                        </Space>
                       </Form.Item>
-                    </Form.Item>
-                  </Form>
+
+                      <Form.Item label="请求头">
+                        <div style={{ padding: '12px', background: '#fafafa', borderRadius: '4px', maxHeight: 300, overflow: 'auto' }}>
+                          {headers.map((header, index) => (
+                            <Space
+                              key={index}
+                              style={{ width: '100%', marginBottom: '8px' }}
+                              align="center"
+                            >
+                              <Input
+                                placeholder="Key"
+                                value={header.key}
+                                onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
+                                style={{ width: 200 }}
+                                size="middle"
+                              />
+                              <Input
+                                placeholder="Value"
+                                value={header.value}
+                                onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
+                                style={{ flex: 1 }}
+                                size="middle"
+                              />
+                              <Button
+                                icon={<MinusOutlined />}
+                                danger
+                                onClick={() => handleRemoveHeader(index)}
+                                size="small"
+                              />
+                            </Space>
+                          ))}
+                          <Button
+                            type="dashed"
+                            icon={<PlusOutlined />}
+                            onClick={handleAddHeader}
+                            style={{ marginTop: '8px' }}
+                            size="middle"
+                          >
+                            添加请求头
+                          </Button>
+                        </div>
+                      </Form.Item>
+
+                      <Form.Item label="请求参数">
+                        <div style={{ padding: '12px', background: '#fafafa', borderRadius: '4px', maxHeight: 300, overflow: 'auto' }}>
+                          {parameters.map((param, index) => (
+                            <Space
+                              key={index}
+                              style={{ width: '100%', marginBottom: '8px' }}
+                              align="center"
+                            >
+                              <Input
+                                placeholder="参数名"
+                                value={param.key}
+                                onChange={(e) => handleParameterChange(index, 'key', e.target.value)}
+                                style={{ width: 200 }}
+                                size="middle"
+                              />
+                              <Input
+                                placeholder="参数值"
+                                value={param.value}
+                                onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
+                                style={{ flex: 1 }}
+                                size="middle"
+                              />
+                              <Button
+                                icon={<MinusOutlined />}
+                                danger
+                                onClick={() => handleRemoveParameter(index)}
+                                size="small"
+                              />
+                            </Space>
+                          ))}
+                          <Button
+                            type="dashed"
+                            icon={<PlusOutlined />}
+                            onClick={handleAddParameter}
+                            style={{ marginTop: '8px' }}
+                            size="middle"
+                          >
+                            添加参数
+                          </Button>
+                        </div>
+                      </Form.Item>
+                    </Form>
+                  </div>
                 )
               }))}
             />
+          </div>
 
+          {/* 中间：请求体和响应结果 */}
+          <div style={{ flex: 2, minWidth: 400, display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', maxHeight: '100%' }}>
+            {/* 请求体 */}
+            <Card
+              title="请求体"
+              style={{
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
+                borderRadius: '8px',
+                flex: 1,
+                minHeight: "30%",
+                maxHeight: "45%"
+              }}
+            >
+              <Form form={form} layout="vertical">
+                <Form.Item name="body" noStyle>
+                  <Input.TextArea
+                    rows={8}
+                    placeholder="请输入请求体（JSON格式）"
+                    style={{
+                      fontFamily: 'monospace',
+                      borderRadius: '4px',
+                      border: '1px solid #d9d9d9',
+                      height: '100%'
+                    }}
+                    size="middle"
+                    onChange={(e) => updateCurrentTab({ body: e.target.value })}
+                  />
+                </Form.Item>
+              </Form>
+            </Card>
+
+            {/* 响应结果 */}
             {response && (
-              <Card 
-                title="响应结果" 
-                style={{ 
-                  marginTop: '20px',
+              <Card
+                title="响应结果"
+                style={{
                   boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
-                  borderRadius: '8px'
+                  borderRadius: '8px',
+                  flex: 1,
+                  minHeight: "30%",
+                  maxHeight: "50%"
                 }}
               >
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
+                <div style={{ height: '100%', minHeight: 250, display: 'flex', flexDirection: 'column', maxHeight: 550 }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
                     alignItems: 'center',
                     padding: '12px',
                     background: '#fafafa',
@@ -761,7 +1003,7 @@ const IoTMockPlatform: React.FC = () => {
                     marginBottom: '12px'
                   }}>
                     <div>
-                      状态码: <strong style={{ 
+                      状态码: <strong style={{
                         color: response.status >= 200 && response.status < 300 ? 'green' : 'red',
                         marginLeft: '4px'
                       }}>
@@ -772,21 +1014,22 @@ const IoTMockPlatform: React.FC = () => {
                       响应时间: <strong style={{ marginLeft: '4px' }}>{responseTime}ms</strong>
                     </div>
                   </div>
-                  <div style={{ 
-                    fontFamily: 'monospace', 
-                    whiteSpace: 'pre-wrap', 
-                    background: '#f5f5f5', 
-                    padding: '16px', 
-                    borderRadius: '4px', 
-                    maxHeight: '400px', 
+                  <div style={{
+                    fontFamily: 'monospace',
+                    whiteSpace: 'pre-wrap',
+                    background: '#f5f5f5',
+                    padding: '16px',
+                    borderRadius: '4px',
                     overflow: 'auto',
-                    border: '1px solid #e8e8e8'
+                    border: '1px solid #e8e8e8',
+                    maxHeight: 170,
+                    minHeight: 100
                   }}>
                     {JSON.stringify(response.data, null, 2)}
                   </div>
                   <div style={{ marginTop: '12px', textAlign: 'right' }}>
-                    <Button 
-                      icon={<CopyOutlined />} 
+                    <Button
+                      icon={<CopyOutlined />}
                       onClick={() => {
                         navigator.clipboard.writeText(JSON.stringify(response.data, null, 2));
                         message.success('响应结果已复制到剪贴板');
@@ -796,19 +1039,19 @@ const IoTMockPlatform: React.FC = () => {
                       复制响应
                     </Button>
                   </div>
-                </Space>
+                </div>
               </Card>
             )}
           </div>
 
-          {/* 右侧：保存的请求（侧边栏） */}
-          <div style={{ width: 400, minWidth: 300 }}>
-            <Card 
+          {/* 右侧：保存的请求 */}
+          <div style={{ flex: 1, minWidth: 300, maxHeight: '96%' }}>
+            <Card
               title={
                 <Space style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>保存的请求</span>
-                  <Button 
-                    icon={<SyncOutlined />} 
+                  <Button
+                    icon={<SyncOutlined />}
                     onClick={fetchSavedRequests}
                     size="small"
                     loading={loading}
@@ -817,18 +1060,19 @@ const IoTMockPlatform: React.FC = () => {
                   </Button>
                 </Space>
               }
-              bordered={false}
-              style={{ 
+              variant="outlined"
+              style={{
                 boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
                 borderRadius: '8px',
-                height: '100%'
+                height: '100%',
+                maxHeight: '100%'
               }}
             >
-              <Table 
-                columns={savedRequestsColumns} 
-                dataSource={savedRequests} 
-                rowKey="id" 
-                pagination={{ 
+              <Table
+                columns={savedRequestsColumns}
+                dataSource={savedRequests}
+                rowKey="id"
+                pagination={{
                   pageSize: 10,
                   showSizeChanger: false
                 }}
@@ -854,6 +1098,135 @@ const IoTMockPlatform: React.FC = () => {
           />
           <div style={{ color: '#999', fontSize: '12px' }}>
             保存后可在右侧"保存的请求"侧边栏中查看和管理
+          </div>
+        </Modal>
+
+        {/* 全局参数配置模态框 */}
+        <Modal
+          title="全局参数配置"
+          open={isGlobalParamsModalVisible}
+          onOk={() => setIsGlobalParamsModalVisible(false)}
+          onCancel={() => setIsGlobalParamsModalVisible(false)}
+          width={600}
+        >
+          <div style={{ marginBottom: '16px' }}>
+            {/* 环境选择和管理 */}
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 'bold' }}>环境管理</h3>
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={handleAddEnvironment}
+                >
+                  添加环境
+                </Button>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                {environments.map(env => (
+                  <div
+                    key={env.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '4px 12px',
+                      borderRadius: '16px',
+                      background: currentEnvironmentId === env.id ? '#1890ff' : '#f0f0f0',
+                      color: currentEnvironmentId === env.id ? '#fff' : '#333',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      gap: '8px'
+                    }}
+                    onClick={() => handleSwitchEnvironment(env.id)}
+                  >
+                    <span>{env.name}</span>
+                    {environments.length > 1 && (
+                      <Button
+                        type="text"
+                        size="small"
+                        style={{
+                          color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999',
+                          padding: 0,
+                          margin: 0,
+                          width: '20px',
+                          height: '20px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveEnvironment(env.id);
+                        }}
+                      >
+                        ×
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 当前环境的参数 */}
+            <p style={{ color: '#666', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
+
+            {getCurrentEnvironment().parameters.map((param, index) => (
+              <Space
+                key={index}
+                style={{ width: '100%', marginBottom: '12px' }}
+                align="center"
+              >
+                <Input
+                  placeholder="参数名"
+                  value={param.key}
+                  onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
+                  style={{ width: 150 }}
+                  size="middle"
+                />
+                <Input
+                  placeholder="参数值"
+                  value={param.value}
+                  onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
+                  style={{ flex: 1 }}
+                  size="middle"
+                />
+                <Button
+                  icon={<MinusOutlined />}
+                  danger
+                  onClick={() => handleRemoveEnvironmentParameter(index)}
+                  size="small"
+                />
+              </Space>
+            ))}
+
+            <Button
+              type="dashed"
+              icon={<PlusOutlined />}
+              onClick={handleAddEnvironmentParameter}
+              style={{ marginTop: '8px', width: '100%' }}
+              size="middle"
+            >
+              添加全局参数
+            </Button>
+          </div>
+        </Modal>
+
+        {/* 添加环境模态框 */}
+        <Modal
+          title="创建新环境"
+          open={isAddEnvModalVisible}
+          onOk={handleConfirmAddEnvironment}
+          onCancel={() => setIsAddEnvModalVisible(false)}
+          width={400}
+        >
+          <Input
+            placeholder="请输入环境名称"
+            value={newEnvironmentName}
+            onChange={(e) => setNewEnvironmentName(e.target.value)}
+            style={{ marginBottom: '16px' }}
+          />
+          <div style={{ color: '#999', fontSize: '12px' }}>
+            环境名称用于区分不同的参数配置集
           </div>
         </Modal>
       </Card>
