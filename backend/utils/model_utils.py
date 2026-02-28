@@ -122,7 +122,8 @@ def create_testcase_agent(
             model=model,
             system_prompt=SYSTEM_PROMPT,
             response_format=ResponseFormat,
-            checkpointer=checkpointer
+            checkpointer=checkpointer,
+            tools=[]
         )
         return agent
 
@@ -197,7 +198,7 @@ def generate_testcases(
     duration = time.time() - start
     logger.info(f"模型调用完成: type={model_type} duration={duration:.2f}s")
     logger.info(f"模型返回结果类型: {type(response).__name__}")
-    logger.info(f"模型返回结果: {response}")
+    # logger.info(f"模型返回结果: {response}")
 
     # 获取生成的测试用例
     try:
