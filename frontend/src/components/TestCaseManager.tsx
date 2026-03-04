@@ -22,6 +22,9 @@ interface TestCaseManagerProps {
   onComplete: (testcase: TestCase) => void;
   onDelete: (id: number) => void;
   onBatchDelete: (ids: number[]) => void;
+  onBatchMove: (ids: number[]) => void;
+  onAdd: () => void;
+  onMove: (testcase: TestCase) => void;
 }
 
 const TestCaseManager: React.FC<TestCaseManagerProps> = ({
@@ -36,7 +39,10 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onEdit,
   onComplete,
   onDelete,
-  onBatchDelete
+  onBatchDelete,
+  onAdd,
+  onMove,
+  onBatchMove
 }) => {
   const handleExportExcel = () => {
     if (testcases.length === 0) {
@@ -203,6 +209,9 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
               </Space>
 
               <Space size="middle">
+                <Button type="primary" onClick={onAdd}>
+                  新增测试用例
+                </Button>
                 <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportExcel}>
                   导出Excel
                 </Button>
@@ -314,6 +323,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
                 onComplete={onComplete}
                 onDelete={onDelete}
                 onBatchDelete={onBatchDelete}
+                onMove={onMove}
+                onBatchMove={onBatchMove}
               />
 
             </div>

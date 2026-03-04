@@ -9,6 +9,8 @@ interface TestCaseTableProps {
   onComplete: (testcase: TestCase) => void;
   onDelete: (id: number) => void;
   onBatchDelete: (ids: number[]) => void;
+  onMove: (testcase: TestCase) => void;
+  onBatchMove: (ids: number[]) => void;
 }
 
 const onShowSizeChange: PaginationProps['onShowSizeChange'] = (current, pageSize) => {
@@ -21,7 +23,9 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onEdit,
   onComplete,
   onDelete,
-  onBatchDelete
+  onBatchDelete,
+  onMove,
+  onBatchMove
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [isBatchDeleteModalVisible, setIsBatchDeleteModalVisible] = useState(false);
@@ -142,6 +146,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             >
               执行
             </Button>
+            <Button size='small' type="link" onClick={() => onMove(record)}>移动</Button>
             <Button size='small' type="link" disabled={record.status !== TestCaseStatus.NOT_RUN} danger onClick={() => onDelete(record.id)}>删除</Button>
           </Space>
         </div>
@@ -187,6 +192,14 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
           // disabled={selectedRowKeys.length === 0}
         >
           批量删除 ({selectedRowKeys.length})
+        </Button>
+        <Button 
+          onClick={() => {
+            const selectedIds = selectedRowKeys.map(key => Number(key));
+            onBatchMove(selectedIds);
+          }}
+        >
+          批量移动 ({selectedRowKeys.length})
         </Button>
       </Space>}
       <Table

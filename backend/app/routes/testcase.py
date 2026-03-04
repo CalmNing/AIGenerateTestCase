@@ -121,7 +121,7 @@ async def generate_testcases(
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
         file: Optional[UploadFile] = File(None),
-        module_id: Optional[int] = Form(""),
+        module_id: Optional[int|str] = Form(""),
 
 ):
     """生成测试用例"""
@@ -245,3 +245,87 @@ def delete_testcase(
     session.exec(statement)
     session.commit()
     return Response(message="删除测试用例成功")
+
+
+# 移动测试用例请求模型
+class MoveTestcaseRequest(BaseModel):
+    session_id: int
+    module_id: Optional[int] = None
+
+
+@router.post("/{testcase_id}/move", response_model=Response)
+def move_testcase(
+        session: SessionDep,
+        testcase_id: int,
+        request: MoveTestcaseRequest
+):
+    """移动测试用例到指定会话和模块"""
+    # 查找测试用例
+    testcase_db = session.get(TestCase, testcase_id)
+    if not testcase_db:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+    
+    # 更新会话和模块
+    testcase_db.session_id = request.session_id
+    testcase_db.module_id = request.module_id
+    
+    session.add(testcase_db)
+    session.commit()
+    session.refresh(testcase_db)
+    return Response(message="移动测试用例成功")
+
+
+# 批量移动测试用例请求模型
+class BatchMoveTestcaseRequest(BaseModel):
+    testcase_ids: List[int]
+    session_id: int
+    module_id: Optional[int] = None
+
+
+@router.post("/move", response_model=Response)
+def batch_move_testcase(
+        session: SessionDep,
+        request: BatchMoveTestcaseRequest
+):
+    """批量移动测试用例到指定会话和模块"""
+    # 查找测试用例
+    testcases_db = session.exec(
+        select(TestCase).where(TestCase.id.in_(request.testcase_ids))
+    ).all()
+    
+    if not testcases_db:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+    
+    # 批量更新会话和模块
+    for testcase_db in testcases_db:
+        testcase_db.session_id = request.session_id
+        testcase_db.module_id = request.module_id
+        session.add(testcase_db)
+    
+    session.commit()
+    return Response(message=f"成功移动 {len(testcases_db)} 个测试用例")
+
+
+@router.post("/{session_id}/testcases/create", response_model=Response[TestCase])
+def create_testcase(
+        session: SessionDep,
+        session_id: int,
+        testcase: TestCase
+):
+    """创建测试用例"""
+    # 创建测试用例对象
+    testcase_db = TestCase(
+        case_name=testcase.case_name,
+        case_level=testcase.case_level,
+        preset_conditions=testcase.preset_conditions,
+        steps=testcase.steps,
+        expected_results=testcase.expected_results,
+        session_id=session_id,
+        module_id=testcase.module_id,
+        status=testcase.status or StatusValue.NOT_RUN
+    )
+    
+    session.add(testcase_db)
+    session.commit()
+    session.refresh(testcase_db)
+    return Response(data=testcase_db, message="创建测试用例成功")

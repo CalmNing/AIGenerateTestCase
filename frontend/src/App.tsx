@@ -16,6 +16,8 @@ import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
 import ViewTestcaseModal from './components/modals/ViewTestcaseModal';
 import EditTestcaseModal from './components/modals/EditTestcaseModal';
 import SettingsModal from './components/modals/SettingsModal';
+import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
+import AddTestcaseModal from './components/modals/AddTestcaseModal';
 import ModuleSidebar from './components/ModuleSidebar';
 
 const { Content } = Layout;
@@ -479,6 +481,14 @@ const App: React.FC = () => {
   const [confirmCompleteTestcaseVisible, setConfirmCompleteTestcaseVisible] = useState(false);
   const [testcaseToComplete, setTestcaseToComplete] = useState<TestCase | null>(null);
 
+  // 移动测试用例状态
+  const [isMoveModalVisible, setIsMoveModalVisible] = useState(false);
+  const [testcaseToMove, setTestcaseToMove] = useState<TestCase | null>(null);
+  const [selectedTestcaseIds, setSelectedTestcaseIds] = useState<number[]>([]);
+
+  // 新增测试用例状态
+  const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+
   // 测试用例筛选条件
   const [filters, setFilters] = useState<TestCaseFilters>();
 
@@ -636,6 +646,46 @@ const App: React.FC = () => {
   const handleCancelCompleteTestcase = () => {
     setConfirmCompleteTestcaseVisible(false);
     setTestcaseToComplete(null);
+  };
+
+  // 打开移动测试用例对话框（单个）
+  const handleMoveTestcase = (testcase: TestCase | null) => {
+    if (!testcase) return;
+    setTestcaseToMove(testcase);
+    setSelectedTestcaseIds([]);
+    setIsMoveModalVisible(true);
+  };
+
+  // 打开批量移动测试用例对话框
+  const handleBatchMoveTestcase = (ids: number[]) => {
+    if (ids.length === 0) return;
+    setSelectedTestcaseIds(ids);
+    setTestcaseToMove(null);
+    setIsMoveModalVisible(true);
+  };
+
+  // 移动测试用例成功处理
+  const handleMoveTestcaseSuccess = () => {
+    // 重新加载当前会话的测试用例
+    if (selectedSession) {
+      loadTestcases(selectedSession.id, filters);
+    }
+    // 清空选中的测试用例ID
+    setSelectedTestcaseIds([]);
+  };
+
+  // 打开新增测试用例对话框
+  const handleOpenAddTestcaseModal = () => {
+    setIsAddModalVisible(true);
+  };
+
+  // 新增测试用例成功处理
+  const handleAddTestcaseSuccess = () => {
+    // 重新加载当前会话的测试用例
+    if (selectedSession) {
+      loadTestcases(selectedSession.id, filters);
+    }
+    setIsAddModalVisible(false);
   };
 
   // 设置功能
@@ -925,6 +975,9 @@ const App: React.FC = () => {
                           onComplete={handleCompleteTestcase}
                           onDelete={handleDeleteTestcase}
                           onBatchDelete={handleBatchDeleteTestcases}
+                          onBatchMove={handleBatchMoveTestcase}
+                          onAdd={handleOpenAddTestcaseModal}
+                          onMove={handleMoveTestcase}
                         />
                       ),
                     },
@@ -1030,6 +1083,22 @@ const App: React.FC = () => {
             onCancel={() => setIsSettingModalVisible(false)}
             onFinish={handleSaveSetting}
             onSettingTypeChange={handleSettingTypeChange}
+          />
+
+          <MoveTestcaseModal
+            visible={isMoveModalVisible}
+            testcase={testcaseToMove}
+            testcaseIds={selectedTestcaseIds}
+            onCancel={() => setIsMoveModalVisible(false)}
+            onMoveSuccess={handleMoveTestcaseSuccess}
+          />
+
+          <AddTestcaseModal
+            visible={isAddModalVisible}
+            selectedSession={selectedSession}
+            modules={modules}
+            onCancel={() => setIsAddModalVisible(false)}
+            onAddSuccess={handleAddTestcaseSuccess}
           />
         </Layout>
       )}

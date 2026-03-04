@@ -33,29 +33,29 @@ api.interceptors.response.use(
 // 会话管理API
 export const sessionApi = {
   // 获取所有会话
-  getSessions: () => api.get<ApiResponse<Session[]>>('/sessions/'),
+  getSessions: (): Promise<ApiResponse<Session[]>> => api.get('/sessions/'),
 
   // 创建会话
-  createSession: (name: string) => api.post<ApiResponse<Session>>('/sessions/', { name }),
+  createSession: (name: string): Promise<ApiResponse<Session>> => api.post('/sessions/', { name }),
 
   // 更新会话
-  updateSession: (id: number, data: UpdateSessionRequest) => api.put<ApiResponse<Session>>(`/sessions/${id}`, data),
+  updateSession: (id: number, data: UpdateSessionRequest): Promise<ApiResponse<Session>> => api.put(`/sessions/${id}`, data),
 
   // 删除会话
-  deleteSession: (id: number) => api.delete<ApiResponse>(`/sessions/${id}`)
+  deleteSession: (id: number): Promise<ApiResponse> => api.delete(`/sessions/${id}`)
 };
 
 // 测试用例管理API
 export const testcaseApi = {
   // 获取会话的测试用例
-  getTestcases: (sessionId: number | undefined, filters?: { case_name?: string; status?: string; bug_id?: string; exist_bug?: boolean; module_id?: number | string }) => {
+  getTestcases: (sessionId: number | undefined, filters?: { case_name?: string; status?: string; bug_id?: string; exist_bug?: boolean; module_id?: number | string }): Promise<ApiResponse<TestCaseResponse>> => {
     const params = new URLSearchParams();
     if (filters?.case_name) params.append('case_name', filters.case_name);
     if (filters?.status) params.append('status', filters.status);
     if (filters?.bug_id) params.append('bug_id', filters.bug_id);
     if (filters?.exist_bug !== undefined) params.append('exist_bug', filters.exist_bug.toString());
     if (filters?.module_id !== undefined) params.append('module_id', filters.module_id.toString());
-    return api.get<ApiResponse<TestCaseResponse>>(`/testcases/${sessionId}/testcases?${params.toString()}`);
+    return api.get(`/testcases/${sessionId}/testcases?${params.toString()}`);
   },
 
   // 生成测试用例
@@ -65,7 +65,7 @@ export const testcaseApi = {
     ollama_url?: string;
     ollama_model?: string;
   }, imageBase64?: string | null,
-    moduleId?: number | null) => {
+    moduleId?: number | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -131,39 +131,47 @@ export const testcaseApi = {
 
     // 发送请求，axios会自动设置正确的Content-Type头
     // 包括multipart/form-data和边界信息
-    return api.post<ApiResponse<TestCase[]>>(`/testcases/${sessionId}/testcases`, formData);
+    return api.post(`/testcases/${sessionId}/testcases`, formData);
   },
 
   // 创建测试用例
-  createTestcase: (sessionId: number, testcase: Omit<TestCase, 'id' | 'created_at' | 'updated_at'>) =>
-    api.post<ApiResponse<TestCase>>(`/testcases/${sessionId}/testcases`, testcase),
+  createTestcase: (sessionId: number, testcase: Omit<TestCase, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<TestCase>> =>
+    api.post(`/testcases/${sessionId}/testcases/create`, testcase),
 
   // 更新测试用例
-  updateTestcase: (sessionId: number, id: number, testcase: Partial<TestCase>) =>
-    api.put<ApiResponse<TestCase>>(`/testcases/${sessionId}/testcases/${id}`, testcase),
+  updateTestcase: (sessionId: number, id: number, testcase: Partial<TestCase>): Promise<ApiResponse<TestCase>> =>
+    api.put(`/testcases/${sessionId}/testcases/${id}`, testcase),
 
   // 删除测试用例
-  deleteTestcase: (sessionId: number, ids: number[]) => api.delete<ApiResponse>(`/testcases/${sessionId}/testcases`, { data: ids })
+  deleteTestcase: (sessionId: number, ids: number[]): Promise<ApiResponse> => api.delete(`/testcases/${sessionId}/testcases`, { data: ids }),
+
+  // 移动测试用例
+  moveTestcase: (testcaseId: number, sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
+    api.post(`/testcases/${testcaseId}/move`, { session_id: sessionId, module_id: moduleId }),
+
+  // 批量移动测试用例
+  batchMoveTestcase: (testcaseIds: number[], sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
+    api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId })
 };
 
 // 模块管理API
 export const moduleApi = {
   // 获取会话的所有模块
-  getModules: (sessionId: number) => api.get<ApiResponse<Module[]>>(`/module/${sessionId}/modules`),
+  getModules: (sessionId: number): Promise<ApiResponse<Module[]>> => api.get(`/module/${sessionId}/modules`),
 
   // 获取单个模块
-  getModule: (moduleId: number) => api.get<ApiResponse<Module>>(`/module/${moduleId}`),
+  getModule: (moduleId: number): Promise<ApiResponse<Module>> => api.get(`/module/${moduleId}`),
 
   // 创建模块
-  createModule: (module: Omit<Module, 'id' | 'created_at' | 'updated_at'>) =>
-    api.post<ApiResponse<Module>>('/module/', module),
+  createModule: (module: Omit<Module, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<Module>> =>
+    api.post('/module/', module),
 
   // 更新模块
-  updateModule: (moduleId: number, module: Partial<Module>) =>
-    api.put<ApiResponse<Module>>(`/module/${moduleId}`, module),
+  updateModule: (moduleId: number, module: Partial<Module>): Promise<ApiResponse<Module>> =>
+    api.put(`/module/${moduleId}`, module),
 
   // 删除模块
-  deleteModule: (moduleId: number) => api.delete<ApiResponse>(`/module/${moduleId}`)
+  deleteModule: (moduleId: number): Promise<ApiResponse> => api.delete(`/module/${moduleId}`)
 };
 
 // 健康检查
