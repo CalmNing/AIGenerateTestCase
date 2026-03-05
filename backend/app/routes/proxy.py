@@ -1,3 +1,5 @@
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
@@ -16,7 +18,7 @@ class ProxyRequest(BaseModel):
     url: str
     method: str = "GET"
     headers: dict = None
-    data: dict = None
+    data: dict | List = None
     params: dict = None
 
 def is_valid_url(url: str) -> bool:
@@ -37,7 +39,7 @@ async def forward_request(
     """转发请求到目标URL"""
     if not is_valid_url(request.url):
         raise HTTPException(status_code=400, detail="Invalid URL")
-    
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.request(
@@ -53,7 +55,7 @@ async def forward_request(
                 response_data = response.json()
             except Exception:
                 response_data = response.text
-            
+
             return {
                 "status_code": response.status_code,
                 "headers": dict(response.headers),
