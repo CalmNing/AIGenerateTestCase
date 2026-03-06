@@ -159,9 +159,9 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       console.log(`selectedRowKeys: ${selectedRowKeys}`, 'selectedRows: ', selectedRows);
       setSelectedRowKeys(selectedRowKeys);
     },
-    getCheckboxProps: (record: TestCase) => ({
-      disabled: record.status !== TestCaseStatus.NOT_RUN,
-    }),
+    // getCheckboxProps: (record: TestCase) => ({
+    //   disabled: record.status !== TestCaseStatus.NOT_RUN,
+    // }),
   };
 
   const handleBatchDelete = () => {
