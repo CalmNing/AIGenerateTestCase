@@ -990,8 +990,8 @@ const App: React.FC = () => {
                           loading={loading}
                           onRequirementChange={setRequirement}
                           onGenerate={handleGenerateTestcases}
-                          imageBase64={imageBase64}
-                          onImageChange={setImageBase64}
+                          // imageBase64={imageBase64}
+                          // onImageChange={setImageBase64}
                           historyPromptRefreshKey={historyPromptRefreshKey}
                         />
                       ),
