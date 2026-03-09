@@ -220,7 +220,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 <div style={{ marginTop: '8px' }}>
                   <Input.TextArea
                     ref={textAreaRef}
-                    rows={6}
+                    rows={16}
                     placeholder="请输入测试用例设计需求，例如：设计一个登录功能的测试用例，包括正常登录、异常登录等场景... 提示：您可以直接粘贴图片到此处"
                     value={requirement}
                     onChange={(e) => onRequirementChange(e.target.value)}
