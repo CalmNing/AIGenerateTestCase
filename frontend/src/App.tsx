@@ -3,7 +3,7 @@ import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs, Modal, Input, Button } from 'antd';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
-import { sessionApi, testcaseApi, moduleApi } from './services/api';
+import { sessionApi, testcaseApi, moduleApi, historyPromptApi } from './services/api';
 import HomePage from './components/HomePage';
 import IoTMockPlatform from './components/IoTMockPlatform';
 import HeaderComponent from './components/HeaderComponent';
@@ -55,6 +55,8 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('generate');
   // 图片状态管理
   const [imageBase64, setImageBase64] = useState<string | null>(null);
+  // 历史提示词刷新key
+  const [historyPromptRefreshKey, setHistoryPromptRefreshKey] = useState(0);
 
   // 创建表单实例
   const [form] = Form.useForm();
@@ -767,67 +769,106 @@ const App: React.FC = () => {
 
       // 从localStorage获取模型配置
       const savedSettings = localStorage.getItem('appSettings');
-      let modelConfig = undefined;
       if (!savedSettings) {
         handleOpenSettingModal();
+        notification.error({
+          message: '配置缺失',
+          description: '请先配置模型设置',
+          placement: 'topRight'
+        });
+        return;
       }
-      else {
-        const settings = JSON.parse(savedSettings);
-        if (settings) {
-          // if (settings.api_key == undefined && settings.api_key == '') {
-          //   handleOpenSettingModal();
-          // }
-          modelConfig = {
-            model_type: settings.setting_type,
-            api_key: settings.api_key || '',
-            ollama_url: settings.ollama_url || '',
-            ollama_model: settings.ollama_model || ''
-          };
+
+      const settings = JSON.parse(savedSettings);
+      const modelConfig = {
+        model_type: settings.setting_type,
+        api_key: settings.api_key || '',
+        ollama_url: settings.ollama_url || '',
+        ollama_model: settings.ollama_model || ''
+      };
+
+      setSettingButtonStatus(true); // 点击生成按钮设置按钮置灰
+
+      // 只有当requirement非空或imageBase64非空时才调用API
+      if (requirement.trim() || imageBase64) {
+        console.log('调用API前的状态:', {
+          sessionId: selectedSession.id,
+          requirement: requirement.trim(),
+          hasModelConfig: !!modelConfig,
+          hasImageBase64: !!imageBase64,
+          imageBase64Length: imageBase64?.length || 0
+        });
+
+        // 【第一步】先保存历史提示词 - 只要有需求描述就保存
+        if (requirement.trim()) {
+          console.log('=== 开始保存历史提示词 ===');
+          try {
+            const promptData: { content: string; session_id: number; module_id?: number } = {
+              content: requirement.trim(),
+              session_id: selectedSession.id
+            };
+            // 只有选择了具体模块时才关联模块
+            if (selectedModule && selectedModule !== 0 && selectedModule !== 'all') {
+              promptData.module_id = Number(selectedModule);
+            }
+            console.log('准备保存提示词数据:', promptData);
+
+            // 调用创建历史提示词接口
+            const promptResponse = await historyPromptApi.createPrompt(promptData);
+            console.log('历史提示词API响应:', promptResponse);
+
+            if (promptResponse.code === 200) {
+              console.log('✓ 历史提示词已成功保存到数据库');
+            } else {
+              console.error('历史提示词保存失败，响应码:', promptResponse.code);
+            }
+          } catch (error: any) {
+            console.error('保存历史提示词失败:', error);
+            // 不阻断流程，继续生成测试用例
+          }
         }
 
-        setSettingButtonStatus(true); // 点击生成按钮设置按钮置灰
-        // 只有当requirement非空或imageBase64非空时才调用API
-        if (requirement.trim() || imageBase64) {
-          console.log('调用API前的状态:', {
-            sessionId: selectedSession.id,
-            requirement: requirement.trim(),
-            hasModelConfig: !!modelConfig,
-            hasImageBase64: !!imageBase64,
-            imageBase64Length: imageBase64?.length || 0
-          });
+        // 【第二步】调用生成测试用例API
+        const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
+          selectedSession.id,
+          requirement.trim(),
+          modelConfig,
+          imageBase64, // 传递图片base64数据
+          selectedModule === 0 ? undefined : Number(selectedModule) // 传递模块ID
+        );
+        console.log('生成测试用例API响应:', response);
 
-          // 调用API
-          const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
-            selectedSession.id,
-            requirement.trim(),
-            modelConfig,
-            imageBase64, // 传递图片base64数据
-            selectedModule === 0 ? undefined : Number(selectedModule) // 传递模块ID
-          );
-          if (response.code === 200 && response.data) {
-            loadTestcases(selectedSession.id);
-            setRequirement('');
-            setImageBase64(null); // 清空图片数据
-            notification.success({
-              message: '生成成功',
-              description: '测试用例已成功生成',
-              placement: 'topRight'
-            });
-          }
+        if (response.code === 200) {
+          loadTestcases(selectedSession.id);
+          setRequirement('');
+          setImageBase64(null); // 清空图片数据
+          // 刷新历史提示词列表
+          setHistoryPromptRefreshKey(prev => prev + 1);
+          notification.success({
+            message: '生成成功',
+            description: '测试用例已成功生成',
+            placement: 'topRight'
+          });
         } else {
           notification.error({
             message: '生成失败',
-            description: '请上传图片文件或输入需求描述',
+            description: response.message || '生成测试用例失败，请重试',
             placement: 'topRight'
           });
         }
+      } else {
+        notification.error({
+          message: '生成失败',
+          description: '请上传图片文件或输入需求描述',
+          placement: 'topRight'
+        });
       }
 
     } catch (error: any) {
       console.error('生成测试用例失败:', error);
       notification.error({
         message: '生成失败',
-        description: `${error.response.data.detail || '生成测试用例时发生错误，请重试'}`,
+        description: `${error.response?.data?.detail || '生成测试用例时发生错误，请重试'}`,
         placement: 'topRight'
       });
     } finally {
@@ -929,7 +970,13 @@ const App: React.FC = () => {
               <Content style={{ background: '#fff', padding: '10px', margin: 0 }}>
                 <Tabs
                   activeKey={activeTab}
-                  onChange={setActiveTab}
+                  onChange={(key) => {
+                    setActiveTab(key);
+                    // 切换到"管理测试用例"页签时，加载测试用例列表
+                    if (key === 'manage' && selectedSession) {
+                      loadTestcases(selectedSession.id, filters);
+                    }
+                  }}
                   items={[
                     {
                       key: 'generate',
@@ -945,6 +992,7 @@ const App: React.FC = () => {
                           onGenerate={handleGenerateTestcases}
                           imageBase64={imageBase64}
                           onImageChange={setImageBase64}
+                          historyPromptRefreshKey={historyPromptRefreshKey}
                         />
                       ),
                     },

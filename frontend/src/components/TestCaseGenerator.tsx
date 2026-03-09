@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Card, Typography, Input, Button, message } from 'antd';
 import { DeleteOutlined } from '@ant-design/icons';
 import { Session, Module } from '../types';
+import HistoryPromptSidebar from './HistoryPromptSidebar';
 
 const { Text } = Typography;
 
@@ -15,6 +16,7 @@ interface TestCaseGeneratorProps {
   onGenerate: () => void;
   imageBase64?: string | null;
   onImageChange: (imageBase64: string | null) => void;
+  historyPromptRefreshKey?: number; // 用于刷新历史提示词列表
 }
 
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
@@ -26,7 +28,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   onRequirementChange,
   onGenerate,
   imageBase64,
-  onImageChange
+  onImageChange,
+  historyPromptRefreshKey
 }) => {
   // 图片状态管理
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -122,129 +125,152 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     message.success('图片已移除！');
   };
 
+  // 处理选择提示词
+  const handleSelectPrompt = (content: string) => {
+    onRequirementChange(content);
+  };
+
+  // 处理侧边栏刷新
+  const handlePromptsChange = () => {
+    // 可以在这里添加刷新逻辑，如果需要的话
+  };
+
   return (
-    <Card title="生成测试用例" variant="borderless">
-      {!selectedSession ? (
-        <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <Text type="secondary">请先从左侧选择或创建一个会话</Text>
-        </div>
-      ) : (
-        <div>
-          <div style={{ marginBottom: '16px' }}>
-            <Text strong>当前会话:</Text> <Text>{selectedSession.name}</Text>
-          </div>
-          {!selectedModule ? (
-            <div style={{ marginBottom: '16px' }}>
-              <Text strong>当前模块:</Text> <Text>无</Text>
+    <div style={{ display: 'flex', height: '100%' }}>
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        <Card title="生成测试用例" variant="borderless">
+          {!selectedSession ? (
+            <div style={{ textAlign: 'center', padding: '40px 0' }}>
+              <Text type="secondary">请先从左侧选择或创建一个会话</Text>
             </div>
           ) : (
-            <div style={{ marginBottom: '16px' }}>
-              <Text strong>当前模块:</Text> <Text>{modules.find(m => m.id === selectedModule)?.module_name || '无'}</Text>
+            <div>
+              <div style={{ marginBottom: '16px' }}>
+                <Text strong>当前会话:</Text> <Text>{selectedSession.name}</Text>
+              </div>
+              {!selectedModule ? (
+                <div style={{ marginBottom: '16px' }}>
+                  <Text strong>当前模块:</Text> <Text>无</Text>
+                </div>
+              ) : (
+                <div style={{ marginBottom: '16px' }}>
+                  <Text strong>当前模块:</Text> <Text>{modules.find(m => m.id === selectedModule)?.module_name || '无'}</Text>
+                </div>
+              )}
+
+
+              {/* 需求输入区域 */}
+              <div style={{ marginBottom: '16px' }}>
+                <Text strong>输入需求描述:</Text>
+
+                {/* 图片显示区域 - 显示在文本框上方 */}
+                {previewImage && (
+                  <div style={{
+                    marginBottom: '12px',
+                    padding: '12px',
+                    border: '1px solid #d9d9d9',
+                    borderRadius: '8px',
+                    backgroundColor: '#fafafa',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px'
+                  }}>
+                    <div style={{ flex: '0 0 auto', position: 'relative' }}>
+                      <img
+                        src={previewImage}
+                        alt="Preview"
+                        style={{
+                          maxWidth: '200px',
+                          maxHeight: '150px',
+                          objectFit: 'contain',
+                          borderRadius: '4px',
+                          border: '1px solid #e8e8e8'
+                        }}
+                      />
+                      <Button
+                        icon={<DeleteOutlined />}
+                        size="small"
+                        type="text"
+                        danger
+                        onClick={handleImageRemove}
+                        style={{
+                          position: 'absolute',
+                          top: '-8px',
+                          right: '-8px',
+                          background: '#fff',
+                          borderRadius: '50%',
+                          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+                          width: '24px',
+                          height: '24px',
+                          padding: '0',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: '1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#333' }}>已上传图片</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>图片将与需求一起发送，用于生成测试用例</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 文本输入框 */}
+                <div style={{ marginTop: '8px' }}>
+                  <Input.TextArea
+                    ref={textAreaRef}
+                    rows={6}
+                    placeholder="请输入测试用例设计需求，例如：设计一个登录功能的测试用例，包括正常登录、异常登录等场景... 提示：您可以直接粘贴图片到此处"
+                    value={requirement}
+                    onChange={(e) => onRequirementChange(e.target.value)}
+                    onPaste={handlePaste}
+                    style={{
+                      border: '1px solid #d9d9d9',
+                      borderRadius: '8px',
+                      fontSize: '14px'
+                    }}
+                  />
+                  <div style={{
+                    marginTop: '8px',
+                    fontSize: '12px',
+                    color: '#666',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    <span>📋 支持直接粘贴图片</span>
+                    <span>💡 粘贴后图片将显示在此输入框上方</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 生成按钮 */}
+              <Button
+                type="primary"
+                size="large"
+                onClick={onGenerate}
+                loading={loading}
+                disabled={!requirement.trim() && !imageBase64}
+                block
+                style={{ borderRadius: '8px', fontSize: '16px', height: '48px' }}
+              >
+                生成测试用例
+              </Button>
             </div>
           )}
+        </Card>
+      </div>
 
-
-          {/* 需求输入区域 */}
-          <div style={{ marginBottom: '16px' }}>
-            <Text strong>输入需求描述:</Text>
-
-            {/* 图片显示区域 - 显示在文本框上方 */}
-            {previewImage && (
-              <div style={{
-                marginBottom: '12px',
-                padding: '12px',
-                border: '1px solid #d9d9d9',
-                borderRadius: '8px',
-                backgroundColor: '#fafafa',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px'
-              }}>
-                <div style={{ flex: '0 0 auto', position: 'relative' }}>
-                  <img
-                    src={previewImage}
-                    alt="Preview"
-                    style={{
-                      maxWidth: '200px',
-                      maxHeight: '150px',
-                      objectFit: 'contain',
-                      borderRadius: '4px',
-                      border: '1px solid #e8e8e8'
-                    }}
-                  />
-                  <Button
-                    icon={<DeleteOutlined />}
-                    size="small"
-                    type="text"
-                    danger
-                    onClick={handleImageRemove}
-                    style={{
-                      position: 'absolute',
-                      top: '-8px',
-                      right: '-8px',
-                      background: '#fff',
-                      borderRadius: '50%',
-                      boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
-                      width: '24px',
-                      height: '24px',
-                      padding: '0',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  />
-                </div>
-                <div style={{ flex: '1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#333' }}>已上传图片</div>
-                  <div style={{ fontSize: '12px', color: '#666' }}>图片将与需求一起发送，用于生成测试用例</div>
-                </div>
-              </div>
-            )}
-
-            {/* 文本输入框 */}
-            <div style={{ marginTop: '8px' }}>
-              <Input.TextArea
-                ref={textAreaRef}
-                rows={6}
-                placeholder="请输入测试用例设计需求，例如：设计一个登录功能的测试用例，包括正常登录、异常登录等场景... 提示：您可以直接粘贴图片到此处"
-                value={requirement}
-                onChange={(e) => onRequirementChange(e.target.value)}
-                onPaste={handlePaste}
-                style={{
-                  border: '1px solid #d9d9d9',
-                  borderRadius: '8px',
-                  fontSize: '14px'
-                }}
-              />
-              <div style={{
-                marginTop: '8px',
-                fontSize: '12px',
-                color: '#666',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <span>📋 支持直接粘贴图片</span>
-                <span>💡 粘贴后图片将显示在此输入框上方</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 生成按钮 */}
-          <Button
-            type="primary"
-            size="large"
-            onClick={onGenerate}
-            loading={loading}
-            disabled={!requirement.trim() && !imageBase64}
-            block
-            style={{ borderRadius: '8px', fontSize: '16px', height: '48px' }}
-          >
-            生成测试用例
-          </Button>
-        </div>
-      )}
-    </Card>
+      {/* 右侧历史提示词侧边栏 */}
+      <HistoryPromptSidebar
+        moduleId={selectedModule}
+        sessionId={selectedSession?.id ?? null}
+        onSelectPrompt={handleSelectPrompt}
+        onPromptsChange={handlePromptsChange}
+        refreshKey={historyPromptRefreshKey}
+      />
+    </div>
   );
 };
 

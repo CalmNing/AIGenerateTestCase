@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -177,4 +177,23 @@ export const moduleApi = {
 // 健康检查
 export const healthApi = {
   checkHealth: () => api.get('/health')
+};
+
+// 历史提示词API
+export const historyPromptApi = {
+  // 获取模块下的历史提示词列表
+  getPrompts: (moduleId: number): Promise<ApiResponse<HistoryPrompt[]>> =>
+    api.get(`/history_prompt/${moduleId}`),
+
+  // 获取会话下的所有历史提示词
+  getSessionPrompts: (sessionId: number): Promise<ApiResponse<HistoryPrompt[]>> =>
+    api.get(`/history_prompt/session/${sessionId}`),
+
+  // 创建历史提示词
+  createPrompt: (data: { content: string; module_id?: number | null; session_id?: number | null }): Promise<ApiResponse<HistoryPrompt>> =>
+    api.post('/history_prompt', data),
+
+  // 删除历史提示词
+  deletePrompt: (promptId: number): Promise<ApiResponse> =>
+    api.delete(`/history_prompt/${promptId}`)
 };

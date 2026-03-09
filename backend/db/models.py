@@ -115,3 +115,15 @@ class GlobalParameter(BaseModel, table=True):
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON)  # 参数列表
     is_default: bool = Field(default=False)  # 是否为默认环境
     user_id: Optional[int] = Field(default=None)  # 可以根据需要添加用户关联
+
+
+class HistoryPrompt(BaseModel, table=True):
+    """历史需求描述（提示词）数据模型"""
+    content: str = Field(default="", description="需求描述内容")
+    module_id: Optional[int] = Field(default=None, foreign_key="module.id", description="关联模块ID")
+    session_id: Optional[int] = Field(default=None, foreign_key="session.id", description="关联会话ID")
+
+    # 定义与模块的多对一关系
+    module: Optional["Module"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[HistoryPrompt.module_id]"})
+    # 定义与会话的多对一关系
+    session: Optional["Session"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[HistoryPrompt.session_id]"})

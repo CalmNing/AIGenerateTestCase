@@ -67,3 +67,13 @@ export interface TestCaseFilters {
   exist_bug?: boolean;
   module_id?: number | string;
 }
+
+// 历史提示词类型
+export interface HistoryPrompt {
+  id: number;
+  content: string;
+  module_id: number | null;
+  session_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
