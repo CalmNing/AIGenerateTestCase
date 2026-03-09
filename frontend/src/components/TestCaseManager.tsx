@@ -59,9 +59,9 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       const exportData = testcases.map(tc => ({
         '用例名称': tc.case_name,
         '用例级别': `P${tc.case_level}`,
-        '前置条件': tc.preset_conditions.join('\n'),
-        '测试步骤': tc.steps.join('\n'),
-        '预期结果': tc.expected_results.join('\n'),
+        '前置条件': tc.preset_conditions.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
+        '测试步骤': tc.steps.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
+        '预期结果': tc.expected_results.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
         '状态': tc.status === TestCaseStatus.PASSED ? '已通过' :
           tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
         'bug': tc.bug_id ? `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}` : '',
