@@ -265,7 +265,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
       {/* 右侧历史提示词侧边栏 */}
       <HistoryPromptSidebar
         moduleId={selectedModule}
-        sessionId={selectedSession?.id ?? null}
         onSelectPrompt={handleSelectPrompt}
         onPromptsChange={handlePromptsChange}
         refreshKey={historyPromptRefreshKey}

@@ -8,7 +8,6 @@ const { Text } = Typography;
 
 interface HistoryPromptSidebarProps {
   moduleId: number | string | null;
-  sessionId: number | null;
   onSelectPrompt: (content: string) => void;
   onPromptsChange?: () => void;
   refreshKey?: number; // 用于触发刷新的key
@@ -16,7 +15,6 @@ interface HistoryPromptSidebarProps {
 
 const HistoryPromptSidebar: React.FC<HistoryPromptSidebarProps> = ({
   moduleId,
-  sessionId,
   onSelectPrompt,
   onPromptsChange,
   refreshKey
