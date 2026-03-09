@@ -132,7 +132,7 @@ def create_testcase_agent(
 
 
 # 生成测试用例
-def generate_testcases(
+async def generate_testcases(
         session_id: int,
         module_id: int,
         requirement: Optional[str],
@@ -175,7 +175,7 @@ def generate_testcases(
                 return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 data="模型需求入参不能为空")
             # 修复：直接传入HumanMessage对象，而不是列表
-            response = agent.invoke(
+            response = await agent.ainvoke(
                 {"messages": [{"role": "user", "content": requirement}]},
                 config={"configurable": {"thread_id": f"{session_id}"}},
             )
@@ -196,7 +196,7 @@ def generate_testcases(
                        f"只用JSON回复。"),
             ("human", requirement),
         ]
-        response = model.invoke(messages)
+        response = await model.ainvoke(messages)
         logger.info(f"本地模型调用: type={model_type}")
     duration = time.time() - start
     logger.info(f"模型调用完成: type={model_type} duration={duration:.2f}s")

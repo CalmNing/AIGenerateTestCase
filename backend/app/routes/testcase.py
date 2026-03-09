@@ -180,7 +180,7 @@ async def generate_testcases(
         return Response(code=status.HTTP_400_BAD_REQUEST,
                         data="Ollama 配置不完整（ollama_url/ollama_model）")
 
-    testcases = generate_testcases(
+    testcases = await generate_testcases(
         requirement=requirement,
         session_id=session_id,
         module_id=module_id,
