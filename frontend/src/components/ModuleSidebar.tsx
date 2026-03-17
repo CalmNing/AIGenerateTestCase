@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Layout, Typography, Button, Space, Popover, Tree, ConfigProvider } from 'antd';
-import { PlusOutlined, ProjectTwoTone, EllipsisOutlined, FolderOutlined, FileOutlined, DownOutlined } from '@ant-design/icons';
+import { PlusOutlined, ProjectTwoTone, EllipsisOutlined, FolderOutlined, FileOutlined } from '@ant-design/icons';
 import { Module } from '../types';
 import type { TreeDataNode, TreeProps } from 'antd';
 
