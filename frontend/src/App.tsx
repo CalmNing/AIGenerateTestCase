@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, notification, Form, Tabs, Modal, Input, Button } from 'antd';
+import { Layout, notification, Form, Tabs, Modal, Input, Button, Select } from 'antd';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi, historyPromptApi } from './services/api';
 import HomePage from './components/HomePage';
@@ -42,6 +42,8 @@ const App: React.FC = () => {
   const [editSessionName, setEditSessionName] = useState('');
   const [newModuleName, setNewModuleName] = useState('');
   const [editModuleName, setEditModuleName] = useState('');
+  const [newModuleParentId, setNewModuleParentId] = useState<number | null>(null);
+  const [editModuleParentId, setEditModuleParentId] = useState<number | null>(null);
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
@@ -137,7 +139,8 @@ const App: React.FC = () => {
   };
 
   // 打开新增模块对话框
-  const handleOpenAddModuleModal = () => {
+  const handleOpenAddModuleModal = (parentId?: number) => {
+    setNewModuleParentId(parentId || null);
     setIsAddModuleModalVisible(true);
   };
 
@@ -148,12 +151,14 @@ const App: React.FC = () => {
     try {
       const response: ApiResponse<Module> | any = await moduleApi.createModule({
         module_name: newModuleName.trim(),
-        session_id: selectedSession.id
+        session_id: selectedSession.id,
+        parent_id: newModuleParentId
       });
 
       if (response.code === 200 && response.data) {
         setModules([...modules, response.data]);
         setNewModuleName('');
+        setNewModuleParentId(null);
         setIsAddModuleModalVisible(false);
         notification.success({
           message: '创建成功',
@@ -203,6 +208,7 @@ const App: React.FC = () => {
   const handleEditModule = (module: Module) => {
     setModuleToEdit(module);
     setEditModuleName(module.module_name);
+    setEditModuleParentId(module.parent_id);
     setIsEditModuleModalVisible(true);
   };
 
@@ -213,7 +219,8 @@ const App: React.FC = () => {
     try {
       const response: ApiResponse<Module> | any = await moduleApi.updateModule(moduleToEdit.id!, {
         ...moduleToEdit,
-        module_name: editModuleName.trim()
+        module_name: editModuleName.trim(),
+        parent_id: editModuleParentId
       });
 
       if (response.code === 200 && response.data) {
@@ -1079,16 +1086,39 @@ const App: React.FC = () => {
             title="新增模块"
             open={isAddModuleModalVisible}
             onOk={handleCreateModule}
-            onCancel={() => setIsAddModuleModalVisible(false)}
+            onCancel={() => {
+              setIsAddModuleModalVisible(false);
+              setNewModuleParentId(null);
+            }}
             confirmLoading={loading}
           >
-            <Input
-              placeholder="请输入模块名称"
-              value={newModuleName}
-              onChange={(e) => setNewModuleName(e.target.value)}
-              onPressEnter={handleCreateModule}
-              style={{ marginBottom: '8px' }}
-            />
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', marginBottom: '4px' }}>父模块：</label>
+              <Select
+                placeholder="请选择父模块（可选）"
+                value={newModuleParentId}
+                onChange={(value) => setNewModuleParentId(value)}
+                style={{ width: '100%' }}
+                allowClear
+                showSearch
+                optionFilterProp="children"
+              >
+                {modules.map(m => (
+                  <Select.Option key={m.id} value={m.id!}>
+                    {m.module_name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '4px' }}>模块名称：</label>
+              <Input
+                placeholder="请输入模块名称"
+                value={newModuleName}
+                onChange={(e) => setNewModuleName(e.target.value)}
+                onPressEnter={handleCreateModule}
+              />
+            </div>
           </Modal>
 
           <Modal
@@ -1098,13 +1128,36 @@ const App: React.FC = () => {
             onCancel={() => setIsEditModuleModalVisible(false)}
             confirmLoading={loading}
           >
-            <Input
-              placeholder="请输入模块名称"
-              value={editModuleName}
-              onChange={(e) => setEditModuleName(e.target.value)}
-              onPressEnter={handleUpdateModule}
-              style={{ marginBottom: '8px' }}
-            />
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', marginBottom: '4px' }}>父模块：</label>
+              <Select
+                placeholder="请选择父模块（可选）"
+                value={editModuleParentId}
+                onChange={(value) => setEditModuleParentId(value)}
+                style={{ width: '100%' }}
+                allowClear
+                showSearch
+                optionFilterProp="children"
+              >
+                {/* 排除当前编辑的模块及其子模块 */}
+                {modules
+                  .filter(m => m.id !== moduleToEdit?.id)
+                  .map(m => (
+                    <Select.Option key={m.id} value={m.id!}>
+                      {m.module_name}
+                    </Select.Option>
+                  ))}
+              </Select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '4px' }}>模块名称：</label>
+              <Input
+                placeholder="请输入模块名称"
+                value={editModuleName}
+                onChange={(e) => setEditModuleName(e.target.value)}
+                onPressEnter={handleUpdateModule}
+              />
+            </div>
           </Modal>
 
           <Modal

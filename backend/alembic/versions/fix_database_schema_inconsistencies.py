@@ -5,7 +5,7 @@ from sqlalchemy.dialects import sqlite
 
 
 revision = 'fix_database_schema'
-down_revision = 'be3a6233c1bd'
+down_revision = 'c1a2b3c4d5e6'
 branch_labels = None
 depends_on = None
 

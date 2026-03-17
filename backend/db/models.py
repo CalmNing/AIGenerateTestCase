@@ -89,9 +89,20 @@ class Module(BaseModel, table=True):
     """模块数据模型"""
     module_name: str = Field(default="")
     session_id: Optional[int] = Field(default=None, foreign_key="session.id")
+    parent_id: Optional[int] = Field(default=None, foreign_key="module.id")
 
     # 添加与会话的一对多关系
     session: Optional[Session] = Relationship(back_populates="modules")
+    # 子模块关系
+    children: List["Module"] = Relationship(
+        back_populates="parent",
+        sa_relationship_kwargs={"foreign_keys": "[Module.parent_id]"}
+    )
+    # 父模块关系
+    parent: Optional["Module"] = Relationship(
+        back_populates="children",
+        sa_relationship_kwargs={"foreign_keys": "[Module.parent_id]", "remote_side": "Module.id"}
+    )
 
 
 class SavedRequest(BaseModel, table=True):

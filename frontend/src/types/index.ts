@@ -55,8 +55,18 @@ export interface Module {
   id: number | null;
   module_name: string;
   session_id: number | null;
+  parent_id: number | null;
   created_at: string;
   updated_at: string;
+}
+
+// 树形模块类型
+export interface ModuleTree {
+  id: number;
+  module_name: string;
+  session_id: number;
+  parent_id: number | null;
+  children: ModuleTree[];
 }
 
 // 刷选条件参数类型
