@@ -80,6 +80,13 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // 当选择"全部"节点时，如果当前在"生成测试用例"页签，自动切换到"管理测试用例"
+  useEffect(() => {
+    if (selectedModule === 0 && activeTab === 'generate') {
+      setActiveTab('manage');
+    }
+  }, [selectedModule]);
+
   // 加载会话列表
   const loadSessions = async () => {
     try {
@@ -622,7 +629,7 @@ const App: React.FC = () => {
         setTestcases(testcases.map(tc =>
           tc.id === testcaseToComplete.id ? updatedTestcase : tc
         ));
-        loadTestcases(selectedSession.id, filters);
+        // loadTestcases(selectedSession.id, filters);
         setSelectedTestcase(updatedTestcase);
         setCurrentIndex(testcases.findIndex(tc => tc.id === updatedTestcase.id));
         // 显示成功通知
@@ -984,59 +991,99 @@ const App: React.FC = () => {
                       loadTestcases(selectedSession.id, filters);
                     }
                   }}
-                  items={[
-                    {
-                      key: 'generate',
-                      label: '生成测试用例',
-                      children: (
-                        <TestCaseGenerator
-                          selectedSession={selectedSession}
-                          modules={modules}
-                          selectedModule={selectedModule}
-                          requirement={requirement}
-                          loading={loading}
-                          onRequirementChange={setRequirement}
-                          onGenerate={handleGenerateTestcases}
-                          // imageBase64={imageBase64}
-                          // onImageChange={setImageBase64}
-                          historyPromptRefreshKey={historyPromptRefreshKey}
-                        />
-                      ),
-                    },
-                    {
-                      key: 'manage',
-                      label: '管理测试用例',
-                      children: (
-                        <TestCaseManager
-                          testcasesResponse={testcasesResponse}
-                          modules={modules}
-                          selectedSession={selectedSession}
-                          selectedModule={selectedModule}
-                          testcases={testcases}
-                          filters={filters ?? undefined}
-                          onFiltersChange={(newFilters) => {
-                            // 合并当前选中的模块ID到过滤器中
-                            const mergedFilters = {
-                              ...newFilters,
-                              module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                            };
-                            setFilters(mergedFilters);
-                            // 重新加载测试用例
-                            loadTestcases(selectedSession?.id ?? undefined, mergedFilters);
-                          }}
-                          onLoadTestcases={loadTestcases}
-                          onView={handleViewTestcase}
-                          onEdit={handleEditTestcase}
-                          onComplete={handleCompleteTestcase}
-                          onDelete={handleDeleteTestcase}
-                          onBatchDelete={handleBatchDeleteTestcases}
-                          onBatchMove={handleBatchMoveTestcase}
-                          onAdd={handleOpenAddTestcaseModal}
-                          onMove={handleMoveTestcase}
-                        />
-                      ),
-                    },
-                  ]}
+                  items={
+                    selectedModule === 0
+                      ? [
+                          // 只显示"管理测试用例"页签
+                          {
+                            key: 'manage',
+                            label: '管理测试用例',
+                            children: (
+                              <TestCaseManager
+                                testcasesResponse={testcasesResponse}
+                                modules={modules}
+                                selectedSession={selectedSession}
+                                selectedModule={selectedModule}
+                                testcases={testcases}
+                                filters={filters ?? undefined}
+                                onFiltersChange={(newFilters) => {
+                                  // 合并当前选中的模块ID到过滤器中
+                                  const mergedFilters = {
+                                    ...newFilters,
+                                    module_id: selectedModule === 0 ? undefined : Number(selectedModule)
+                                  };
+                                  setFilters(mergedFilters);
+                                  // 重新加载测试用例
+                                  loadTestcases(selectedSession?.id ?? undefined, mergedFilters);
+                                }}
+                                onLoadTestcases={loadTestcases}
+                                onView={handleViewTestcase}
+                                onEdit={handleEditTestcase}
+                                onComplete={handleCompleteTestcase}
+                                onDelete={handleDeleteTestcase}
+                                onBatchDelete={handleBatchDeleteTestcases}
+                                onBatchMove={handleBatchMoveTestcase}
+                                onAdd={handleOpenAddTestcaseModal}
+                                onMove={handleMoveTestcase}
+                              />
+                            ),
+                          },
+                        ]
+                      : [
+                          // 显示两个页签
+                          {
+                            key: 'generate',
+                            label: '生成测试用例',
+                            children: (
+                              <TestCaseGenerator
+                                selectedSession={selectedSession}
+                                modules={modules}
+                                selectedModule={selectedModule}
+                                requirement={requirement}
+                                loading={loading}
+                                onRequirementChange={setRequirement}
+                                onGenerate={handleGenerateTestcases}
+                                // imageBase64={imageBase64}
+                                // onImageChange={setImageBase64}
+                                historyPromptRefreshKey={historyPromptRefreshKey}
+                              />
+                            ),
+                          },
+                          {
+                            key: 'manage',
+                            label: '管理测试用例',
+                            children: (
+                              <TestCaseManager
+                                testcasesResponse={testcasesResponse}
+                                modules={modules}
+                                selectedSession={selectedSession}
+                                selectedModule={selectedModule}
+                                testcases={testcases}
+                                filters={filters ?? undefined}
+                                onFiltersChange={(newFilters) => {
+                                  // 合并当前选中的模块ID到过滤器中
+                                  const mergedFilters = {
+                                    ...newFilters,
+                                    module_id: selectedModule === 0 ? undefined : Number(selectedModule)
+                                  };
+                                  setFilters(mergedFilters);
+                                  // 重新加载测试用例
+                                  loadTestcases(selectedSession?.id ?? undefined, mergedFilters);
+                                }}
+                                onLoadTestcases={loadTestcases}
+                                onView={handleViewTestcase}
+                                onEdit={handleEditTestcase}
+                                onComplete={handleCompleteTestcase}
+                                onDelete={handleDeleteTestcase}
+                                onBatchDelete={handleBatchDeleteTestcases}
+                                onBatchMove={handleBatchMoveTestcase}
+                                onAdd={handleOpenAddTestcaseModal}
+                                onMove={handleMoveTestcase}
+                              />
+                            ),
+                          },
+                        ]
+                  }
                 />
               </Content>
             </Layout>

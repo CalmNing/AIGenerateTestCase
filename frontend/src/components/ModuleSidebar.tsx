@@ -191,7 +191,6 @@ const ModuleSidebar: React.FC<ModuleSidebarProps> = ({
             components: {
               Tree: {
                 titleHeight: 36,
-                width: 1,
               },
             },
           }}

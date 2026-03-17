@@ -32,7 +32,7 @@ def get_testcases(
         session: SessionDep,
         module_id: int = None,
         offset: int = 0,
-        limit: Annotated[int, Query(le=100)] = 100,
+        limit: Annotated[int, Query(le=1000)] = 1000,
         case_name: str = None,
         status: str = None,
         bug_id: str = None,
