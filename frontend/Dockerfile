@@ -1,6 +1,6 @@
 FROM node:18 as build
 WORKDIR /app
-COPY package.json pnpm-lock.yaml ./ 
+COPY package.json ./
 RUN npm install
 COPY . .
 RUN pnpm run build
