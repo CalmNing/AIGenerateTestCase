@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Form, Select, Input, Button, Tabs, Space, Table, message, Modal } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Form, Select, Input, Button, Tabs, Space, Table, message, Modal, Tooltip } from 'antd';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import axios, { AxiosRequestConfig } from 'axios';
+import CodeMirror from '@uiw/react-codemirror';
+import { json } from '@codemirror/lang-json';
 
 interface HeaderItem {
   key: string;
@@ -58,6 +60,72 @@ const IoTMockPlatform: React.FC = () => {
   const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]); // 环境列表
   const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>('env-1'); // 当前选中的环境
   const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false); // 全局参数模态框
+
+  // 稳定 CodeMirror 扩展引用，避免每次渲染重建
+  const jsonExtensions = useMemo(() => [json()], []);
+
+  // 请求体内容变更回调
+  const handleBodyChange = useCallback((value: string) => {
+    form.setFieldsValue({ body: value });
+    setTabs(prevTabs => prevTabs.map(tab =>
+      tab.id === activeTabId ? { ...tab, body: value, hasUnsavedChanges: true } : tab
+    ));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
+
+  // 拖拽调整面板大小
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [leftWidth, setLeftWidth] = useState(35);
+  const [middleWidth, setMiddleWidth] = useState(40);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [rightWidth, setRightWidth] = useState(25);
+  const [isDragging, setIsDragging] = useState<'left' | 'right' | null>(null);
+  const startXRef = useRef(0);
+  const startWidthsRef = useRef({ left: 0, middle: 0, right: 0 });
+
+  const handleMouseDown = useCallback((divider: 'left' | 'right', e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(divider);
+    startXRef.current = e.clientX;
+    startWidthsRef.current = { left: leftWidth, middle: middleWidth, right: rightWidth };
+  }, [leftWidth, middleWidth, rightWidth]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const containerWidth = containerRef.current?.offsetWidth || window.innerWidth;
+    const minW = 15;
+    const savedRightWidth = rightCollapsed ? 0 : startWidthsRef.current.right;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = e.clientX - startXRef.current;
+      const dxPercent = (dx / containerWidth) * 100;
+
+      if (isDragging === 'left') {
+        const newLeft = Math.max(minW, Math.min(containerWidth * 0.6, startWidthsRef.current.left + dxPercent));
+        const newMiddle = 100 - newLeft - savedRightWidth;
+        if (newMiddle >= minW) {
+          setLeftWidth(newLeft);
+          setMiddleWidth(newMiddle);
+        }
+      } else {
+        const newMiddle = Math.max(minW, Math.min(containerWidth * 0.6, startWidthsRef.current.middle + dxPercent));
+        const newRight = 100 - startWidthsRef.current.left - newMiddle;
+        if (newRight >= minW || rightCollapsed) {
+          setMiddleWidth(newMiddle);
+          if (!rightCollapsed) setRightWidth(newRight);
+        }
+      }
+    };
+
+    const handleMouseUp = () => setIsDragging(null);
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, rightCollapsed]);
 
   // 从后端API获取保存的请求配置
   useEffect(() => {
@@ -476,8 +544,75 @@ const IoTMockPlatform: React.FC = () => {
       const substituteVariables = (str: string): string => {
         if (!str) return str;
 
-        // Replace {{variable}} syntax
-        let result = str.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
+        // Replace {{@expression}} - execute JS expression
+        // Example: {{@Date.now()}}, {{@Math.random().toFixed(2)}}, {{@new Date().toISOString()}}
+        let result = str.replace(/\{\{@([^}]+)\}\}/g, (_match, expr) => {
+          try {
+            const fn = new Function('return ' + expr.trim());
+            const val = fn();
+            return val !== undefined && val !== null ? String(val) : _match;
+          } catch {
+            return _match;
+          }
+        });
+
+        // Replace {{$functionName}} and {{$functionName(args)}} - built-in helpers
+        // Built-in: $timestamp, $randomInt, $randomInt(min,max), $uuid, $date(format), $now
+        result = result.replace(/\{\{(\$[^}]+)\}\}/g, (_match, expr) => {
+          const trimmed = expr.trim();
+
+          // $timestamp - 当前时间戳（毫秒）
+          if (trimmed === '$timestamp') return String(Date.now());
+
+          // $now - 当前时间戳（秒）
+          if (trimmed === '$now') return String(Math.floor(Date.now() / 1000));
+
+          // $randomInt(min,max) - 随机整数
+          const randMatch = trimmed.match(/^\$randomInt\((\d+)\s*,\s*(\d+)\)$/);
+          if (randMatch) {
+            const min = parseInt(randMatch[1], 10);
+            const max = parseInt(randMatch[2], 10);
+            return String(Math.floor(Math.random() * (max - min + 1)) + min);
+          }
+
+          // $randomInt - 0~100 随机整数
+          if (trimmed === '$randomInt') return String(Math.floor(Math.random() * 101));
+
+          // $uuid - 生成 UUID v4
+          if (trimmed === '$uuid') {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+              const r = Math.random() * 16 | 0;
+              return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+          }
+
+          // $date(format) - 按格式生成日期，格式符: YYYY MM DD HH mm ss SSS
+          const dateMatch = trimmed.match(/^\$date\((.+)\)$/);
+          if (dateMatch) {
+            const fmt = dateMatch[1].trim().replace(/^['"]|['"]$/g, '');
+            const d = new Date();
+            const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+            return fmt
+              .replace('YYYY', String(d.getFullYear()))
+              .replace('MM', pad(d.getMonth() + 1))
+              .replace('DD', pad(d.getDate()))
+              .replace('HH', pad(d.getHours()))
+              .replace('mm', pad(d.getMinutes()))
+              .replace('ss', pad(d.getSeconds()))
+              .replace('SSS', pad(d.getMilliseconds(), 3));
+          }
+
+          // $date - 默认格式 YYYY-MM-DD
+          if (trimmed === '$date') {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          }
+
+          return _match;
+        });
+
+        // Replace {{variable}} syntax (user-defined parameters)
+        result = result.replace(/\{\{([^}$@][^}]*)\}\}/g, (match, key) => {
           return paramMap.get(key.trim()) || match;
         });
 
@@ -529,7 +664,10 @@ const IoTMockPlatform: React.FC = () => {
       // 更新当前标签页的内容
       updateCurrentTab({
         method,
-        url
+        url,
+        body,
+        headers,
+        parameters,
       });
 
       const endTime = Date.now();
@@ -640,6 +778,9 @@ const IoTMockPlatform: React.FC = () => {
               name: saveRequestName.trim(),
               method,
               url,
+              headers,
+              parameters,
+              body,
               savedRequestId: response.data.data.id,
               hasUnsavedChanges: false
             } : tab
@@ -669,6 +810,9 @@ const IoTMockPlatform: React.FC = () => {
               name: saveRequestName.trim(),
               method,
               url,
+              headers,
+              parameters,
+              body,
               savedRequestId: response.data.data.id,
               hasUnsavedChanges: false
             } : tab
@@ -758,478 +902,675 @@ const IoTMockPlatform: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '10px', minHeight: '70vh', maxHeight: '100vh', background: '#f0f2f5' }}>
-      <Card
-        title={
-          <Space style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span></span>
-            <Space>
-              <Button
-                type="default"
-                icon={<SyncOutlined />}
-                onClick={() => setIsGlobalParamsModalVisible(true)}
-                size="middle"
-              >
-                全局参数
-              </Button>
-              <Button
-                type="default"
-                icon={<PlusOutlined />}
-                onClick={addNewTab}
-                size="middle"
-              >
-                新增请求
-              </Button>
-            </Space>
-          </Space>
-        }
-        style={{
-          marginBottom: '20px',
-          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
-          borderRadius: '8px'
-        }}
-      >
-        <div style={{ display: 'flex', gap: '20px', height: '76vh', overflow: 'auto' }}>
-          {/* 左侧：请求配置 */}
-          <div style={{ flex: 2, minWidth: 400, display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
-            <Tabs
-              activeKey={activeTabId}
-              onChange={setActiveTabId}
-              items={tabs.map(tab => ({
-                key: tab.id,
-                label: (
-                  <Space>
-                    {tab.name}
-                    <Button
-                      size="small"
-                      type="text"
-                      danger
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        closeTab(tab.id);
-                      }}
-                    >
-                      ×
-                    </Button>
-                  </Space>
-                ),
-                children: (
-                  <div style={{ height: '100%', overflow: 'auto', padding: '10px' }}>
-                    <Form form={form} layout="vertical">
-                      <Form.Item label="请求配置">
-                        <Space style={{ width: '100%', flexWrap: 'wrap' }}>
-                          <Form.Item name="method" noStyle>
-                            <Select
-                              style={{ width: 120 }}
-                              size="middle"
-                              onChange={(value: string) => updateCurrentTab({ method: value })}
-                            >
-                              {methods.map(method => (
-                                <Select.Option key={method} value={method}>{method}</Select.Option>
-                              ))}
-                            </Select>
-                          </Form.Item>
-                          <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
+    <div style={{ padding: '8px 10px', height: 'calc(100vh - 88px)', background: '#f0f2f5', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* 顶部工具栏 */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '8px 12px',
+        background: '#fff',
+        borderRadius: '6px',
+        marginBottom: '8px',
+        boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+        flexShrink: 0,
+      }}>
+        <span style={{ fontWeight: 600, fontSize: 15, color: '#333' }}>IoT Mock 平台</span>
+        <Space>
+          <Button
+            type="default"
+            icon={<SyncOutlined />}
+            onClick={() => setIsGlobalParamsModalVisible(true)}
+            size="middle"
+          >
+            全局参数
+          </Button>
+          <Button
+            type="default"
+            icon={<PlusOutlined />}
+            onClick={addNewTab}
+            size="middle"
+          >
+            新增请求
+          </Button>
+        </Space>
+      </div>
+
+      {/* 三栏可拖拽布局 */}
+      <div ref={containerRef} style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative' }}>
+        {/* 左侧：请求配置 */}
+        <div style={{
+          width: `${rightCollapsed ? leftWidth + rightWidth / 2 : leftWidth}%`,
+          minWidth: 250,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          background: '#fff',
+          borderRadius: '6px',
+          boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+          marginRight: rightCollapsed ? '4px' : undefined,
+        }}>
+          <Tabs
+            activeKey={activeTabId}
+            onChange={setActiveTabId}
+            size="small"
+            style={{ height: '100%', display: 'flex', flexDirection: 'column', marginLeft: 10 }}
+            items={tabs.map(tab => ({
+              key: tab.id,
+              label: (
+                <Space size={4}>
+                  {tab.name}
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTab(tab.id);
+                    }}
+                    style={{ fontSize: 12, minWidth: 16, padding: '0 2px' }}
+                  >
+                    ×
+                  </Button>
+                </Space>
+              ),
+              children: (
+                <div style={{ height: '100%', overflow: 'auto', padding: '8px 12px' }}>
+                  <Form form={form} layout="vertical" size="middle">
+                    <Form.Item label="请求配置" style={{ marginBottom: 12 }}>
+                      <Space.Compact style={{ width: '100%' }}>
+                        <Form.Item name="method" noStyle>
+                          <Select
+                            style={{ width: 110 }}
+                            onChange={(value: string) => updateCurrentTab({ method: value })}
+                          >
+                            {methods.map(method => (
+                              <Select.Option key={method} value={method}>{method}</Select.Option>
+                            ))}
+                          </Select>
+                        </Form.Item>
+                        <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
+                          <Input
+                            placeholder="请输入请求URL"
+                            onChange={(e) => updateCurrentTab({ url: e.target.value })}
+                          />
+                        </Form.Item>
+                        {/* 隐藏字段，确保 body 能被 validateFields 返回 */}
+                        <Form.Item name="body" hidden>
+                          <Input />
+                        </Form.Item>
+                      </Space.Compact>
+                      <Space style={{ marginTop: 8, width: '100%' }}>
+                        <Button
+                          type="primary"
+                          icon={<SendOutlined />}
+                          onClick={handleSendRequest}
+                          loading={loading}
+                        >
+                          发送
+                        </Button>
+                        <Button
+                          icon={<SaveOutlined />}
+                          onClick={handleOpenSaveModal}
+                        >
+                          保存
+                        </Button>
+                      </Space>
+                    </Form.Item>
+
+                    <Form.Item label="请求头" style={{ marginBottom: 12 }}>
+                      <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 200, overflow: 'auto' }}>
+                        {headers.map((header, index) => (
+                          <Space
+                            key={index}
+                            style={{ width: '100%', marginBottom: '8px' }}
+                            align="center"
+                            size={4}
+                          >
                             <Input
-                              placeholder="请输入请求URL"
-                              style={{ flex: 1, minWidth: 300 }}
-                              size="middle"
-                              onChange={(e) => updateCurrentTab({ url: e.target.value })}
+                              placeholder="Key"
+                              value={header.key}
+                              onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
+                              style={{ width: 200 }}
+                            // size="medium"
                             />
-                          </Form.Item>
-                          <Button
-                            type="primary"
-                            icon={<SendOutlined />}
-                            onClick={handleSendRequest}
-                            loading={loading}
-                            size="middle"
-                            style={{ marginLeft: '8px' }}
-                          >
-                            发送
-                          </Button>
-                          <Button
-                            type="default"
-                            icon={<SaveOutlined />}
-                            onClick={handleOpenSaveModal}
-                            size="middle"
-                            style={{ marginLeft: '8px' }}
-                          >
-                            保存
-                          </Button>
-                        </Space>
-                      </Form.Item>
+                            <Input
+                              placeholder="Value"
+                              value={header.value}
+                              onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
+                              style={{ flex: 1, width: 330 }}
+                            // size="medium"
+                            />
+                            <Button
+                              icon={<MinusOutlined />}
+                              danger
+                              onClick={() => handleRemoveHeader(index)}
+                            // size="medium"
+                            />
+                          </Space>
+                        ))}
+                        <Button
+                          type="dashed"
+                          icon={<PlusOutlined />}
+                          onClick={handleAddHeader}
+                          style={{ marginTop: '4px' }}
+                          // size="small"
+                          block
+                        >
+                          添加请求头
+                        </Button>
+                      </div>
+                    </Form.Item>
 
-                      <Form.Item label="请求头">
-                        <div style={{ padding: '12px', background: '#fafafa', borderRadius: '4px', maxHeight: 300, overflow: 'auto' }}>
-                          {headers.map((header, index) => (
-                            <Space
-                              key={index}
-                              style={{ width: '100%', marginBottom: '8px' }}
-                              align="center"
-                            >
-                              <Input
-                                placeholder="Key"
-                                value={header.key}
-                                onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
-                                style={{ width: 200 }}
-                                size="middle"
-                              />
-                              <Input
-                                placeholder="Value"
-                                value={header.value}
-                                onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
-                                style={{ flex: 1 }}
-                                size="middle"
-                              />
-                              <Button
-                                icon={<MinusOutlined />}
-                                danger
-                                onClick={() => handleRemoveHeader(index)}
-                                size="small"
-                              />
-                            </Space>
-                          ))}
-                          <Button
-                            type="dashed"
-                            icon={<PlusOutlined />}
-                            onClick={handleAddHeader}
-                            style={{ marginTop: '8px' }}
-                            size="middle"
+                    <Form.Item label="请求参数" style={{ marginBottom: 0 }}>
+                      <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 200, overflow: 'auto' }}>
+                        {parameters.map((param, index) => (
+                          <Space
+                            key={index}
+                            style={{ width: '100%', marginBottom: '6px' }}
+                            align="center"
+                            size={4}
                           >
-                            添加请求头
-                          </Button>
-                        </div>
-                      </Form.Item>
+                            <Input
+                              placeholder="参数名"
+                              value={param.key}
+                              onChange={(e) => handleParameterChange(index, 'key', e.target.value)}
+                              style={{ width: 200 }}
+                            // size="small"
+                            />
+                            <Input
+                              placeholder="参数值"
+                              value={param.value}
+                              onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
+                              style={{ flex: 1, width: 330 }}
+                            // size="small"
+                            />
+                            <Button
+                              icon={<MinusOutlined />}
+                              danger
+                              onClick={() => handleRemoveParameter(index)}
+                            // size="small"
+                            />
+                          </Space>
+                        ))}
+                        <Button
+                          type="dashed"
+                          icon={<PlusOutlined />}
+                          onClick={handleAddParameter}
+                          style={{ marginTop: '4px' }}
+                          // size="small"
+                          block
+                        >
+                          添加参数
+                        </Button>
+                      </div>
+                    </Form.Item>
+                  </Form>
+                </div>
+              )
+            }))}
+          />
+        </div>
 
-                      <Form.Item label="请求参数">
-                        <div style={{ padding: '12px', background: '#fafafa', borderRadius: '4px', maxHeight: 300, overflow: 'auto' }}>
-                          {parameters.map((param, index) => (
-                            <Space
-                              key={index}
-                              style={{ width: '100%', marginBottom: '8px' }}
-                              align="center"
-                            >
-                              <Input
-                                placeholder="参数名"
-                                value={param.key}
-                                onChange={(e) => handleParameterChange(index, 'key', e.target.value)}
-                                style={{ width: 200 }}
-                                size="middle"
-                              />
-                              <Input
-                                placeholder="参数值"
-                                value={param.value}
-                                onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
-                                style={{ flex: 1 }}
-                                size="middle"
-                              />
-                              <Button
-                                icon={<MinusOutlined />}
-                                danger
-                                onClick={() => handleRemoveParameter(index)}
-                                size="small"
-                              />
-                            </Space>
-                          ))}
-                          <Button
-                            type="dashed"
-                            icon={<PlusOutlined />}
-                            onClick={handleAddParameter}
-                            style={{ marginTop: '8px' }}
-                            size="middle"
-                          >
-                            添加参数
-                          </Button>
-                        </div>
-                      </Form.Item>
-                    </Form>
+        {/* 左侧拖拽手柄 */}
+        {!rightCollapsed && (
+          <div
+            onMouseDown={(e) => handleMouseDown('left', e)}
+            style={{
+              width: 6,
+              cursor: 'col-resize',
+              background: isDragging === 'left' ? '#1890ff' : 'transparent',
+              transition: 'background 0.15s',
+              flexShrink: 0,
+              position: 'relative',
+              zIndex: 10,
+            }}
+            onMouseEnter={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = '#ddd'; }}
+            onMouseLeave={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = 'transparent'; }}
+          />
+        )}
+
+        {/* 中间：请求体 + 响应结果 */}
+        <div style={{
+          width: rightCollapsed ? `${middleWidth + rightWidth / 2}%` : `${middleWidth}%`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          minWidth: 250,
+          overflow: 'hidden',
+        }}>
+          {/* 请求体 */}
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#fff',
+            borderRadius: '6px',
+            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+            overflow: 'hidden',
+            minHeight: 0,
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '6px 12px',
+              borderBottom: '1px solid #f0f0f0',
+              flexShrink: 0,
+            }}>
+              <span style={{ fontWeight: 500, fontSize: 14, color: '#333', display: 'flex', alignItems: 'center', gap: 8 }}>请求体
+                <Tooltip title={
+                  <div style={{ maxWidth: 660, fontSize: 12, lineHeight: 1.8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>1. 内置函数 {'{{$function}}'}</div>
+                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                      <tbody>
+                        <tr><td style={{ whiteSpace: 'nowrap', paddingRight: 12 }}><code>{'{{$timestamp}}'}</code></td><td>毫秒时间戳</td></tr>
+                        <tr><td><code>{'{{$now}}'}</code></td><td>秒级时间戳</td></tr>
+                        <tr><td><code>{'{{$date}}'}</code></td><td>当前日期 (YYYY-MM-DD)</td></tr>
+                        <tr><td><code>{"{{$date('YYYY-MM-DD HH:mm:ss')}}"}</code></td><td>自定义格式日期</td></tr>
+                        <tr><td><code>{'{{$randomInt}}'}</code></td><td>0~100 随机整数</td></tr>
+                        <tr><td><code>{'{{$randomInt(1,1000)}}'}</code></td><td>指定范围随机整数</td></tr>
+                        <tr><td><code>{'{{$uuid}}'}</code></td><td>UUID v4</td></tr>
+                      </tbody>
+                    </table>
+                    <div style={{ fontWeight: 600, marginTop: 8, marginBottom: 4 }}>2. JS 表达式 {'{{@expression}}'}</div>
+                    <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                      <tbody>
+                        <tr><td style={{ whiteSpace: 'nowrap', paddingRight: 12 }}><code>{'{{@Date.now()}}'}</code></td><td>JS 时间戳</td></tr>
+                        <tr><td><code>{'{{@Math.random().toFixed(4)}}'}</code></td><td>随机小数</td></tr>
+                        <tr><td><code>{'{{@new Date().toISOString()}}'}</code></td><td>ISO 日期</td></tr>
+                        <tr><td><code>{"{{@'test_' + Math.floor(Math.random()*1000)}}"}</code></td><td>拼接表达式</td></tr>
+                      </tbody>
+                    </table>
                   </div>
-                )
-              }))}
-            />
+                } 
+                overlayInnerStyle={{ maxWidth: 680 }}>
+                  
+                  <QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer', fontSize: 13 }} />
+                </Tooltip>
+              </span>
+              <Button
+                type="text"
+                icon={<FormatPainterOutlined />}
+                onClick={() => {
+                  const currentBody = form.getFieldValue('body');
+                  if (currentBody) {
+                    try {
+                      const formatted = JSON.stringify(JSON.parse(currentBody), null, 2);
+                      form.setFieldsValue({ body: formatted });
+                      updateCurrentTab({ body: formatted });
+                      message.success('JSON 格式化成功');
+                    } catch (error) {
+                      message.error('JSON 格式不正确');
+                    }
+                  }
+                }}
+                size="small"
+              >
+                格式化
+              </Button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <CodeMirror
+                value={form.getFieldValue('body') || ''}
+                height="100%"
+                extensions={jsonExtensions}
+                onChange={handleBodyChange}
+                placeholder="请输入请求体（JSON格式）"
+                style={{ fontSize: '13px' }}
+                basicSetup={{
+                  lineNumbers: true,
+                  foldGutter: true,
+                  highlightActiveLine: true,
+                }}
+              />
+            </div>
           </div>
 
-          {/* 中间：请求体和响应结果 */}
-          <div style={{ flex: 2, minWidth: 400, display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', maxHeight: '100%' }}>
-            {/* 请求体 */}
-            <Card
-              title="请求体"
-              style={{
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
-                borderRadius: '8px',
-                flex: 1,
-                minHeight: "30%",
-                maxHeight: "45%"
-              }}
-            >
-              <Form form={form} layout="vertical">
-                <Form.Item name="body" noStyle>
-                  <Input.TextArea
-                    rows={8}
-                    placeholder="请输入请求体（JSON格式）"
-                    style={{
-                      fontFamily: 'monospace',
-                      borderRadius: '4px',
-                      border: '1px solid #d9d9d9',
-                      height: '100%'
-                    }}
-                    size="middle"
-                    onChange={(e) => updateCurrentTab({ body: e.target.value })}
-                  />
-                </Form.Item>
-              </Form>
-            </Card>
-
-            {/* 响应结果 */}
-            {response && (
-              <Card
-                title="响应结果"
-                style={{
-                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
-                  borderRadius: '8px',
-                  flex: 1,
-                  minHeight: "30%",
-                  maxHeight: "50%"
-                }}
-              >
-                <div style={{ height: '100%', minHeight: 250, display: 'flex', flexDirection: 'column', maxHeight: 550 }}>
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '12px',
-                    background: '#fafafa',
-                    borderRadius: '4px',
-                    marginBottom: '12px'
-                  }}>
-                    <div>
+          {/* 响应结果 */}
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#fff',
+            borderRadius: '6px',
+            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+            overflow: 'hidden',
+            minHeight: 0,
+          }}>
+            {response ? (
+              <>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '6px 12px',
+                  borderBottom: '1px solid #f0f0f0',
+                  flexShrink: 0,
+                }}>
+                  <Space size={16}>
+                    <span style={{ fontWeight: 500, fontSize: 14, color: '#333' }}>响应结果</span>
+                    <span>
                       状态码: <strong style={{
-                        color: response.status >= 200 && response.status < 300 ? 'green' : 'red',
-                        marginLeft: '4px'
+                        color: response.status >= 200 && response.status < 300 ? '#52c41a' : '#ff4d4f',
                       }}>
                         {response.status} {response.statusText}
                       </strong>
-                    </div>
-                    <div>
-                      响应时间: <strong style={{ marginLeft: '4px' }}>{responseTime}ms</strong>
-                    </div>
-                  </div>
-                  <div style={{
-                    fontFamily: 'monospace',
-                    whiteSpace: 'pre-wrap',
-                    background: '#f5f5f5',
-                    padding: '16px',
-                    borderRadius: '4px',
-                    overflow: 'auto',
-                    border: '1px solid #e8e8e8',
-                    maxHeight: 170,
-                    minHeight: 100
-                  }}>
-                    {JSON.stringify(response.data, null, 2)}
-                  </div>
-                  <div style={{ marginTop: '12px', textAlign: 'right' }}>
-                    <Button
-                      icon={<CopyOutlined />}
-                      onClick={() => {
-                        navigator.clipboard.writeText(JSON.stringify(response.data, null, 2));
-                        message.success('响应结果已复制到剪贴板');
-                      }}
-                      size="small"
-                    >
-                      复制响应
-                    </Button>
-                  </div>
+                    </span>
+                    <span>
+                      耗时: <strong>{responseTime}ms</strong>
+                    </span>
+                  </Space>
+                  <Button
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      navigator.clipboard.writeText(JSON.stringify(response.data, null, 2));
+                      message.success('响应结果已复制到剪贴板');
+                    }}
+                    size="small"
+                  >
+                    复制
+                  </Button>
                 </div>
-              </Card>
+                <div style={{
+                  flex: 1,
+                  fontFamily: 'Consolas, Monaco, monospace',
+                  whiteSpace: 'pre-wrap',
+                  background: '#f8f9fa',
+                  padding: '12px',
+                  overflow: 'auto',
+                  fontSize: '13px',
+                  lineHeight: 1.5,
+                  minHeight: 0,
+                }}>
+                  {JSON.stringify(response.data, null, 2)}
+                </div>
+              </>
+            ) : (
+              <div style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#bfbfbf',
+                fontSize: 14,
+              }}>
+                点击发送按钮查看响应结果
+              </div>
             )}
           </div>
+        </div>
 
-          {/* 右侧：保存的请求 */}
-          <div style={{ flex: 1, minWidth: 300, maxHeight: '96%' }}>
-            <Card
-              title={
-                <Space style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>保存的请求</span>
+        {/* 右侧拖拽手柄 */}
+        {!rightCollapsed && (
+          <div
+            onMouseDown={(e) => handleMouseDown('right', e)}
+            style={{
+              width: 6,
+              cursor: 'col-resize',
+              background: isDragging === 'right' ? '#1890ff' : 'transparent',
+              transition: 'background 0.15s',
+              flexShrink: 0,
+              position: 'relative',
+              zIndex: 10,
+            }}
+            onMouseEnter={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = '#ddd'; }}
+            onMouseLeave={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = 'transparent'; }}
+          />
+        )}
+
+        {/* 右侧：保存的请求（支持收起/展开） */}
+        <div style={{
+          width: rightCollapsed ? 0 : `${rightWidth}%`,
+          minWidth: rightCollapsed ? 0 : 200,
+          overflow: 'hidden',
+          background: '#fff',
+          borderRadius: '6px',
+          boxShadow: rightCollapsed ? 'none' : '0 1px 4px rgba(0, 0, 0, 0.08)',
+          transition: rightCollapsed ? 'width 0.2s ease, minWidth 0.2s ease' : undefined,
+          flexShrink: 0,
+          position: 'relative',
+        }}>
+          {/* 收起/展开按钮（收起状态下显示） */}
+          {rightCollapsed && (
+            <Tooltip title="展开保存的请求" placement="left">
+              <Button
+                type="text"
+                icon={<LeftOutlined />}
+                onClick={() => setRightCollapsed(false)}
+                style={{
+                  position: 'absolute',
+                  top: 8,
+                  right: 8,
+                  zIndex: 20,
+                  color: '#999',
+                }}
+              />
+            </Tooltip>
+          )}
+
+          {!rightCollapsed && (
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '6px 12px',
+                borderBottom: '1px solid #f0f0f0',
+                flexShrink: 0,
+              }}>
+                <span style={{ fontWeight: 600, fontSize: 16, color: '#333' }}>保存的请求</span>
+                <Space>
                   <Button
                     icon={<SyncOutlined />}
                     onClick={fetchSavedRequests}
-                    size="small"
+                    // size="small"
                     loading={loading}
                   >
                     刷新
                   </Button>
+                  <Tooltip title="收起保存的请求">
+                    <Button
+                      type="text"
+                      icon={<RightOutlined />}
+                      onClick={() => setRightCollapsed(true)}
+                      // size="small"
+                      style={{ color: '#999' }}
+                    />
+                  </Tooltip>
                 </Space>
-              }
-              variant="outlined"
-              style={{
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.09)',
-                borderRadius: '8px',
-                height: '100%',
-                maxHeight: '100%'
-              }}
-            >
-              <Table
-                columns={savedRequestsColumns}
-                dataSource={savedRequests}
-                rowKey="id"
-                pagination={{
-                  pageSize: 10,
-                  showSizeChanger: false
-                }}
-                size="middle"
-              />
-            </Card>
-          </div>
-        </div>
-
-        {/* 保存请求配置模态框 */}
-        <Modal
-          title={editingRequest ? "编辑请求配置" : "保存请求配置"}
-          open={isSaveModalVisible}
-          onOk={handleSaveRequest}
-          onCancel={() => setIsSaveModalVisible(false)}
-          confirmLoading={loading}
-        >
-          <Input
-            placeholder="请输入请求配置名称"
-            value={saveRequestName}
-            onChange={(e) => setSaveRequestName(e.target.value)}
-            style={{ marginBottom: '16px' }}
-          />
-          <div style={{ color: '#999', fontSize: '12px' }}>
-            保存后可在右侧"保存的请求"侧边栏中查看和管理
-          </div>
-        </Modal>
-
-        {/* 全局参数配置模态框 */}
-        <Modal
-          title="全局参数配置"
-          open={isGlobalParamsModalVisible}
-          onOk={() => setIsGlobalParamsModalVisible(false)}
-          onCancel={() => setIsGlobalParamsModalVisible(false)}
-          width={600}
-        >
-          <div style={{ marginBottom: '16px' }}>
-            {/* 环境选择和管理 */}
-            <div style={{ marginBottom: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 'bold' }}>环境管理</h3>
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={handleAddEnvironment}
-                >
-                  添加环境
-                </Button>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
-                {environments.map(env => (
-                  <div
-                    key={env.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: '4px 12px',
-                      borderRadius: '16px',
-                      background: currentEnvironmentId === env.id ? '#1890ff' : '#f0f0f0',
-                      color: currentEnvironmentId === env.id ? '#fff' : '#333',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      gap: '8px'
-                    }}
-                    onClick={() => handleSwitchEnvironment(env.id)}
-                  >
-                    <span>{env.name}</span>
-                    {environments.length > 1 && (
-                      <Button
-                        type="text"
-                        size="small"
-                        style={{
-                          color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999',
-                          padding: 0,
-                          margin: 0,
-                          width: '20px',
-                          height: '20px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveEnvironment(env.id);
-                        }}
-                      >
-                        ×
-                      </Button>
-                    )}
-                  </div>
-                ))}
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                <Table
+                  columns={savedRequestsColumns}
+                  dataSource={savedRequests}
+                  rowKey="id"
+                  pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
+                  size="small"
+                  style={{ fontSize: 13 }}
+                  sticky
+                  scroll={{ y: 100 * 6 }}
+                />
               </div>
             </div>
+          )}
+        </div>
 
-            {/* 当前环境的参数 */}
-            <p style={{ color: '#666', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
-
-            {getCurrentEnvironment().parameters.map((param, index) => (
-              <Space
-                key={index}
-                style={{ width: '100%', marginBottom: '12px' }}
-                align="center"
-              >
-                <Input
-                  placeholder="参数名"
-                  value={param.key}
-                  onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
-                  style={{ width: 150 }}
-                  size="middle"
-                />
-                <Input
-                  placeholder="参数值"
-                  value={param.value}
-                  onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
-                  style={{ flex: 1 }}
-                  size="middle"
-                />
-                <Button
-                  icon={<MinusOutlined />}
-                  danger
-                  onClick={() => handleRemoveEnvironmentParameter(index)}
-                  size="small"
-                />
-              </Space>
-            ))}
-
+        {/* 收起状态下的展开按钮 */}
+        {rightCollapsed && (
+          <Tooltip title="展开保存的请求" placement="left">
             <Button
-              type="dashed"
-              icon={<PlusOutlined />}
-              onClick={handleAddEnvironmentParameter}
-              style={{ marginTop: '8px', width: '100%' }}
-              size="middle"
-            >
-              添加全局参数
-            </Button>
-          </div>
-        </Modal>
+              type="text"
+              icon={<LeftOutlined />}
+              onClick={() => setRightCollapsed(false)}
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                zIndex: 20,
+                background: '#fff',
+                boxShadow: '0 1px 4px rgba(0, 0, 0, 0.12)',
+                borderRadius: '6px 0 0 6px',
+                width: 24,
+                height: 64,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#666',
+              }}
+            />
+          </Tooltip>
+        )}
+      </div>
 
-        {/* 添加环境模态框 */}
-        <Modal
-          title="创建新环境"
-          open={isAddEnvModalVisible}
-          onOk={handleConfirmAddEnvironment}
-          onCancel={() => setIsAddEnvModalVisible(false)}
-          width={400}
-        >
-          <Input
-            placeholder="请输入环境名称"
-            value={newEnvironmentName}
-            onChange={(e) => setNewEnvironmentName(e.target.value)}
-            style={{ marginBottom: '16px' }}
-          />
-          <div style={{ color: '#999', fontSize: '12px' }}>
-            环境名称用于区分不同的参数配置集
+      {/* 保存请求配置模态框 */}
+      <Modal
+        title={editingRequest ? "编辑请求配置" : "保存请求配置"}
+        open={isSaveModalVisible}
+        onOk={handleSaveRequest}
+        onCancel={() => setIsSaveModalVisible(false)}
+        confirmLoading={loading}
+      >
+        <Input
+          placeholder="请输入请求配置名称"
+          value={saveRequestName}
+          onChange={(e) => setSaveRequestName(e.target.value)}
+          style={{ marginBottom: '16px' }}
+        />
+        <div style={{ color: '#999', fontSize: '12px' }}>
+          保存后可在右侧"保存的请求"侧边栏中查看和管理
+        </div>
+      </Modal>
+
+      {/* 全局参数配置模态框 */}
+      <Modal
+        title="全局参数配置"
+        open={isGlobalParamsModalVisible}
+        onOk={() => setIsGlobalParamsModalVisible(false)}
+        onCancel={() => setIsGlobalParamsModalVisible(false)}
+        width={600}
+      >
+        <div style={{ marginBottom: '16px' }}>
+          {/* 环境选择和管理 */}
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 'bold' }}>环境管理</h3>
+              <Button
+                type="primary"
+                size="small"
+                onClick={handleAddEnvironment}
+              >
+                添加环境
+              </Button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+              {environments.map(env => (
+                <div
+                  key={env.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '4px 12px',
+                    borderRadius: '16px',
+                    background: currentEnvironmentId === env.id ? '#1890ff' : '#f0f0f0',
+                    color: currentEnvironmentId === env.id ? '#fff' : '#333',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    gap: '8px'
+                  }}
+                  onClick={() => handleSwitchEnvironment(env.id)}
+                >
+                  <span>{env.name}</span>
+                  {environments.length > 1 && (
+                    <Button
+                      type="text"
+                      size="small"
+                      style={{
+                        color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999',
+                        padding: 0,
+                        margin: 0,
+                        width: '20px',
+                        height: '20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveEnvironment(env.id);
+                      }}
+                    >
+                      ×
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </Modal>
-      </Card>
+
+          {/* 当前环境的参数 */}
+          <p style={{ color: '#666', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
+
+          {getCurrentEnvironment().parameters.map((param, index) => (
+            <Space
+              key={index}
+              style={{ width: '100%', marginBottom: '12px' }}
+              align="center"
+            >
+              <Input
+                placeholder="参数名"
+                value={param.key}
+                onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
+                style={{ width: 150 }}
+                size="middle"
+              />
+              <Input
+                placeholder="参数值"
+                value={param.value}
+                onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
+                style={{ flex: 1, width: 330 }}
+                size="middle"
+              />
+              <Button
+                icon={<MinusOutlined />}
+                danger
+                onClick={() => handleRemoveEnvironmentParameter(index)}
+                size="small"
+              />
+            </Space>
+          ))}
+
+          <Button
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={handleAddEnvironmentParameter}
+            style={{ marginTop: '8px', width: '100%' }}
+            size="middle"
+          >
+            添加全局参数
+          </Button>
+        </div>
+      </Modal>
+
+      {/* 添加环境模态框 */}
+      <Modal
+        title="创建新环境"
+        open={isAddEnvModalVisible}
+        onOk={handleConfirmAddEnvironment}
+        onCancel={() => setIsAddEnvModalVisible(false)}
+        width={400}
+      >
+        <Input
+          placeholder="请输入环境名称"
+          value={newEnvironmentName}
+          onChange={(e) => setNewEnvironmentName(e.target.value)}
+          style={{ marginBottom: '16px' }}
+        />
+        <div style={{ color: '#999', fontSize: '12px' }}>
+          环境名称用于区分不同的参数配置集
+        </div>
+      </Modal>
     </div>
   );
 };

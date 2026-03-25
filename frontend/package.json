@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
+    "@codemirror/lang-json": "^6.0.1",
+    "@uiw/react-codemirror": "^4.21.21",
     "antd": "^5.12.0",
     "axios": "^1.6.0",
     "react": "^18.2.0",

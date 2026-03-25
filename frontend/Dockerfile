@@ -1,12 +1,7 @@
 FROM node:18 as build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./ 
-RUN npm install pnpm -g
-RUN pnpm config set registry https://registry.npmmirror.com/ \
-    && pnpm config set strict-ssl false \
-    && pnpm config set fetch-timeout 300000 \
-    && pnpm config set network-concurrency 5 \
-    && pnpm install
+RUN npm install
 COPY . .
 RUN pnpm run build
 
