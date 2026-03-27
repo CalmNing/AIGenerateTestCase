@@ -1011,7 +1011,10 @@ const IoTMockPlatform: React.FC = () => {
                         </Button>
                         <Button
                           icon={<SaveOutlined />}
-                          onClick={handleOpenSaveModal}
+                          onClick={() => {
+                            handleOpenSaveModal();
+                            fetchSavedRequests();
+                          }}
                         >
                           保存
                         </Button>
@@ -1183,9 +1186,9 @@ const IoTMockPlatform: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
-                } 
-                overlayInnerStyle={{ maxWidth: 680 }}>
-                  
+                }
+                  overlayInnerStyle={{ maxWidth: 680 }}>
+
                   <QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer', fontSize: 13 }} />
                 </Tooltip>
               </span>
