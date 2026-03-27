@@ -828,6 +828,7 @@ const IoTMockPlatform: React.FC = () => {
       console.error('Save request failed:', error);
       message.error('保存请求配置失败');
     } finally {
+      fetchSavedRequests()
       setLoading(false);
     }
   };
@@ -1011,10 +1012,7 @@ const IoTMockPlatform: React.FC = () => {
                         </Button>
                         <Button
                           icon={<SaveOutlined />}
-                          onClick={() => {
-                            handleOpenSaveModal();
-                            fetchSavedRequests();
-                          }}
+                          onClick={handleOpenSaveModal}
                         >
                           保存
                         </Button>
