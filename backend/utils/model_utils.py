@@ -136,8 +136,6 @@ async def generate_testcases(
         session_id: int,
         module_id: int,
         requirement: Optional[str],
-        image_data: str = None,
-        is_base64: bool = True,
         model_type: str = "api",
         api_key: str = "",
         ollama_url: str = "",
@@ -146,21 +144,6 @@ async def generate_testcases(
     """根据需求生成测试用例"""
     # 调用模型并记录耗时与错误（不要在日志中记录 api_key）
     start = time.time()
-    if image_data is not None:
-        try:
-            ocr_service = OCRService(engine='paddleocr')
-            # image_data 已经是字符串格式，直接传入
-            ocr_result = ocr_service.extract_text(image_data, is_base64=is_base64)
-            logger.info(f"OCR识别结果: {ocr_result}")
-            if requirement is None:
-                requirement = ocr_result['text']
-            else:
-                requirement = requirement + ocr_result['text']
-            logger.info(f"最总需求: {requirement}")
-        except Exception as e:
-            logger.error(f"OCR服务调用失败: error={e}")
-            return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            data="OCR服务调用失败")
 
     if model_type == "api":
         try:

@@ -120,7 +120,6 @@ async def generate_testcases(
         api_key: str = Form(""),
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
-        file: Optional[UploadFile] = File(None),
         module_id: Optional[int|str] = Form(""),
 
 ):
@@ -136,30 +135,13 @@ async def generate_testcases(
     logger.info(f"  requirement: {'有值' if requirement else 'None'} (长度: {len(requirement) if requirement else 0})")
     logger.info(f"  model_type: {model_type}")
     logger.info(f"  api_key: {'有值' if api_key else 'None'}")
-    logger.info(f"  file: {'有文件' if file else 'None'}")
-    logger.info(f"  file.filename: {file.filename if file else 'None'}")
-    logger.info(f"  file.content_type: {file.content_type if file else 'None'}")
 
-    # 处理图像数据
-    image_data = None
-    if file:
-        logger.info(f"  开始读取文件内容")
-        # 验证文件类型
-        if not file.content_type.startswith('image/'):
-            return Response(code=status.HTTP_400_BAD_REQUEST, data="请上传图片文件")
-        # 读取上传的图像数据 - 使用 await 处理协程
-        image_bytes = await file.read()
-        logger.info(f"  文件读取完成，大小: {len(image_bytes)} 字节")
-        image_data = base64.b64encode(image_bytes).decode('utf-8')
+
 
     # 基本输入校验 - 修复
     # 检查是否至少有一个有效输入
     has_valid_input = False
 
-    # 检查是否有文件 - 修复：检查file是否为None
-    if file is not None:
-        has_valid_input = True
-        logger.info(f"  文件上传成功: {file.filename}")
 
     # 检查是否有有效的requirement
     if requirement and requirement.strip():
@@ -170,8 +152,8 @@ async def generate_testcases(
 
     # 如果没有有效输入，返回错误
     if not has_valid_input:
-        logger.error(f"  验证失败: 请上传图片文件或输入requirement")
-        return Response(code=status.HTTP_400_BAD_REQUEST, data="请上传图片文件或输入requirement")
+        logger.error(f"  验证失败: 请输入requirement")
+        return Response(code=status.HTTP_400_BAD_REQUEST, data="请输入requirement")
 
     # 模型参数校验
     if model_type == "api" and not api_key:
@@ -184,8 +166,6 @@ async def generate_testcases(
         requirement=requirement,
         session_id=session_id,
         module_id=module_id,
-        image_data=image_data,
-        is_base64=True,
         model_type=model_type,
         api_key=api_key,
         ollama_url=ollama_url,
