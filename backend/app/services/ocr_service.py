@@ -1,16 +1,15 @@
 import os
 import base64
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from PIL import Image
 import pytesseract
 import io
 import re
-import json
 
 
 class OCRService:
     """OCR图片识别服务"""
-    
+
     # 类变量，用于存储PaddleOCR实例（单例模式）
     _paddle_ocr_instance = None
 
@@ -64,7 +63,7 @@ class OCRService:
                 data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT, lang='chi_sim+eng')
                 confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
                 avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-                
+
                 result = {
                     'success': True,
                     'text': text.strip(),
@@ -75,7 +74,7 @@ class OCRService:
                 # 如果PaddleOCR可用，使用它
                 result_text = self.paddle_ocr.ocr(str(img), cls=True)
                 result_text = "\n".join([item[1][0] for line in result_text for item in line if item[1][0]])
-                
+
                 result = {
                     'text': result_text,
                     'engine_used': 'paddleocr',
@@ -188,9 +187,9 @@ if __name__ == "__main__":
     # 创建OCR服务实例，优先使用Tesseract以避免PaddleOCR的兼容性问题
     print("初始化OCR服务...")
     ocr_service = OCRService(engine='paddleocr')  # 强制使用Tesseract
-    
+
     print(f"OCR服务使用引擎: {ocr_service.engine}")
-    
+
     # 示例：如果存在图像文件则进行OCR识别
     image_path = "test2.png"  # 可以根据需要更改此路径
     if os.path.exists(image_path):

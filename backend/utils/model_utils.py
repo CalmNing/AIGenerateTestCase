@@ -9,7 +9,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field, SecretStr
 from starlette import status
 
-from app.services.ocr_service import OCRService
 from db.models import TestCase as DBTestCase
 from utils.base_response import Response
 
@@ -78,6 +77,7 @@ class TestCaseDesignMethod(BaseModel):
     """自定义 TestCaseDesignMethod schema."""
     method: str
     description: str | None = None
+
 
 # 初始化模型
 def create_local_model(
