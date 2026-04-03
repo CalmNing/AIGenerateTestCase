@@ -54,6 +54,8 @@ def _migrate_missing_columns(engine):
                     continue  # 列已存在，跳过
 
                 # 构建 SQLite 的列定义
+                from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
+                is_json_col = isinstance(column.type, SQLiteJSON)
                 col_type = column.type.compile(dialect=engine.dialect)
                 ddl = f"{col_name} {col_type}"
                 if not column.nullable:
@@ -62,7 +64,8 @@ def _migrate_missing_columns(engine):
                         ddl += f" DEFAULT {default.arg}"
                     else:
                         # SQLite ALTER TABLE ADD COLUMN 要求有默认值（非空列）
-                        ddl += " DEFAULT ''"
+                        # JSON 类型列需要有效的 JSON 默认值，不能用空字符串
+                        ddl += " DEFAULT '[]'" if is_json_col else " DEFAULT ''"
                 try:
                     conn.execute(text(f"ALTER TABLE {table_cls.name} ADD COLUMN {ddl}"))
                     logger.info(f"自动迁移: 为表 {table_cls.name} 添加列 {col_name} ({col_type})")
