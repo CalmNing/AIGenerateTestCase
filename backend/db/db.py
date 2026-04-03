@@ -51,7 +51,21 @@ def _migrate_missing_columns(engine):
             for column in table_cls.columns:
                 col_name = column.name
                 if col_name.lower() in existing_columns:
-                    continue  # 列已存在，跳过
+                    # 列已存在，检查 JSON 列中是否有非法空字符串值并修复
+                    from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
+                    if isinstance(column.type, SQLiteJSON):
+                        try:
+                            result = conn.execute(
+                                text(f"SELECT id FROM {table_cls.name} WHERE {col_name} = '' LIMIT 1")
+                            )
+                            if result.fetchone():
+                                conn.execute(
+                                    text(f"UPDATE {table_cls.name} SET {col_name} = '[]' WHERE {col_name} = '' OR {col_name} IS NULL")
+                                )
+                                logger.info(f"自动修复: 表 {table_cls.name} 列 {col_name} 中的空字符串/NULL已修正为'[]'")
+                        except Exception as e:
+                            logger.warning(f"检查表 {table_cls.name} 列 {col_name} 失败: {e}")
+                    continue
 
                 # 构建 SQLite 的列定义
                 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
