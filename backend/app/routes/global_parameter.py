@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
 from sqlmodel import Session, select
 from typing import List, Optional
 
@@ -97,3 +98,65 @@ def get_default_global_parameter(db: Session = Depends(get_db)):
         return BaseResponse(code=200, msg="Success", success=True, data=default_parameter)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取默认全局参数配置失败: {str(e)}")
+
+
+class ExtractionRule(BaseModel):
+    """提取规则"""
+    variable: str   # 要保存的环境变量名
+    jsonpath: str   # JSONPath 表达式，如 $.data.token
+
+
+class ExtractAndSaveRequest(BaseModel):
+    """从响应中提取变量并保存到环境"""
+    environment_id: int
+    response_data: dict | list
+    extractions: List[ExtractionRule]
+
+
+@router.post("/extract-and-save", response_model=BaseResponse)
+def extract_and_save(request: ExtractAndSaveRequest, db: Session = Depends(get_db)):
+    """从响应数据中通过 JSONPath 提取变量，保存到指定环境参数中"""
+    try:
+        from jsonpath_ng import parse
+
+        env = db.get(GlobalParameter, request.environment_id)
+        if not env:
+            raise HTTPException(status_code=404, detail="环境配置不存在")
+
+        # 构建现有参数的 key->index 映射
+        params = list(env.parameters)
+        param_index = {p.get("key"): i for i, p in enumerate(params) if isinstance(p, dict) and p.get("key")}
+        extracted = {}
+
+        for rule in request.extractions:
+            try:
+                jsonpath_expr = parse(rule.jsonpath)
+                matches = jsonpath_expr.find(request.response_data)
+                if matches:
+                    value = matches[0].value
+                    extracted[rule.variable] = str(value) if not isinstance(value, str) else value
+
+                    # 更新或添加到参数列表
+                    if rule.variable in param_index:
+                        idx = param_index[rule.variable]
+                        params[idx] = {**params[idx], "value": extracted[rule.variable]}
+                    else:
+                        params.append({"key": rule.variable, "value": extracted[rule.variable]})
+                        param_index[rule.variable] = len(params) - 1
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"JSONPath 提取失败 [{rule.variable}]: {rule.jsonpath}, 错误: {str(e)}",
+                )
+
+        env.parameters = params
+        db.add(env)
+        db.commit()
+        db.refresh(env)
+
+        return BaseResponse(code=200, msg="Success", success=True, data=extracted)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"提取保存失败: {str(e)}")

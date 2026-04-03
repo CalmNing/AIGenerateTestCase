@@ -88,3 +88,61 @@ export interface HistoryPrompt {
   created_at: string;
   updated_at: string;
 }
+
+// 保存的请求类型
+export interface SavedRequest {
+  id: number;
+  name: string;
+  method: string;
+  url: string;
+  headers: Array<{ key: string; value: string }>;
+  parameters: Array<{ key: string; value: string }>;
+  body?: string;
+  post_extractions?: Array<{ variable: string; jsonpath: string }>;
+  created_at: string;
+  updated_at: string;
+}
+
+// 全局参数（环境）类型
+export interface GlobalParameter {
+  id: number;
+  name: string;
+  parameters: Array<{ key: string; value: string }>;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// 代理请求类型
+export interface ProxyRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  data?: any;
+  params: Record<string, string>;
+  environment_id: number | null;
+}
+
+// 提取变量请求类型
+export interface ExtractVariablesRequest {
+  environment_id: number;
+  response_data: any;
+  extractions: Array<{ variable: string; jsonpath: string }>;
+}
+
+// 定时任务类型
+export interface ScheduledTask {
+  id: number;
+  name: string;
+  schedule_type: string;
+  interval_seconds: number;
+  cron_expression: string | null;
+  request_ids: number[];
+  environment_id: number | null;
+  enabled: boolean;
+  last_run_at: string | null;
+  last_run_result: string | null;
+  created_at: string;
+  updated_at: string;
+  request_names?: Array<{ id: number; name: string }>;
+}

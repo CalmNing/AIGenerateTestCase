@@ -42,7 +42,7 @@ class BaseModel(SQLModel):
     @classmethod
     def convert_datetime_strings(cls, values):
         if isinstance(values, dict):
-            for key in ['created_at', 'updated_at']:
+            for key in ['created_at', 'updated_at', 'last_run_at']:
                 if key in values and isinstance(values[key], str):
                     # 处理ISO格式的日期时间字符串
                     dt_str = values[key].replace('Z', '+00:00')
@@ -113,6 +113,7 @@ class SavedRequest(BaseModel, table=True):
     headers: List[dict] = Field(default_factory=list, sa_type=JSON)
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON)
     body: Optional[str] = Field(default=None)
+    post_extractions: List[dict] = Field(default_factory=list, sa_type=JSON)  # 后置提取规则
     user_id: Optional[int] = Field(default=None)  # 可以根据需要添加用户关联
 
     # 定义与会话的多对一关系（可选）
@@ -138,3 +139,16 @@ class HistoryPrompt(BaseModel, table=True):
     module: Optional["Module"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[HistoryPrompt.module_id]"})
     # 定义与会话的多对一关系
     session: Optional["Session"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[HistoryPrompt.session_id]"})
+
+
+class ScheduledTask(BaseModel, table=True):
+    """定时任务数据模型"""
+    name: str = Field(default="", description="任务名称")
+    schedule_type: str = Field(default="interval", description="调度类型: interval | cron")
+    interval_seconds: int = Field(default=60, description="间隔秒数（interval类型）")
+    cron_expression: Optional[str] = Field(default=None, description="Cron 表达式（cron类型）")
+    request_ids: List[int] = Field(default_factory=list, sa_type=JSON, description="关联的保存请求ID列表")
+    environment_id: Optional[int] = Field(default=None, description="执行时使用的环境ID")
+    enabled: bool = Field(default=True, description="是否启用")
+    last_run_at: Optional[datetime] = Field(default=None, description="上次执行时间")
+    last_run_result: Optional[str] = Field(default=None, description="上次执行结果（JSON字符串）")

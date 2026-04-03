@@ -1,15 +1,16 @@
 import React from 'react';
 import { Card, Row, Col, Typography, Space } from 'antd';
-import { RocketOutlined, ApiOutlined } from '@ant-design/icons';
+import { RocketOutlined, ApiOutlined, ClockCircleOutlined } from '@ant-design/icons';
 
 const { Title, Paragraph } = Typography;
 
 interface HomePageProps {
   onNavigateToAI: () => void;
   onNavigateToIoT: () => void;
+  onNavigateToScheduledTask: () => void;
 }
 
-const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT }) => {
+const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, onNavigateToScheduledTask }) => {
   return (
     <div style={{ 
       padding: '40px', 
@@ -130,7 +131,7 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT }) 
                 marginBottom: '12px',
                 color: '#333'
               }}>
-                IoT Mock平台
+                IoT 数据推送平台
               </Title>
               <Paragraph style={{ 
                 textAlign: 'center',
@@ -138,6 +139,58 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT }) 
                 lineHeight: '1.6'
               }}>
                 类似Postman的接口调用工具，支持各种HTTP方法，可用于测试和模拟IoT设备接口。
+              </Paragraph>
+            </Space>
+          </Card>
+        </Col>
+        
+        <Col xs={24} sm={12} md={8}>
+          <Card
+            hoverable
+            cover={
+              <div style={{ 
+                height: '220px', 
+                background: '#fff7e6', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                fontSize: '90px',
+                transition: 'all 0.3s ease'
+              }}>
+                <ClockCircleOutlined style={{ color: '#fa8c16' }} />
+              </div>
+            }
+            onClick={onNavigateToScheduledTask}
+            style={{ 
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+              borderRadius: '12px',
+              transition: 'all 0.3s ease',
+              border: '1px solid #e8e8e8'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-4px)';
+              e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.15)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+            }}
+          >
+            <Space direction="vertical" size="middle" style={{ width: '100%', padding: '0 16px' }}>
+              <Title level={4} style={{ 
+                textAlign: 'center',
+                marginBottom: '12px',
+                color: '#333'
+              }}>
+                定时任务平台
+              </Title>
+              <Paragraph style={{ 
+                textAlign: 'center',
+                color: '#666',
+                lineHeight: '1.6'
+              }}>
+                管理定时任务，查看执行日志，支持间隔和Cron表达式调度，以及响应数据后置提取。
               </Paragraph>
             </Space>
           </Card>

@@ -19,7 +19,7 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 
 # 导入所有模型
-from db.models import Session, TestCase, SavedRequest, GlobalParameter
+from db.models import Session, TestCase, SavedRequest, GlobalParameter, ScheduledTask
 
 # 创建所有表
 def create_db_and_tables():

@@ -10,6 +10,7 @@ import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/TestCaseGenerator';
 import TestCaseManager from './components/TestCaseManager';
+import ScheduledTaskManager from './components/ScheduledTaskManager';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
 import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
@@ -25,10 +26,10 @@ const { Content } = Layout;
 const App: React.FC = () => {
 
   // 导航状态管理
-  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock'>(() => {
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task'>(() => {
     // 从localStorage加载上次的平台状态
     const savedPlatform = localStorage.getItem('currentPlatform');
-    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock') || 'home';
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task') || 'home';
   });
 
   // 状态管理
@@ -935,6 +936,11 @@ const App: React.FC = () => {
     localStorage.setItem('currentPlatform', 'iot-mock');
   };
 
+  const navigateToScheduledTask = () => {
+    setCurrentPlatform('scheduled-task');
+    localStorage.setItem('currentPlatform', 'scheduled-task');
+  };
+
 
   return (
     <ConfigProvider locale={zhCN}>
@@ -942,14 +948,25 @@ const App: React.FC = () => {
         <HomePage 
           onNavigateToAI={navigateToAITestcase} 
           onNavigateToIoT={navigateToIoTMock} 
+          onNavigateToScheduledTask={navigateToScheduledTask}
         />
       ) : currentPlatform === 'iot-mock' ? (
         <div>
           <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h1 style={{ margin: 0 }}>IoT Mock 平台</h1>
+            <h1 style={{ margin: 0 }}>IoT 数据推送平台</h1>
             <Button onClick={navigateToHome}>返回首页</Button>
           </div>
           <IoTMockPlatform />
+        </div>
+      ) : currentPlatform === 'scheduled-task' ? (
+        <div>
+          <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h1 style={{ margin: 0 }}>定时任务平台</h1>
+            <Button onClick={navigateToHome}>返回首页</Button>
+          </div>
+          <div style={{ padding: '16px' }}>
+            <ScheduledTaskManager />
+          </div>
         </div>
       ) : (
         <Layout style={{ minHeight: '100vh' }}>

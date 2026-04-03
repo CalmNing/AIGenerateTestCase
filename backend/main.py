@@ -24,5 +24,8 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+    from app.scheduler import scheduler, load_all_jobs
+    scheduler.start()
+    load_all_jobs()
 
 app.include_router(api_router, prefix="/api")

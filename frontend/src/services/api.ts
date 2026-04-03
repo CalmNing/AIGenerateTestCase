@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -196,4 +196,61 @@ export const historyPromptApi = {
   // 删除历史提示词
   deletePrompt: (promptId: number): Promise<ApiResponse> =>
     api.delete(`/history_prompt/${promptId}`)
+};
+
+// 保存的请求API
+export const savedRequestApi = {
+  // 获取所有保存的请求
+  getRequests: (): Promise<ApiResponse<SavedRequest[]>> => api.get('/saved-requests'),
+
+  // 创建保存的请求
+  createRequest: (request: Omit<SavedRequest, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<SavedRequest>> => api.post('/saved-requests', request),
+
+  // 更新保存的请求
+  updateRequest: (requestId: number, request: Partial<SavedRequest>): Promise<ApiResponse<SavedRequest>> => api.put(`/saved-requests/${requestId}`, request),
+
+  // 删除保存的请求
+  deleteRequest: (requestId: number): Promise<ApiResponse> => api.delete(`/saved-requests/${requestId}`)
+};
+
+// 全局参数（环境）API
+export const globalParameterApi = {
+  // 获取所有环境
+  getEnvironments: (): Promise<ApiResponse<GlobalParameter[]>> => api.get('/global-parameters'),
+
+  // 创建环境
+  createEnvironment: (environment: Omit<GlobalParameter, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<GlobalParameter>> => api.post('/global-parameters', environment),
+
+  // 更新环境
+  updateEnvironment: (environmentId: number, environment: Partial<GlobalParameter>): Promise<ApiResponse<GlobalParameter>> => api.put(`/global-parameters/${environmentId}`, environment),
+
+  // 删除环境
+  deleteEnvironment: (environmentId: number): Promise<ApiResponse> => api.delete(`/global-parameters/${environmentId}`),
+
+  // 提取并保存变量
+  extractAndSaveVariables: (data: ExtractVariablesRequest): Promise<ApiResponse<Record<string, string>>> => api.post('/global-parameters/extract-and-save', data)
+};
+
+// 代理转发API
+export const proxyApi = {
+  // 转发请求
+  forwardRequest: (request: ProxyRequest): Promise<ApiResponse<any>> => api.post('/proxy/forward', request)
+};
+
+// 定时任务API
+export const scheduledTaskApi = {
+  // 获取所有定时任务
+  getTasks: (): Promise<ApiResponse<any[]>> => api.get('/scheduled-tasks'),
+
+  // 创建定时任务
+  createTask: (task: any): Promise<ApiResponse<any>> => api.post('/scheduled-tasks', task),
+
+  // 更新定时任务
+  updateTask: (taskId: number, task: any): Promise<ApiResponse<any>> => api.put(`/scheduled-tasks/${taskId}`, task),
+
+  // 删除定时任务
+  deleteTask: (taskId: number): Promise<ApiResponse> => api.delete(`/scheduled-tasks/${taskId}`),
+
+  // 手动触发定时任务
+  runTask: (taskId: number): Promise<ApiResponse> => api.post(`/scheduled-tasks/${taskId}/run`)
 };

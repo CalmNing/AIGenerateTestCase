@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Form, Select, Input, Button, Tabs, Space, Table, message, Modal, Tooltip } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined } from '@ant-design/icons';
-import axios, { AxiosRequestConfig } from 'axios';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined, EditOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
+import { savedRequestApi, globalParameterApi, proxyApi } from '../services/api';
+import { SavedRequest as SavedRequestType } from '../types';
 
 interface HeaderItem {
   key: string;
@@ -15,22 +16,19 @@ interface ParameterItem {
   value: string;
 }
 
+interface ExtractionRule {
+  variable: string;   // 环境变量名
+  jsonpath: string;   // JSONPath 表达式
+}
+
+
 interface Environment {
   id: string;
   name: string;
   parameters: ParameterItem[];
 }
 
-interface SavedRequest {
-  id: number;
-  name: string;
-  method: string;
-  url: string;
-  headers: HeaderItem[];
-  parameters: ParameterItem[];
-  body?: string;
-  createdAt: string;
-}
+type SavedRequest = SavedRequestType;
 
 interface Tab {
   id: string;
@@ -39,6 +37,7 @@ interface Tab {
   url: string;
   headers: HeaderItem[];
   parameters: ParameterItem[];
+  postExtractions?: ExtractionRule[];
   body?: string;
   savedRequestId?: number; // 关联的保存请求ID
   hasUnsavedChanges?: boolean; // 是否有未保存的更改
@@ -60,6 +59,8 @@ const IoTMockPlatform: React.FC = () => {
   const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]); // 环境列表
   const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>('env-1'); // 当前选中的环境
   const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false); // 全局参数模态框
+  const [postExtractions, setPostExtractions] = useState<ExtractionRule[]>([]); // 后置提取规则
+
 
   // 稳定 CodeMirror 扩展引用，避免每次渲染重建
   const jsonExtensions = useMemo(() => [json()], []);
@@ -245,17 +246,62 @@ const IoTMockPlatform: React.FC = () => {
       return;
     }
 
-    // 从后端删除
-    const deleted = await deleteEnvironmentFromBackend(envId);
-    if (deleted) {
-      const newEnvironments = environments.filter(env => env.id !== envId);
+    const { confirm } = Modal;
+    confirm({
+      title: '确认删除',
+      content: '确定要删除这个环境吗？此操作不可撤销。',
+      okText: '确定',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        // 从后端删除
+        const deleted = await deleteEnvironmentFromBackend(envId);
+        if (deleted) {
+          const newEnvironments = environments.filter(env => env.id !== envId);
+          setEnvironments(newEnvironments);
+
+          // 如果删除的是当前环境，切换到第一个环境
+          if (currentEnvironmentId === envId) {
+            setCurrentEnvironmentId(newEnvironments[0].id);
+          }
+        }
+      },
+    });
+  };
+
+  // 编辑环境名称
+  const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
+  const [editingEnvName, setEditingEnvName] = useState('');
+
+  const handleEditEnvironmentName = (env: Environment) => {
+    setEditingEnvId(env.id);
+    setEditingEnvName(env.name);
+  };
+
+  const handleSaveEnvironmentName = async () => {
+    if (!editingEnvName || editingEnvName.trim() === '') {
+      message.error('环境名称不能为空');
+      return;
+    }
+
+    const envIndex = environments.findIndex(e => e.id === editingEnvId);
+    if (envIndex !== -1) {
+      const newEnvironments = [...environments];
+      newEnvironments[envIndex] = {
+        ...newEnvironments[envIndex],
+        name: editingEnvName.trim()
+      };
       setEnvironments(newEnvironments);
 
-      // 如果删除的是当前环境，切换到第一个环境
-      if (currentEnvironmentId === envId) {
-        setCurrentEnvironmentId(newEnvironments[0].id);
-      }
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+      setEditingEnvId(null);
     }
+  };
+
+  const handleCancelEditEnvironmentName = () => {
+    setEditingEnvId(null);
+    setEditingEnvName('');
   };
 
   // 切换环境
@@ -284,15 +330,16 @@ const IoTMockPlatform: React.FC = () => {
       });
       setHeaders(activeTab.headers);
       setParameters(activeTab.parameters);
+      setPostExtractions(activeTab.postExtractions || []);
     }
   }, [activeTabId, tabs, form]);
 
   // 从后端API获取保存的请求配置
   const fetchSavedRequests = async () => {
     try {
-      const response = await axios.get('/api/saved-requests');
-      if (response.data.code === 200 && response.data.data) {
-        setSavedRequests(response.data.data);
+      const response = await savedRequestApi.getRequests();
+      if (response.code === 200 && response.data) {
+        setSavedRequests(response.data);
       }
     } catch (error) {
       console.error('Failed to fetch saved requests:', error);
@@ -300,12 +347,14 @@ const IoTMockPlatform: React.FC = () => {
     }
   };
 
+
+
   // 从后端API获取全局参数配置
   const fetchGlobalParameters = async () => {
     try {
-      const response = await axios.get('/api/global-parameters');
-      if (response.data.code === 200 && response.data.data) {
-        const backendEnvironments = response.data.data.map((env: any) => ({
+      const response = await globalParameterApi.getEnvironments();
+      if (response.code === 200 && response.data) {
+        const backendEnvironments = response.data.map((env: any) => ({
           id: env.id.toString(),
           name: env.name,
           parameters: env.parameters || []
@@ -330,20 +379,20 @@ const IoTMockPlatform: React.FC = () => {
       // 检查环境是否已存在（通过id判断）
       if (parseInt(environment.id)) {
         // 更新现有环境
-        const response = await axios.put(`/api/global-parameters/${parseInt(environment.id)}`, {
+        const response = await globalParameterApi.updateEnvironment(parseInt(environment.id), {
           name: environment.name,
           parameters: environment.parameters,
           is_default: environment.is_default || false
         });
-        return response.data.data;
+        return response.data;
       } else {
         // 创建新环境
-        const response = await axios.post('/api/global-parameters', {
+        const response = await globalParameterApi.createEnvironment({
           name: environment.name,
           parameters: environment.parameters,
           is_default: environment.is_default || false
         });
-        return response.data.data;
+        return response.data;
       }
     } catch (error) {
       console.error('Failed to save environment:', error);
@@ -356,7 +405,7 @@ const IoTMockPlatform: React.FC = () => {
   const deleteEnvironmentFromBackend = async (environmentId: string) => {
     try {
       if (parseInt(environmentId)) {
-        await axios.delete(`/api/global-parameters/${parseInt(environmentId)}`);
+        await globalParameterApi.deleteEnvironment(parseInt(environmentId));
         return true;
       }
       return false;
@@ -429,6 +478,26 @@ const IoTMockPlatform: React.FC = () => {
     updateCurrentTab({
       parameters: newParameters
     });
+  };
+
+  // 后置提取规则操作
+  const handleAddExtraction = () => {
+    const newExtractions = [...postExtractions, { variable: '', jsonpath: '' }];
+    setPostExtractions(newExtractions);
+    updateCurrentTab({ postExtractions: newExtractions });
+  };
+
+  const handleRemoveExtraction = (index: number) => {
+    const newExtractions = postExtractions.filter((_, i) => i !== index);
+    setPostExtractions(newExtractions);
+    updateCurrentTab({ postExtractions: newExtractions });
+  };
+
+  const handleExtractionChange = (index: number, field: 'variable' | 'jsonpath', value: string) => {
+    const newExtractions = [...postExtractions];
+    newExtractions[index] = { ...newExtractions[index], [field]: value };
+    setPostExtractions(newExtractions);
+    updateCurrentTab({ postExtractions: newExtractions });
   };
 
   // 更新当前标签页的内容
@@ -504,6 +573,7 @@ const IoTMockPlatform: React.FC = () => {
       headers: request.headers,
       parameters: request.parameters || [],
       body: request.body,
+      postExtractions: (request as any).post_extractions || [],
       savedRequestId: request.id,
       hasUnsavedChanges: false
     };
@@ -522,143 +592,41 @@ const IoTMockPlatform: React.FC = () => {
       setLoading(true);
       const startTime = Date.now();
 
-      // Create parameter map for substitution
-      const paramMap = new Map<string, string>();
-
-      // Add current environment parameters first
-      const currentEnv = getCurrentEnvironment();
-      currentEnv.parameters.forEach(p => {
-        if (p.key && p.value) {
-          paramMap.set(p.key, p.value);
-        }
-      });
-
-      // Add local parameters (override global if same key)
-      parameters.forEach(p => {
-        if (p.key && p.value) {
-          paramMap.set(p.key, p.value);
-        }
-      });
-
-      // Function to substitute variables in string
-      const substituteVariables = (str: string): string => {
-        if (!str) return str;
-
-        // Replace {{@expression}} - execute JS expression
-        // Example: {{@Date.now()}}, {{@Math.random().toFixed(2)}}, {{@new Date().toISOString()}}
-        let result = str.replace(/\{\{@([^}]+)\}\}/g, (_match, expr) => {
-          try {
-            const fn = new Function('return ' + expr.trim());
-            const val = fn();
-            return val !== undefined && val !== null ? String(val) : _match;
-          } catch {
-            return _match;
-          }
-        });
-
-        // Replace {{$functionName}} and {{$functionName(args)}} - built-in helpers
-        // Built-in: $timestamp, $randomInt, $randomInt(min,max), $uuid, $date(format), $now
-        result = result.replace(/\{\{(\$[^}]+)\}\}/g, (_match, expr) => {
-          const trimmed = expr.trim();
-
-          // $timestamp - 当前时间戳（毫秒）
-          if (trimmed === '$timestamp') return String(Date.now());
-
-          // $now - 当前时间戳（秒）
-          if (trimmed === '$now') return String(Math.floor(Date.now() / 1000));
-
-          // $randomInt(min,max) - 随机整数
-          const randMatch = trimmed.match(/^\$randomInt\((\d+)\s*,\s*(\d+)\)$/);
-          if (randMatch) {
-            const min = parseInt(randMatch[1], 10);
-            const max = parseInt(randMatch[2], 10);
-            return String(Math.floor(Math.random() * (max - min + 1)) + min);
-          }
-
-          // $randomInt - 0~100 随机整数
-          if (trimmed === '$randomInt') return String(Math.floor(Math.random() * 101));
-
-          // $uuid - 生成 UUID v4
-          if (trimmed === '$uuid') {
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-              const r = Math.random() * 16 | 0;
-              return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-            });
-          }
-
-          // $date(format) - 按格式生成日期，格式符: YYYY MM DD HH mm ss SSS
-          const dateMatch = trimmed.match(/^\$date\((.+)\)$/);
-          if (dateMatch) {
-            const fmt = dateMatch[1].trim().replace(/^['"]|['"]$/g, '');
-            const d = new Date();
-            const pad = (n: number, len = 2) => String(n).padStart(len, '0');
-            return fmt
-              .replace('YYYY', String(d.getFullYear()))
-              .replace('MM', pad(d.getMonth() + 1))
-              .replace('DD', pad(d.getDate()))
-              .replace('HH', pad(d.getHours()))
-              .replace('mm', pad(d.getMinutes()))
-              .replace('ss', pad(d.getSeconds()))
-              .replace('SSS', pad(d.getMilliseconds(), 3));
-          }
-
-          // $date - 默认格式 YYYY-MM-DD
-          if (trimmed === '$date') {
-            const d = new Date();
-            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          }
-
-          return _match;
-        });
-
-        // Replace {{variable}} syntax (user-defined parameters)
-        result = result.replace(/\{\{([^}$@][^}]*)\}\}/g, (match, key) => {
-          return paramMap.get(key.trim()) || match;
-        });
-
-        // Replace ${variable} syntax
-        result = result.replace(/\$\{([^}]+)\}/g, (match, key) => {
-          return paramMap.get(key.trim()) || match;
-        });
-
-        return result;
-      };
-
-      // Process parameters and build URL with variable substitution only
-      let finalUrl = substituteVariables(url);
-
-      // Process headers with variable substitution
+      // 构建 headers 字典
       const processedHeaders = headers.reduce((acc, header) => {
         if (header.key && header.value) {
-          acc[header.key] = substituteVariables(header.value);
+          acc[header.key] = header.value;
         }
         return acc;
       }, {} as Record<string, string>);
 
-      const config: AxiosRequestConfig = {
-        method,
-        url: finalUrl,
-        headers: processedHeaders,
-      };
+      // 构建 params 字典
+      const processedParams = parameters.reduce((acc, param) => {
+        if (param.key && param.value) {
+          acc[param.key] = param.value;
+        }
+        return acc;
+      }, {} as Record<string, string>);
 
+      // 解析 body
+      let requestData: any = undefined;
       if (['POST', 'PUT', 'PATCH'].includes(method) && body) {
         try {
-          // Substitute variables in body before parsing
-          const substitutedBody = substituteVariables(body);
-          config.data = JSON.parse(substitutedBody);
-        } catch (error) {
-          // If not JSON, just substitute variables
-          config.data = substituteVariables(body);
+          requestData = JSON.parse(body);
+        } catch {
+          requestData = body;
         }
       }
 
-      // Use backend proxy service to avoid CORS issues
-      const proxyResponse = await axios.post('/api/proxy/forward', {
-        url: finalUrl,
+      // 发送到后端代理（变量替换在后端执行）
+      const envId = parseInt(currentEnvironmentId) || null;
+      const proxyResponse = await proxyApi.forwardRequest({
+        url,
         method,
         headers: processedHeaders,
-        data: config.data,
-        params: config.params
+        data: requestData,
+        params: processedParams,
+        environment_id: envId,
       });
 
       // 更新当前标签页的内容
@@ -684,6 +652,27 @@ const IoTMockPlatform: React.FC = () => {
       setResponse(axiosResponse);
       setResponseTime(timeTaken);
       message.success('请求成功');
+
+      // 后置提取：从响应中提取变量并保存到环境
+      if (postExtractions.length > 0 && axiosResponse.data && envId) {
+        try {
+          const extractResponse = await globalParameterApi.extractAndSaveVariables({
+            environment_id: envId,
+            response_data: axiosResponse.data,
+            extractions: postExtractions.filter(e => e.variable && e.jsonpath),
+          });
+          if (extractResponse.code === 200 && extractResponse.data) {
+            const extracted = extractResponse.data as unknown as Record<string, string>;
+            const names = Object.entries(extracted).map(([k, v]) => k + '=' + v).join(', ');
+            message.success('变量已提取: ' + names);
+            // 刷新环境参数
+            fetchGlobalParameters();
+          }
+        } catch (extractError: any) {
+          const detail = extractError.response?.data?.detail || extractError.message;
+          message.error(`提取失败: ${detail}`);
+        }
+      }
 
     } catch (error: any) {
       if (error.response) {
@@ -760,14 +749,15 @@ const IoTMockPlatform: React.FC = () => {
           url,
           headers,
           parameters,
-          body
+          body,
+          post_extractions: postExtractions
         };
 
-        const response = await axios.put(`/api/saved-requests/${editingRequest.id}`, updatedRequest);
-        if (response.data.code === 200 && response.data.data) {
+        const response = await savedRequestApi.updateRequest(editingRequest.id, updatedRequest);
+        if (response.code === 200 && response.data) {
           // 更新本地状态
           const updatedRequests = savedRequests.map(req =>
-            req.id === editingRequest.id ? response.data.data : req
+            req.id === editingRequest.id ? response.data! : req
           );
           setSavedRequests(updatedRequests);
 
@@ -781,7 +771,8 @@ const IoTMockPlatform: React.FC = () => {
               headers,
               parameters,
               body,
-              savedRequestId: response.data.data.id,
+              postExtractions,
+              savedRequestId: response.data!.id,
               hasUnsavedChanges: false
             } : tab
           ));
@@ -795,12 +786,13 @@ const IoTMockPlatform: React.FC = () => {
           url,
           headers,
           parameters,
-          body
+          body,
+          post_extractions: postExtractions
         };
 
-        const response = await axios.post('/api/saved-requests', newRequest);
-        if (response.data.code === 200 && response.data.data) {
-          setSavedRequests([response.data.data, ...savedRequests]);
+        const response = await savedRequestApi.createRequest(newRequest as any);
+        if (response.code === 200 && response.data) {
+          setSavedRequests([response.data, ...savedRequests]);
           message.success('请求配置已保存');
 
           // 更新当前标签页的名称和关联的保存请求ID
@@ -813,13 +805,14 @@ const IoTMockPlatform: React.FC = () => {
               headers,
               parameters,
               body,
-              savedRequestId: response.data.data.id,
+              postExtractions,
+              savedRequestId: response.data!.id,
               hasUnsavedChanges: false
             } : tab
           ));
 
           // 设置为编辑模式，下次保存时更新
-          setEditingRequest(response.data.data);
+          setEditingRequest(response.data);
         }
       }
 
@@ -846,11 +839,14 @@ const IoTMockPlatform: React.FC = () => {
         onOk: async () => {
           try {
             setLoading(true);
-            const response = await axios.delete(`/api/saved-requests/${id}`);
-            if (response.data.code === 200) {
+            const response = await savedRequestApi.deleteRequest(id);
+            if (response.code === 200) {
               setSavedRequests(savedRequests.filter(req => req.id !== id));
               message.success('请求配置已删除');
+            }else{
+              message.error(response.message || '删除请求配置失败');
             }
+
           } catch (error) {
             console.error('Delete request failed:', error);
             message.error('删除请求配置失败');
@@ -862,6 +858,33 @@ const IoTMockPlatform: React.FC = () => {
     } catch (error) {
       console.error('Delete request failed:', error);
       message.error('删除请求配置失败');
+    }
+  };
+
+  // 复制保存的请求配置
+  const handleCopySavedRequest = async (record: SavedRequest) => {
+    try {
+      setLoading(true);
+      const copiedRequest = {
+        name: `${record.name}_copy`,
+        method: record.method,
+        url: record.url,
+        headers: record.headers,
+        parameters: record.parameters,
+        body: record.body,
+        post_extractions: (record as any).post_extractions
+      };
+
+      const response = await savedRequestApi.createRequest(copiedRequest as any);
+      if (response.code === 200 && response.data) {
+        setSavedRequests([response.data, ...savedRequests]);
+        message.success('请求配置已复制');
+      }
+    } catch (error) {
+      console.error('Copy request failed:', error);
+      message.error('复制请求配置失败');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -888,13 +911,16 @@ const IoTMockPlatform: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 180,
       render: (_: any, record: SavedRequest) => (
         <Space size="small">
-          <Button size="small" onClick={() => createTabFromSavedRequest(record)}>
+          <Button type="text" size="small" style={{ textDecoration: 'underline', color: '#1890ff' }} onClick={() => createTabFromSavedRequest(record)}>
             打开
           </Button>
-          <Button size="small" danger onClick={() => handleDeleteSavedRequest(record.id)}>
+          <Button type="text" size="small" style={{ textDecoration: 'underline', color: '#1890ff' }} onClick={() => handleCopySavedRequest(record)}>
+            复制
+          </Button>
+          <Button type="text" size="small" style={{ textDecoration: 'underline', color: '#ff4d4f' }} onClick={() => handleDeleteSavedRequest(record.id)}>
             删除
           </Button>
         </Space>
@@ -916,8 +942,11 @@ const IoTMockPlatform: React.FC = () => {
         boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
         flexShrink: 0,
       }}>
-        <span style={{ fontWeight: 600, fontSize: 15, color: '#333' }}>IoT Mock 平台</span>
+        <span style={{ fontWeight: 600, fontSize: 15, color: '#333' }}>IoT 数据推送平台</span>
         <Space>
+          <span style={{ color: '#666', fontSize: '14px', marginRight: '8px' }}>
+            当前环境: <strong>{getCurrentEnvironment().name}</strong>
+          </span>
           <Button
             type="default"
             icon={<SyncOutlined />}
@@ -926,6 +955,7 @@ const IoTMockPlatform: React.FC = () => {
           >
             全局参数
           </Button>
+
           <Button
             type="default"
             icon={<PlusOutlined />}
@@ -1105,6 +1135,73 @@ const IoTMockPlatform: React.FC = () => {
                           添加参数
                         </Button>
                       </div>
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <Space size={4}>
+                          <span>后置提取</span>
+                          <Tooltip title={
+                            <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+                              <div>从响应 JSON 中提取值并保存到当前环境变量</div>
+                              <div style={{ marginTop: 4, fontWeight: 600 }}>JSONPath 语法示例：</div>
+                              <div><code>$.data.token</code> — 提取 data.token</div>
+                              <div><code>$.data.list[0].id</code> — 提取数组第一项的 id</div>
+                              <div><code>$..name</code> — 递归查找所有 name 字段</div>
+                            </div>
+                          }>
+                            <QuestionCircleOutlined style={{ color: '#999', fontSize: 13 }} />
+                          </Tooltip>
+                        </Space>
+                      }
+                      style={{ marginBottom: 0 }}
+                    >
+                      {postExtractions.length === 0 ? (
+                        <div style={{ padding: '4px 8px', color: '#999', fontSize: 12 }}>
+                          暂无提取规则
+                          <Button type="link" size="small" onClick={handleAddExtraction} style={{ padding: 0, marginLeft: 8 }}>
+                            添加
+                          </Button>
+                        </div>
+                      ) : (
+                        <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 200, overflow: 'auto' }}>
+                          {postExtractions.map((rule, index) => (
+                            <Space
+                              key={index}
+                              style={{ width: '100%', marginBottom: '8px' }}
+                              align="center"
+                              size={4}
+                            >
+                              <Input
+                                placeholder="变量名"
+                                value={rule.variable}
+                                onChange={(e) => handleExtractionChange(index, 'variable', e.target.value)}
+                                style={{ width: 150 }}
+                              />
+                              <Input
+                                placeholder="JSONPath，如 $.data.token"
+                                value={rule.jsonpath}
+                                onChange={(e) => handleExtractionChange(index, 'jsonpath', e.target.value)}
+                                style={{ flex: 1 }}
+                              />
+                              <Button
+                                icon={<MinusOutlined />}
+                                danger
+                                onClick={() => handleRemoveExtraction(index)}
+                              />
+                            </Space>
+                          ))}
+                          <Button
+                            type="dashed"
+                            icon={<PlusOutlined />}
+                            onClick={handleAddExtraction}
+                            style={{ marginTop: '4px' }}
+                            block
+                          >
+                            添加提取规则
+                          </Button>
+                        </div>
+                      )}
                     </Form.Item>
                   </Form>
                 </div>
@@ -1482,28 +1579,88 @@ const IoTMockPlatform: React.FC = () => {
                   }}
                   onClick={() => handleSwitchEnvironment(env.id)}
                 >
-                  <span>{env.name}</span>
-                  {environments.length > 1 && (
-                    <Button
-                      type="text"
-                      size="small"
-                      style={{
-                        color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999',
-                        padding: 0,
-                        margin: 0,
-                        width: '20px',
-                        height: '20px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemoveEnvironment(env.id);
-                      }}
-                    >
-                      ×
-                    </Button>
+                  {editingEnvId === env.id ? (
+                    <Space size="small" style={{ alignItems: 'center' }}>
+                      <Input
+                        size="small"
+                        value={editingEnvName}
+                        onChange={(e) => setEditingEnvName(e.target.value)}
+                        onPressEnter={handleSaveEnvironmentName}
+                        style={{
+                          width: 120,
+                          background: 'rgba(255,255,255,0.9)',
+                          color: '#333'
+                        }}
+                      />
+                      <Button
+                        size="small"
+                        type="link"
+                        style={{ color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#1890ff' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSaveEnvironmentName();
+                        }}
+                      >
+                        保存
+                      </Button>
+                      <Button
+                        size="small"
+                        type="link"
+                        style={{ color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCancelEditEnvironmentName();
+                        }}
+                      >
+                        取消
+                      </Button>
+                    </Space>
+                  ) : (
+                    <Space size="small" style={{ alignItems: 'center' }}>
+                      <span>{env.name}</span>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<EditOutlined />}
+                        style={{
+                          color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#1890ff',
+                          padding: 0,
+                          margin: 0,
+                          width: '20px',
+                          height: '20px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEditEnvironmentName(env);
+                        }}
+                      >
+                      </Button>
+                      {environments.length > 1 && (
+                        <Button
+                          type="text"
+                          size="small"
+                          style={{
+                            color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999',
+                            padding: 0,
+                            margin: 0,
+                            width: '20px',
+                            height: '20px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveEnvironment(env.id);
+                          }}
+                        >
+                          ×
+                        </Button>
+                      )}
+                    </Space>
                   )}
                 </div>
               ))}
@@ -1572,8 +1729,11 @@ const IoTMockPlatform: React.FC = () => {
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>
+
+
     </div>
   );
 };
 
 export default IoTMockPlatform;
+

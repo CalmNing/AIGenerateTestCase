@@ -5,7 +5,7 @@ from sqlalchemy import delete
 from sqlmodel import select
 
 from app.deps import SessionDep
-from db.models import SavedRequest
+from db.models import SavedRequest, ScheduledTask
 from utils.base_response import Response
 
 router = APIRouter(prefix="/saved-requests", tags=["saved-requests"])
@@ -54,6 +54,22 @@ def delete_saved_request(session: SessionDep, saved_request_id: int):
     saved_request_db = session.get(SavedRequest, saved_request_id)
     if not saved_request_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="请求配置不存在")
+
+    # 检查该请求是否被定时任务引用
+    scheduled_tasks = session.exec(select(ScheduledTask)).all()
+    referenced_tasks = []
+    for task in scheduled_tasks:
+        if saved_request_id in task.request_ids:
+            referenced_tasks.append(task.name)
+
+    if referenced_tasks:
+        # task_names = "\n".join(referenced_tasks)
+        return Response(
+            code=status.HTTP_400_BAD_REQUEST, 
+            message="无法删除该请求配置，它被以下定时任务引用: {task_names}".format(
+                task_names="\n".join(f"{index + 1}. {task}" for index, task in enumerate(referenced_tasks))
+            )
+        )
 
     session.delete(saved_request_db)
     session.commit()
