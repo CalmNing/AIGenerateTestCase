@@ -30,6 +30,138 @@ interface Environment {
 
 type SavedRequest = SavedRequestType;
 
+/**
+ * 在一行 JSON 文本中找到非字符串内的行内注释起始位置
+ */
+function findInlineComment(line: string): string | null {
+  let inStr = false;
+  let ch = '';
+  for (let i = 0; i < line.length; i++) {
+    if (inStr) {
+      if (line[i] === '\\' && i + 1 < line.length) { i++; continue; }
+      if (line[i] === ch) inStr = false;
+    } else if (line[i] === '"' || line[i] === "'") {
+      inStr = true; ch = line[i];
+    } else if (line[i] === '/' && i + 1 < line.length) {
+      if (line[i + 1] === '/') return line.substring(i).trimEnd();
+      if (line[i + 1] === '*') {
+        const end = line.indexOf('*/', i + 2);
+        return end > -1 ? line.substring(i, end + 2) : line.substring(i).trimEnd();
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 格式化带注释的 JSON，保留注释
+ */
+function formatJsonWithComments(input: string): string {
+  const lines = input.split('\n');
+
+  // 1. 提取注释，关联到最近的后续 key
+  const pendingComments: string[] = [];
+  const keyStandaloneComments = new Map<string, string[]>(); // key -> 其上方的注释
+  const keyInlineComments = new Map<string, string>();        // key -> 行尾注释
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // 独立注释行
+    if (trimmed.startsWith('//') || trimmed.startsWith('/*')) {
+      pendingComments.push(trimmed);
+      continue;
+    }
+
+    // 检测 key 行
+    const noComment = trimmed.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//, '');
+    const keyMatch = noComment.match(/^"([^"]+)"\s*:/);
+    if (keyMatch) {
+      const key = keyMatch[1];
+      if (pendingComments.length > 0) {
+        keyStandaloneComments.set(key, [...pendingComments]);
+        pendingComments.length = 0;
+      }
+      const inline = findInlineComment(trimmed);
+      if (inline) keyInlineComments.set(key, inline);
+    }
+  }
+
+  // 2. 去注释 → 解析 → 格式化
+  const clean = stripJsonComments(input);
+  const obj = JSON.parse(clean);
+  const formatted = JSON.stringify(obj, null, 2);
+
+  // 3. 将注释插回格式化后的 JSON
+  const out: string[] = [];
+  for (const line of formatted.split('\n')) {
+    const km = line.match(/^\s*"([^"]+)"\s*:/);
+    if (km) {
+      const key = km[1];
+      const indent = line.match(/^(\s*)/)?.[1] || '';
+      const standalones = keyStandaloneComments.get(key);
+      if (standalones) {
+        for (const c of standalones) out.push(indent + c);
+      }
+      let outLine = line;
+      const inline = keyInlineComments.get(key);
+      if (inline) outLine += '  ' + inline;
+      out.push(outLine);
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join('\n');
+}
+
+/**
+ * 去除 JSON 字符串中的注释（支持 // 单行注释和 /* *\/ 多行注释）
+ */
+function stripJsonComments(str: string): string {
+  let result = '';
+  let i = 0;
+  let inString = false;
+  let stringChar = '';
+  while (i < str.length) {
+    if (inString) {
+      if (str[i] === '\\' && i + 1 < str.length) {
+        result += str[i] + str[i + 1];
+        i += 2;
+        continue;
+      }
+      if (str[i] === stringChar) {
+        inString = false;
+      }
+      result += str[i];
+      i++;
+    } else if (str[i] === '"' || str[i] === "'") {
+      inString = true;
+      stringChar = str[i];
+      result += str[i];
+      i++;
+    } else if (str[i] === '/' && i + 1 < str.length && str[i + 1] === '/') {
+      // 单行注释：跳过到行末
+      while (i < str.length && str[i] !== '\n') i++;
+    } else if (str[i] === '/' && i + 1 < str.length && str[i + 1] === '*') {
+      // 多行注释：跳过到 */
+      i += 2;
+      while (i < str.length && !(str[i] === '*' && i + 1 < str.length && str[i + 1] === '/')) i++;
+      if (i < str.length) i += 2; // 跳过 */
+    } else {
+      result += str[i];
+      i++;
+    }
+  }
+  return result;
+}
+
+/**
+ * 安全解析带注释的 JSON 字符串
+ */
+function parseJsonWithComments(str: string): any {
+  return JSON.parse(stripJsonComments(str));
+}
+
 interface Tab {
   id: string;
   name: string;
@@ -617,7 +749,7 @@ const IoTMockPlatform: React.FC = () => {
       let requestData: any = undefined;
       if (['POST', 'PUT', 'PATCH'].includes(method) && body) {
         try {
-          requestData = JSON.parse(body);
+          requestData = parseJsonWithComments(body);
         } catch {
           requestData = body;
         }
@@ -1299,7 +1431,7 @@ const IoTMockPlatform: React.FC = () => {
                   const currentBody = form.getFieldValue('body');
                   if (currentBody) {
                     try {
-                      const formatted = JSON.stringify(JSON.parse(currentBody), null, 2);
+                      const formatted = formatJsonWithComments(currentBody);
                       form.setFieldsValue({ body: formatted });
                       updateCurrentTab({ body: formatted });
                       message.success('JSON 格式化成功');
@@ -1320,7 +1452,7 @@ const IoTMockPlatform: React.FC = () => {
                 extensions={jsonExtensions}
                 onChange={handleBodyChange}
                 placeholder="请输入请求体（JSON格式）"
-                style={{ fontSize: '13px' }}
+                style={{ fontSize: '16px' }}
                 basicSetup={{
                   lineNumbers: true,
                   foldGutter: true,
