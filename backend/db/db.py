@@ -24,6 +24,50 @@ from db.models import Session, TestCase, SavedRequest, GlobalParameter, Schedule
 # 创建所有表
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+    # 自动补齐已存在表中缺失的字段（SQLite 兼容）
+    _migrate_missing_columns(engine)
+
+
+def _migrate_missing_columns(engine):
+    """检查所有 SQLModel 表定义，为已存在的表自动添加缺失的列（仅 SQLite）。"""
+    import sqlalchemy
+    from sqlalchemy import inspect, text
+
+    db_type = engine.dialect.name
+    if db_type != "sqlite":
+        return
+
+    insp = inspect(engine)
+    table_names_in_db = insp.get_table_names()
+
+    for table_cls in SQLModel.metadata.sorted_tables:
+        if table_cls.name not in table_names_in_db:
+            continue  # 表不存在，create_all 已经会处理
+
+        # 获取数据库中已存在的列名（小写比较）
+        existing_columns = {col["name"].lower() for col in insp.get_columns(table_cls.name)}
+
+        with engine.begin() as conn:
+            for column in table_cls.columns:
+                col_name = column.name
+                if col_name.lower() in existing_columns:
+                    continue  # 列已存在，跳过
+
+                # 构建 SQLite 的列定义
+                col_type = column.type.compile(dialect=engine.dialect)
+                ddl = f"{col_name} {col_type}"
+                if not column.nullable:
+                    default = column.server_default
+                    if default is not None:
+                        ddl += f" DEFAULT {default.arg}"
+                    else:
+                        # SQLite ALTER TABLE ADD COLUMN 要求有默认值（非空列）
+                        ddl += " DEFAULT ''"
+                try:
+                    conn.execute(text(f"ALTER TABLE {table_cls.name} ADD COLUMN {ddl}"))
+                    logger.info(f"自动迁移: 为表 {table_cls.name} 添加列 {col_name} ({col_type})")
+                except Exception as e:
+                    logger.warning(f"自动迁移失败: 表 {table_cls.name} 添加列 {col_name} 失败: {e}")
 
 # 获取数据库会话
 def get_db():
