@@ -474,6 +474,30 @@ const ScheduledTaskManager: React.FC = () => {
                   </div>
                 )}
 
+                {entry.response && (
+                  <div style={{ marginTop: 16, borderRadius: 6, border: '1px solid #b7eb8f', padding: 12, backgroundColor: '#f6ffed' }}>
+                    <Text strong style={{ fontSize: '14px', color: '#333' }}>响应详情</Text>
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                        <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>状态码:</Text>
+                        <Text style={{ fontSize: '13px' }}>{entry.response.status_code}</Text>
+                      </div>
+                      {entry.response.body !== undefined && entry.response.body !== null && (
+                        <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                          <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500, flexShrink: 0 }}>响应体:</Text>
+                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: '#f0f0f0', padding: 8, borderRadius: 4, border: '1px solid #e0e0e0', maxHeight: 300, overflow: 'auto' }}>
+                            <Paragraph style={{ margin: 0, fontSize: '12px', whiteSpace: 'pre-wrap' }}>
+                              {typeof entry.response.body === 'object'
+                                ? JSON.stringify(entry.response.body, null, 2)
+                                : String(entry.response.body)}
+                            </Paragraph>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {entry.extracted && Object.keys(entry.extracted).length > 0 && (
                   <div style={{ marginTop: 16, borderRadius: 6, border: '1px solid #e8e8e8', padding: 12, backgroundColor: '#f9f9f9' }}>
                     <Text strong style={{ fontSize: '14px', color: '#333' }}>提取的变量</Text>

@@ -165,6 +165,11 @@ async def execute_scheduled_task(task_id: int):
                             "headers": final_headers,
                             "params": final_params,
                             "body": final_data
+                        },
+                        "response": {
+                            "status_code": response.status_code,
+                            "headers": dict(response.headers),
+                            "body": response_data,
                         }
                     }
 
