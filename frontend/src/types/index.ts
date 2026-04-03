@@ -123,6 +123,13 @@ export interface ProxyRequest {
   environment_id: number | null;
 }
 
+// 代理响应类型
+export interface ProxyResponse<T = ApiResponse>{
+  status_code: number;
+  headers: Record<string, string>;
+  data?: T;
+}
+
 // 提取变量请求类型
 export interface ExtractVariablesRequest {
   environment_id: number;

@@ -643,10 +643,10 @@ const IoTMockPlatform: React.FC = () => {
 
       // Create axios-like response object
       const axiosResponse = {
-        status: proxyResponse.data.status_code,
+        status: proxyResponse.status_code,
         statusText: '',
-        headers: proxyResponse.data.headers,
-        data: proxyResponse.data.data
+        headers: proxyResponse.headers,
+        data: proxyResponse.data
       };
 
       setResponse(axiosResponse);

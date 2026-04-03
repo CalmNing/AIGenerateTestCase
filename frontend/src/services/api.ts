@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -234,7 +234,7 @@ export const globalParameterApi = {
 // 代理转发API
 export const proxyApi = {
   // 转发请求
-  forwardRequest: (request: ProxyRequest): Promise<ApiResponse<any>> => api.post('/proxy/forward', request)
+  forwardRequest: (request: ProxyRequest): Promise<ProxyResponse<ApiResponse<any>>> => api.post('/proxy/forward', request)
 };
 
 // 定时任务API
