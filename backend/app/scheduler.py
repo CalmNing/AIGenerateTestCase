@@ -1,6 +1,7 @@
 """定时任务调度器服务 - 使用 APScheduler 管理定时任务"""
 import json
 import logging
+import re
 from datetime import datetime
 
 import httpx
@@ -21,6 +22,44 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
+
+
+def strip_json_comments(text: str) -> str:
+    """去除 JSON 字符串中的注释（支持 // 和 /* */）"""
+    result = []
+    i = 0
+    length = len(text)
+    in_string = False
+    string_char = ''
+    while i < length:
+        if in_string:
+            if text[i] == '\\' and i + 1 < length:
+                result.append(text[i])
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if text[i] == string_char:
+                in_string = False
+            result.append(text[i])
+            i += 1
+        elif text[i] in ('"', "'"):
+            in_string = True
+            string_char = text[i]
+            result.append(text[i])
+            i += 1
+        elif text[i] == '/' and i + 1 < length and text[i + 1] == '/':
+            while i < length and text[i] != '\n':
+                i += 1
+        elif text[i] == '/' and i + 1 < length and text[i + 1] == '*':
+            i += 2
+            while i < length and not (text[i] == '*' and i + 1 < length and text[i + 1] == '/'):
+                i += 1
+            if i < length:
+                i += 2
+        else:
+            result.append(text[i])
+            i += 1
+    return ''.join(result)
 
 
 async def execute_scheduled_task(task_id: int):
@@ -56,11 +95,12 @@ async def execute_scheduled_task(task_id: int):
                 params_dict = {p["key"]: p["value"] for p in saved_req.parameters if p.get("key") and p.get("value")}
                 final_params = substitute_in_params(params_dict, param_map, unresolved)
 
-                # 解析 body
+                # 解析 body（去除注释后再解析）
                 request_data = None
                 if saved_req.body and saved_req.method in ("POST", "PUT", "PATCH"):
                     try:
-                        request_data = json.loads(saved_req.body)
+                        clean_body = strip_json_comments(saved_req.body)
+                        request_data = json.loads(clean_body)
                     except json.JSONDecodeError:
                         request_data = saved_req.body
                 final_data = substitute_in_data(request_data, param_map, unresolved)
