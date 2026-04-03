@@ -350,7 +350,8 @@ const IoTMockPlatform: React.FC = () => {
 
 
   // 从后端API获取全局参数配置
-  const fetchGlobalParameters = async () => {
+  const fetchGlobalParameters = async (envId?: string | null) => {
+
     try {
       const response = await globalParameterApi.getEnvironments();
       if (response.code === 200 && response.data) {
@@ -361,6 +362,10 @@ const IoTMockPlatform: React.FC = () => {
         }));
         if (backendEnvironments.length > 0) {
           setEnvironments(backendEnvironments);
+          if (envId) {
+            setCurrentEnvironmentId(envId);
+            return;
+          }
           // 找到默认环境或第一个环境
           const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
           setCurrentEnvironmentId(defaultEnv.id);
@@ -666,7 +671,7 @@ const IoTMockPlatform: React.FC = () => {
             const names = Object.entries(extracted).map(([k, v]) => k + '=' + v).join(', ');
             message.success('变量已提取: ' + names);
             // 刷新环境参数
-            fetchGlobalParameters();
+            fetchGlobalParameters(String(envId));
           }
         } catch (extractError: any) {
           const detail = extractError.response?.data?.detail || extractError.message;
@@ -843,7 +848,7 @@ const IoTMockPlatform: React.FC = () => {
             if (response.code === 200) {
               setSavedRequests(savedRequests.filter(req => req.id !== id));
               message.success('请求配置已删除');
-            }else{
+            } else {
               message.error(response.message || '删除请求配置失败');
             }
 
