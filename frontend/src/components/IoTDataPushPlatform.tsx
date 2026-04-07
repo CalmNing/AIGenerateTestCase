@@ -88,14 +88,16 @@ function formatJsonWithComments(input: string): string {
   }
 
   // 2. 替换未带引号的模板表达式为带引号的占位符，使其可被 JSON.parse 解析
+  //    匹配位置：对象值(:)、数组元素([或,)
   //    已被双引号包裹的模板（如 "{{$date(...)}}"）本身已是合法 JSON 字符串，无需处理
+  //    对于模板表达式与其他字符拼接的情况（如 {{$a}}.{{$b}}），整个值作为一个占位符
   const placeholders = new Map<string, string>();
   let placeholderIndex = 0;
-  const cleaned = stripJsonComments(input).replace(/(?<!")(\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})(?!")/g, (match) => {
+  const cleaned = stripJsonComments(input).replace(/([:\[,])\s*(?!"|\d|true|false|null|\[|\{(?!\{))((?:[^\s,}\]]*?(?:\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})[^\s,}\]]*?)+)/g, (_match, prefix, valuePart) => {
     const placeholder = `___PLACEHOLDER_${placeholderIndex}___`;
-    placeholders.set(placeholder, match);
+    placeholders.set(placeholder, valuePart);
     placeholderIndex++;
-    return `"${placeholder}"`;
+    return `${prefix} "${placeholder}"`;
   });
 
   // 3. 解析 → 格式化

@@ -14,11 +14,11 @@ import type { MockConfig, GlobalParameter } from '../types';
 function formatJsonWithTemplates(input: string): string {
   const placeholders = new Map<string, string>();
   let placeholderIndex = 0;
-  const cleaned = input.replace(/(?<!")(\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})(?!")/g, (match) => {
+  const cleaned = input.replace(/([:\[,])\s*(?!"|\d|true|false|null|\[|\{(?!\{))((?:[^\s,}\]]*?(?:\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})[^\s,}\]]*?)+)/g, (_match, prefix, valuePart) => {
     const placeholder = `___PLACEHOLDER_${placeholderIndex}___`;
-    placeholders.set(placeholder, match);
+    placeholders.set(placeholder, valuePart);
     placeholderIndex++;
-    return `"${placeholder}"`;
+    return `${prefix} "${placeholder}"`;
   });
   const obj = JSON.parse(cleaned);
   let formatted = JSON.stringify(obj, null, 2);
