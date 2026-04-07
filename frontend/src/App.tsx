@@ -3,7 +3,7 @@ import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
 import { EnvironmentOutlined, PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
-import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, GlobalParameter } from './types';
+import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi, historyPromptApi, globalParameterApi } from './services/api';
 
 // 环境类型定义
@@ -1021,7 +1021,7 @@ const App: React.FC = () => {
           parameters: environment.parameters,
           is_default: environment.is_default || false
         });
-        if (response.code === 200) {
+        if (response.code === 200 && response.data) {
           fetchGlobalParameters(response.data.id.toString());
         }
       } else {
@@ -1095,7 +1095,7 @@ const App: React.FC = () => {
           parameters: [],
           is_default: environments.length === 0
         });
-        if (response.code === 200) {
+        if (response.code === 200 && response.data) {
           fetchGlobalParameters(response.data.id.toString());
           setIsAddEnvModalVisible(false);
         }
@@ -1133,10 +1133,10 @@ const App: React.FC = () => {
         parameters: editingEnvironment.parameters,
         is_default: editingEnvironment.is_default || false
       });
-      if (response.code === 200) {
-        fetchGlobalParameters(editingEnvironment.id);
-        setIsEditEnvModalVisible(false);
-      }
+        if (response.code === 200 && response.data) {
+          fetchGlobalParameters(editingEnvironment.id);
+          setIsEditEnvModalVisible(false);
+        }
     } catch (error) {
       console.error('Failed to update environment:', error);
     }
