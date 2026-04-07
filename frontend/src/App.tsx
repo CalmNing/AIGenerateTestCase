@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, notification, Form, Tabs, Modal, Input, Button, Select } from 'antd';
-import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
-import { sessionApi, testcaseApi, moduleApi, historyPromptApi } from './services/api';
+import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
+import { EnvironmentOutlined, PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
+import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, GlobalParameter } from './types';
+import { sessionApi, testcaseApi, moduleApi, historyPromptApi, globalParameterApi } from './services/api';
+
+// 环境类型定义
+interface Environment {
+  id: string;
+  name: string;
+  parameters: Array<{ key: string; value: string }>;
+  is_default?: boolean;
+}
 import HomePage from './components/HomePage';
 import IoTDataPushPlatform from './components/IoTDataPushPlatform';
 import IoTMockPlatform from './components/IoTMockPlatform';
@@ -48,6 +57,18 @@ const App: React.FC = () => {
   const [editModuleParentId, setEditModuleParentId] = useState<number | null>(null);
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
+  
+  // 全局参数管理
+  const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]);
+  const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>(() => {
+    return localStorage.getItem('currentEnvironmentId') || 'env-1';
+  });
+  const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false);
+  const [newEnvironmentName, setNewEnvironmentName] = useState('');
+  const [isAddEnvModalVisible, setIsAddEnvModalVisible] = useState(false);
+  const [isEditEnvModalVisible, setIsEditEnvModalVisible] = useState(false);
+  const [editingEnvironment, setEditingEnvironment] = useState<Environment | null>(null);
+  const [editEnvironmentName, setEditEnvironmentName] = useState('');
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -946,7 +967,185 @@ const App: React.FC = () => {
     setCurrentPlatform('mock-api');
     localStorage.setItem('currentPlatform', 'mock-api');
   };
+  
+  // 全局参数管理函数
+  const fetchGlobalParameters = async (envId?: string | null) => {
+    try {
+      const response = await globalParameterApi.getEnvironments();
+      if (response.code === 200 && response.data) {
+        const backendEnvironments = response.data.map((env: any) => ({
+          id: env.id.toString(),
+          name: env.name,
+          parameters: env.parameters || [],
+          is_default: env.is_default
+        }));
+        if (backendEnvironments.length > 0) {
+          setEnvironments(backendEnvironments);
+          if (envId) {
+            setCurrentEnvironmentId(envId);
+            return;
+          }
+          // 优先使用 localStorage 中保存的环境，若不存在则使用默认环境
+          const savedEnvId = localStorage.getItem('currentEnvironmentId');
+          if (savedEnvId && backendEnvironments.find((env: any) => env.id === savedEnvId)) {
+            setCurrentEnvironmentId(savedEnvId);
+          } else {
+            const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
+            setCurrentEnvironmentId(defaultEnv.id);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch global parameters:', error);
+    }
+  };
+  
+  // 获取当前环境
+  const getCurrentEnvironment = (): Environment => {
+    return environments.find(env => env.id === currentEnvironmentId) || environments[0];
+  };
+  
+  // 切换环境
+  const handleSwitchEnvironment = (envId: string) => {
+    setCurrentEnvironmentId(envId);
+    localStorage.setItem('currentEnvironmentId', envId);
+  };
+  
+  // 保存环境到后端
+  const saveEnvironmentToBackend = async (environment: Environment) => {
+    try {
+      if (environment.id === 'env-1') {
+        // 创建新环境
+        const response = await globalParameterApi.createEnvironment({
+          name: environment.name,
+          parameters: environment.parameters,
+          is_default: environment.is_default || false
+        });
+        if (response.code === 200) {
+          fetchGlobalParameters(response.data.id.toString());
+        }
+      } else {
+        // 更新现有环境
+        const response = await globalParameterApi.updateEnvironment(Number(environment.id), {
+          name: environment.name,
+          parameters: environment.parameters,
+          is_default: environment.is_default || false
+        });
+        if (response.code === 200) {
+          fetchGlobalParameters(environment.id);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to save environment:', error);
+    }
+  };
+  
+  // 添加环境参数
+  const handleAddEnvironmentParameter = async () => {
+    const newEnvironments = [...environments];
+    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
+    if (envIndex !== -1) {
+      const newParameters = [...newEnvironments[envIndex].parameters, { key: '', value: '' }];
+      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
+      setEnvironments(newEnvironments);
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+    }
+  };
+  
+  // 删除环境参数
+  const handleRemoveEnvironmentParameter = async (index: number) => {
+    const newEnvironments = [...environments];
+    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
+    if (envIndex !== -1) {
+      const newParameters = newEnvironments[envIndex].parameters.filter((_, i) => i !== index);
+      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
+      setEnvironments(newEnvironments);
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+    }
+  };
+  
+  // 处理环境参数变更
+  const handleEnvironmentParameterChange = async (index: number, field: 'key' | 'value', value: string) => {
+    const newEnvironments = [...environments];
+    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
+    if (envIndex !== -1) {
+      const newParameters = [...newEnvironments[envIndex].parameters];
+      newParameters[index] = { ...newParameters[index], [field]: value };
+      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
+      setEnvironments(newEnvironments);
+      // 保存到后端
+      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+    }
+  };
+  
+  // 打开添加环境模态框
+  const handleAddEnvironment = () => {
+    setNewEnvironmentName('');
+    setIsAddEnvModalVisible(true);
+  };
+  
+  // 确认添加环境
+  const handleConfirmAddEnvironment = async () => {
+    if (newEnvironmentName) {
+      try {
+        const response = await globalParameterApi.createEnvironment({
+          name: newEnvironmentName,
+          parameters: [],
+          is_default: environments.length === 0
+        });
+        if (response.code === 200) {
+          fetchGlobalParameters(response.data.id.toString());
+          setIsAddEnvModalVisible(false);
+        }
+      } catch (error) {
+        console.error('Failed to add environment:', error);
+      }
+    }
+  };
+  
+  // 删除环境
+  const handleRemoveEnvironment = async (envId: string) => {
+    try {
+      const response = await globalParameterApi.deleteEnvironment(Number(envId));
+      if (response.code === 200) {
+        fetchGlobalParameters();
+      }
+    } catch (error) {
+      console.error('Failed to remove environment:', error);
+    }
+  };
 
+  // 打开编辑环境模态框
+  const handleOpenEditEnvironment = (env: Environment) => {
+    setEditingEnvironment(env);
+    setEditEnvironmentName(env.name);
+    setIsEditEnvModalVisible(true);
+  };
+
+  // 确认编辑环境
+  const handleConfirmEditEnvironment = async () => {
+    if (!editingEnvironment || !editEnvironmentName.trim()) return;
+    try {
+      const response = await globalParameterApi.updateEnvironment(Number(editingEnvironment.id), {
+        name: editEnvironmentName.trim(),
+        parameters: editingEnvironment.parameters,
+        is_default: editingEnvironment.is_default || false
+      });
+      if (response.code === 200) {
+        fetchGlobalParameters(editingEnvironment.id);
+        setIsEditEnvModalVisible(false);
+      }
+    } catch (error) {
+      console.error('Failed to update environment:', error);
+    }
+  };
+  
+  // 加载全局参数
+  useEffect(() => {
+    fetchGlobalParameters();
+  }, []);
 
   return (
     <ConfigProvider locale={zhCN}>
@@ -960,16 +1159,40 @@ const App: React.FC = () => {
       ) : currentPlatform === 'iot-mock' ? (
         <div>
           <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h1 style={{ margin: 0 }}>IoT 数据推送平台</h1>
-            <Button onClick={navigateToHome}>返回首页</Button>
+            <h2 onClick={navigateToHome} style={{ margin: 0, cursor: 'pointer' }}>测试工具平台</h2>
+            <Space>
+              <span style={{ color: '#666', fontSize: '14px' }}>
+                当前环境: <strong>{getCurrentEnvironment()?.name}</strong>
+              </span>
+              <Button
+                icon={<EnvironmentOutlined />}
+                onClick={() => setIsGlobalParamsModalVisible(true)}
+              >
+                全局参数
+              </Button>
+              {/* <Button onClick={navigateToHome}>返回首页</Button> */}
+            </Space>
           </div>
-          <IoTDataPushPlatform />
+          <IoTDataPushPlatform
+            currentEnvironmentId={currentEnvironmentId}
+          />
         </div>
       ) : currentPlatform === 'scheduled-task' ? (
         <div>
           <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h1 style={{ margin: 0 }}>定时任务平台</h1>
-            <Button onClick={navigateToHome}>返回首页</Button>
+            <h2 onClick={navigateToHome} style={{ margin: 0, cursor: 'pointer' }}>测试工具平台</h2>
+            <Space>
+              <span style={{ color: '#666', fontSize: '14px' }}>
+                当前环境: <strong>{getCurrentEnvironment()?.name}</strong>
+              </span>
+              <Button
+                icon={<EnvironmentOutlined />}
+                onClick={() => setIsGlobalParamsModalVisible(true)}
+              >
+                全局参数
+              </Button>
+              {/* <Button onClick={navigateToHome}>返回首页</Button> */}
+            </Space>
           </div>
           <div style={{ padding: '16px' }}>
             <ScheduledTaskManager />
@@ -978,8 +1201,19 @@ const App: React.FC = () => {
       ) : currentPlatform === 'mock-api' ? (
         <div>
           <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h1 style={{ margin: 0 }}>Mock 接口平台</h1>
-            <Button onClick={navigateToHome}>返回首页</Button>
+            <h2 onClick={navigateToHome} style={{ margin: 0, cursor: 'pointer' }}>测试工具平台</h2>
+            <Space>
+              <span style={{ color: '#666', fontSize: '14px' }}>
+                当前环境: <strong>{getCurrentEnvironment()?.name}</strong>
+              </span>
+              <Button 
+                icon={<EnvironmentOutlined />} 
+                onClick={() => setIsGlobalParamsModalVisible(true)}
+              >
+                全局参数
+              </Button>
+              {/* <Button onClick={navigateToHome}>返回首页</Button> */}
+            </Space>
           </div>
           <IoTMockPlatform />
         </div>
@@ -1282,6 +1516,168 @@ const App: React.FC = () => {
           />
         </Layout>
       )}
+
+      {/* 全局参数模态框 - 全局渲染 */}
+      <Modal
+        title="全局参数管理"
+        open={isGlobalParamsModalVisible}
+        onOk={() => setIsGlobalParamsModalVisible(false)}
+        onCancel={() => setIsGlobalParamsModalVisible(false)}
+        width={600}
+      >
+        <div style={{ marginBottom: '16px' }}>
+          {/* 环境选择和管理 */}
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 'bold' }}>环境管理</h3>
+              <Button
+                type="primary"
+                size="small"
+                onClick={handleAddEnvironment}
+              >
+                添加环境
+              </Button>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+              {environments.map(env => (
+                <div
+                  key={env.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '4px 12px',
+                    borderRadius: '16px',
+                    background: currentEnvironmentId === env.id ? '#1890ff' : '#f0f0f0',
+                    color: currentEnvironmentId === env.id ? '#fff' : '#333',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    gap: '4px'
+                  }}
+                  onClick={() => handleSwitchEnvironment(env.id)}
+                >
+                  {env.name}
+                  {env.is_default && (
+                    <span style={{ fontSize: '10px', opacity: 0.8 }}>(默认)</span>
+                  )}
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<EditOutlined />}
+                    style={{ color: currentEnvironmentId === env.id ? '#fff' : '#999', padding: 0, fontSize: '12px' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleOpenEditEnvironment(env);
+                    }}
+                  >
+                    {/* 编辑 */}
+                  </Button>
+                  <Popconfirm
+                    title="确定删除该环境？"
+                    description="删除后该环境下的所有参数将丢失"
+                    onConfirm={(e) => {
+                      e?.stopPropagation();
+                      handleRemoveEnvironment(env.id);
+                    }}
+                    onCancel={(e) => e?.stopPropagation()}
+                    okText="确定"
+                    cancelText="取消"
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      style={{ color: currentEnvironmentId === env.id ? '#fff' : '#ff4d4f', padding: 0, fontSize: '14px' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      ×
+                    </Button>
+                  </Popconfirm>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 当前环境的参数 */}
+          <p style={{ color: '#666', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
+
+          {getCurrentEnvironment().parameters.map((param, index) => (
+            <Space
+              key={index}
+              style={{ width: '100%', marginBottom: '12px' }}
+              align="center"
+            >
+              <Input
+                placeholder="参数名"
+                value={param.key}
+                onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
+                style={{ width: 150 }}
+                size="middle"
+              />
+              <Input
+                placeholder="参数值"
+                value={param.value}
+                onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
+                style={{ flex: 1, width: 330 }}
+                size="middle"
+              />
+              <Button
+                icon={<MinusOutlined />}
+                danger
+                onClick={() => handleRemoveEnvironmentParameter(index)}
+                size="small"
+              />
+            </Space>
+          ))}
+
+          <Button
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={handleAddEnvironmentParameter}
+            style={{ marginTop: '8px', width: '100%' }}
+            size="middle"
+          >
+            添加全局参数
+          </Button>
+        </div>
+      </Modal>
+
+      {/* 添加环境模态框 - 全局渲染 */}
+      <Modal
+        title="创建新环境"
+        open={isAddEnvModalVisible}
+        onOk={handleConfirmAddEnvironment}
+        onCancel={() => setIsAddEnvModalVisible(false)}
+        width={400}
+      >
+        <Input
+          placeholder="请输入环境名称"
+          value={newEnvironmentName}
+          onChange={(e) => setNewEnvironmentName(e.target.value)}
+          style={{ marginBottom: '16px' }}
+        />
+        <div style={{ color: '#999', fontSize: '12px' }}>
+          环境名称用于区分不同的参数配置集
+        </div>
+      </Modal>
+
+      {/* 编辑环境模态框 - 全局渲染 */}
+      <Modal
+        title="编辑环境"
+        open={isEditEnvModalVisible}
+        onOk={handleConfirmEditEnvironment}
+        onCancel={() => setIsEditEnvModalVisible(false)}
+        width={400}
+      >
+        <Input
+          placeholder="请输入环境名称"
+          value={editEnvironmentName}
+          onChange={(e) => setEditEnvironmentName(e.target.value)}
+          onPressEnter={handleConfirmEditEnvironment}
+          style={{ marginBottom: '16px' }}
+        />
+        <div style={{ color: '#999', fontSize: '12px' }}>
+          环境名称用于区分不同的参数配置集
+        </div>
+      </Modal>
     </ConfigProvider>
   );
 };

@@ -175,7 +175,11 @@ interface Tab {
   hasUnsavedChanges?: boolean; // 是否有未保存的更改
 }
 
-const IoTDataPushPlatform: React.FC = () => {
+interface IoTDataPushPlatformProps {
+  currentEnvironmentId?: string;
+}
+
+const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnvironmentId: propEnvironmentId }) => {
   const [form] = Form.useForm();
   const [activeTabId, setActiveTabId] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -189,7 +193,9 @@ const IoTDataPushPlatform: React.FC = () => {
   const [editingRequest, setEditingRequest] = useState<SavedRequest | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]); // 标签页列表
   const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]); // 环境列表
-  const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>('env-1'); // 当前选中的环境
+  const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>(() => {
+    return localStorage.getItem('currentEnvironmentId') || 'env-1';
+  });
   const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false); // 全局参数模态框
   const [postExtractions, setPostExtractions] = useState<ExtractionRule[]>([]); // 后置提取规则
 
@@ -269,6 +275,13 @@ const IoTDataPushPlatform: React.FC = () => {
   useEffect(() => {
     fetchGlobalParameters();
   }, []);
+
+  // 同步 App.tsx 传入的环境切换
+  useEffect(() => {
+    if (propEnvironmentId && propEnvironmentId !== currentEnvironmentId) {
+      setCurrentEnvironmentId(propEnvironmentId);
+    }
+  }, [propEnvironmentId]);
 
   // 初始化默认标签页
   useEffect(() => {
@@ -439,6 +452,7 @@ const IoTDataPushPlatform: React.FC = () => {
   // 切换环境
   const handleSwitchEnvironment = async (envId: string) => {
     setCurrentEnvironmentId(envId);
+    localStorage.setItem('currentEnvironmentId', envId);
 
     // 更新默认环境设置
     const currentEnv = environments.find(env => env.id === envId);
@@ -498,9 +512,14 @@ const IoTDataPushPlatform: React.FC = () => {
             setCurrentEnvironmentId(envId);
             return;
           }
-          // 找到默认环境或第一个环境
-          const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
-          setCurrentEnvironmentId(defaultEnv.id);
+          // 优先使用 localStorage 中保存的环境，若不存在则使用默认环境
+          const savedEnvId = localStorage.getItem('currentEnvironmentId');
+          if (savedEnvId && backendEnvironments.find((env: any) => env.id === savedEnvId)) {
+            setCurrentEnvironmentId(savedEnvId);
+          } else {
+            const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
+            setCurrentEnvironmentId(defaultEnv.id);
+          }
         }
       }
     } catch (error) {
@@ -1081,20 +1100,8 @@ const IoTDataPushPlatform: React.FC = () => {
       }}>
         <span style={{ fontWeight: 600, fontSize: 15, color: '#333' }}>IoT 数据推送平台</span>
         <Space>
-          <span style={{ color: '#666', fontSize: '14px', marginRight: '8px' }}>
-            当前环境: <strong>{getCurrentEnvironment().name}</strong>
-          </span>
           <Button
-            type="default"
-            icon={<SyncOutlined />}
-            onClick={() => setIsGlobalParamsModalVisible(true)}
-            size="middle"
-          >
-            全局参数
-          </Button>
-
-          <Button
-            type="default"
+            type="primary"
             icon={<PlusOutlined />}
             onClick={addNewTab}
             size="middle"
