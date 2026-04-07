@@ -6,6 +6,28 @@ import { json } from '@codemirror/lang-json';
 import { mockConfigApi, globalParameterApi } from '../services/api';
 import type { MockConfig, GlobalParameter } from '../types';
 
+/**
+ * 格式化带模板表达式的 JSON
+ * 支持未引号包裹的模板如 {{$randomInt(1,10)}}、${resId}
+ * 已被双引号包裹的模板（如 "{{$date(...)}}"）不处理
+ */
+function formatJsonWithTemplates(input: string): string {
+  const placeholders = new Map<string, string>();
+  let placeholderIndex = 0;
+  const cleaned = input.replace(/(?<!")(\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})(?!")/g, (match) => {
+    const placeholder = `___PLACEHOLDER_${placeholderIndex}___`;
+    placeholders.set(placeholder, match);
+    placeholderIndex++;
+    return `"${placeholder}"`;
+  });
+  const obj = JSON.parse(cleaned);
+  let formatted = JSON.stringify(obj, null, 2);
+  placeholders.forEach((original, placeholder) => {
+    formatted = formatted.split(`"${placeholder}"`).join(original);
+  });
+  return formatted;
+}
+
 const { Text } = Typography;
 
 interface HeaderItem {
@@ -278,6 +300,8 @@ const IoTMockPlatform: React.FC = () => {
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
         width={720}
+        style={{ top: 20 }}
+        bodyStyle={{ maxHeight: 'calc(100vh - 250px)', overflowY: 'auto', overflowX: 'hidden', padding: '0 10px 1px 1px' }}
         destroyOnClose
       >
         <Form form={form} layout="vertical">
@@ -344,7 +368,7 @@ const IoTMockPlatform: React.FC = () => {
                     const body = form.getFieldValue('response_body');
                     if (body) {
                       try {
-                        const formatted = JSON.stringify(JSON.parse(body), null, 2);
+                        const formatted = formatJsonWithTemplates(body);
                         form.setFieldsValue({ response_body: formatted });
                         message.success('格式化成功');
                       } catch { message.error('JSON 格式不正确'); }
@@ -391,7 +415,7 @@ const IoTMockPlatform: React.FC = () => {
           <Form.Item name="response_body">
             <CodeMirror
               value={form.getFieldValue('response_body') || ''}
-              height="250px"
+              height="450px"
               extensions={jsonExtensions}
               onChange={(val) => form.setFieldsValue({ response_body: val })}
               placeholder="输入响应体 JSON"

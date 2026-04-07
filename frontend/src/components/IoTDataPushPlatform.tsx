@@ -54,7 +54,7 @@ function findInlineComment(line: string): string | null {
 }
 
 /**
- * 格式化带注释的 JSON，保留注释
+ * 格式化带注释和模板表达式的 JSON，保留注释和模板
  */
 function formatJsonWithComments(input: string): string {
   const lines = input.split('\n');
@@ -87,12 +87,27 @@ function formatJsonWithComments(input: string): string {
     }
   }
 
-  // 2. 去注释 → 解析 → 格式化
-  const clean = stripJsonComments(input);
-  const obj = JSON.parse(clean);
-  const formatted = JSON.stringify(obj, null, 2);
+  // 2. 替换未带引号的模板表达式为带引号的占位符，使其可被 JSON.parse 解析
+  //    已被双引号包裹的模板（如 "{{$date(...)}}"）本身已是合法 JSON 字符串，无需处理
+  const placeholders = new Map<string, string>();
+  let placeholderIndex = 0;
+  const cleaned = stripJsonComments(input).replace(/(?<!")(\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})(?!")/g, (match) => {
+    const placeholder = `___PLACEHOLDER_${placeholderIndex}___`;
+    placeholders.set(placeholder, match);
+    placeholderIndex++;
+    return `"${placeholder}"`;
+  });
 
-  // 3. 将注释插回格式化后的 JSON
+  // 3. 解析 → 格式化
+  const obj = JSON.parse(cleaned);
+  let formatted = JSON.stringify(obj, null, 2);
+
+  // 4. 还原模板表达式：将带引号的占位符替换回原始未引号包裹的模板表达式
+  placeholders.forEach((original, placeholder) => {
+    formatted = formatted.split(`"${placeholder}"`).join(original);
+  });
+
+  // 5. 将注释插回格式化后的 JSON
   const out: string[] = [];
   for (const line of formatted.split('\n')) {
     const km = line.match(/^\s*"([^"]+)"\s*:/);
