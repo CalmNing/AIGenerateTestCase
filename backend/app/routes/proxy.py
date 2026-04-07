@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import subprocess
@@ -11,7 +12,7 @@ from sqlmodel import Session, select
 import httpx
 
 from db.db import get_db
-from db.models import GlobalParameter
+from db.models import GlobalParameter, MockConfig
 
 router = APIRouter(prefix="/proxy", tags=["proxy"])
 logging.basicConfig(level=logging.INFO)
@@ -205,6 +206,88 @@ def build_param_map(db: Session, environment_id: Optional[int], local_parameters
     return param_map
 
 
+def _mock_match_url(config: MockConfig, request_path: str) -> bool:
+    """将配置的 url_path 与请求路径进行匹配，支持 {param} 通配符"""
+    pattern = re.escape(config.url_path)
+    pattern = pattern.replace(r'\{', '(?P<param_[^}]+>[^/]+)').replace(r'\}', '')
+    try:
+        return re.fullmatch(pattern, request_path) is not None
+    except re.error:
+        return config.url_path == request_path
+
+
+def _mock_substitute(text: str, env_id: Optional[int]) -> str:
+    """替换文本中的 {{variable}} 占位符为环境变量值"""
+    if not env_id or not text:
+        return text
+    from db.db import engine as _engine
+    from sqlmodel import Session as _Session
+    with _Session(_engine) as session:
+        env = session.get(GlobalParameter, env_id)
+    if not env:
+        return text
+    param_map = {}
+    for p in env.parameters or []:
+        if isinstance(p, dict) and p.get("key"):
+            param_map[p["key"]] = str(p.get("value", ""))
+
+    def replacer(match):
+        return param_map.get(match.group(1), match.group(0))
+
+    return re.sub(r'\{\{(\w+)\}\}', replacer, text)
+
+
+def try_mock_response(db: Session, method: str, url: str, param_map: dict, unresolved: set):
+    """检查是否有匹配的 Mock 配置，如果有则返回 mock 响应字典，否则返回 None。
+
+    使用与 proxy 相同的变量替换逻辑处理 url 中的变量，以便正确匹配。
+    """
+    enabled_mocks = db.exec(select(MockConfig).where(MockConfig.enabled == True)).all()
+    if not enabled_mocks:
+        return None
+
+    # 对 url 中的变量进行替换（但不检查 unresolved，因为 mock 匹配优先）
+    resolved_url = substitute_variables(url, param_map, set())
+
+    # 提取 URL 的 path 部分
+    from urllib.parse import urlparse
+    parsed = urlparse(resolved_url)
+    request_path = parsed.path
+
+    for config in enabled_mocks:
+        if config.method.upper() == method.upper() and _mock_match_url(config, request_path):
+            # 匹配成功，构建 mock 响应
+            resp_headers = {}
+            for h in (config.response_headers or []):
+                if isinstance(h, dict) and h.get("key"):
+                    resp_headers[h["key"]] = _mock_substitute(str(h["value"]), config.environment_id)
+
+            body = None
+            if config.response_body:
+                body = _mock_substitute(config.response_body, config.environment_id)
+                try:
+                    body = json.loads(body)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # 对 body 也进行代理层面的变量替换
+            import json as _json
+            if isinstance(body, str):
+                body = substitute_variables(body, param_map, unresolved)
+            elif isinstance(body, (dict, list)):
+                body = substitute_in_data(body, param_map, unresolved)
+
+            logger.info("Mock intercepted: %s %s -> %d", method, request_path, config.status_code)
+            return {
+                "status_code": config.status_code,
+                "headers": resp_headers,
+                "data": body,
+                "mocked": True,
+            }
+
+    return None
+
+
 
 @router.post("/forward")
 async def forward_request(
@@ -232,11 +315,16 @@ async def forward_request(
             status_code=400,
             detail=f"以下变量未在环境参数中定义: {unresolved_list}",
         )
-    logger.info("Proxy request: url=%s, method=%s, headers=%s, params=%s, data=%s",
+    logger.info("Proxy request: url=%s, method=%s, headers=%s, params=%s, json=%s",
                      final_url, request.method, final_headers, final_params, final_data)
-
+    logger.info("final_data_type: %s", type(final_data))
     if not is_valid_url(final_url):
         raise HTTPException(status_code=400, detail="Invalid URL")
+
+    # 检查是否有匹配的 Mock 配置，优先返回 Mock 响应
+    mock_result = try_mock_response(db, request.method, request.url, param_map, unresolved)
+    if mock_result:
+        return mock_result
 
     async with httpx.AsyncClient() as client:
         
@@ -245,13 +333,15 @@ async def forward_request(
                 method=request.method,
                 url=final_url,
                 headers=final_headers,
-                json=final_data,
+                json=None if not isinstance(final_data, dict) else final_data,
+                data=None if not isinstance(final_data, str) else final_data,
                 params=final_params,
                 timeout=30.0
             )
             # 尝试解析响应为JSON
             try:
                 response_data = response.json()
+                logger.info("response_data: %s", response_data)
             except Exception:
                 response_data = response.text
 

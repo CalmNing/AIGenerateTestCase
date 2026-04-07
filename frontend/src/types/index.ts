@@ -153,3 +153,20 @@ export interface ScheduledTask {
   updated_at: string;
   request_names?: Array<{ id: number; name: string }>;
 }
+
+// Mock 配置类型
+export interface MockConfig {
+  id: number;
+  name: string;
+  method: string;
+  url_path: string;
+  status_code: number;
+  response_headers: Array<{ key: string; value: string }>;
+  response_body?: string;
+  enabled: boolean;
+  environment_id: number | null;
+  response_count: number;
+  page_size?: number;
+  created_at: string;
+  updated_at: string;
+}

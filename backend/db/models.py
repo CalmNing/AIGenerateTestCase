@@ -152,3 +152,17 @@ class ScheduledTask(BaseModel, table=True):
     enabled: bool = Field(default=True, description="是否启用")
     last_run_at: Optional[datetime] = Field(default=None, description="上次执行时间")
     last_run_result: Optional[str] = Field(default=None, description="上次执行结果（JSON字符串）")
+
+
+class MockConfig(BaseModel, table=True):
+    """Mock 接口配置数据模型"""
+    name: str = Field(default="", description="Mock名称")
+    method: str = Field(default="GET", description="HTTP方法")
+    url_path: str = Field(default="", description="匹配的URL路径")
+    status_code: int = Field(default=200, description="响应状态码")
+    response_headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="响应头列表")
+    response_body: Optional[str] = Field(default=None, description="响应体（JSON字符串）")
+    enabled: bool = Field(default=True, description="是否启用")
+    environment_id: Optional[int] = Field(default=None, description="参数化使用的环境ID")
+    response_count: int = Field(default=1, ge=1, description="返回数据条目数量（分页用）")
+    page_size: Optional[int] = Field(default=None, ge=1, description="分页大小（可选，默认为1）")

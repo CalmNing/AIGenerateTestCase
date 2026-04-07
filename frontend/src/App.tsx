@@ -5,6 +5,7 @@ import { Layout, notification, Form, Tabs, Modal, Input, Button, Select } from '
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi, historyPromptApi } from './services/api';
 import HomePage from './components/HomePage';
+import IoTDataPushPlatform from './components/IoTDataPushPlatform';
 import IoTMockPlatform from './components/IoTMockPlatform';
 import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
@@ -26,10 +27,10 @@ const { Content } = Layout;
 const App: React.FC = () => {
 
   // 导航状态管理
-  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task'>(() => {
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task' | 'mock-api'>(() => {
     // 从localStorage加载上次的平台状态
     const savedPlatform = localStorage.getItem('currentPlatform');
-    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task') || 'home';
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task' | 'mock-api') || 'home';
   });
 
   // 状态管理
@@ -941,14 +942,20 @@ const App: React.FC = () => {
     localStorage.setItem('currentPlatform', 'scheduled-task');
   };
 
+  const navigateToMock = () => {
+    setCurrentPlatform('mock-api');
+    localStorage.setItem('currentPlatform', 'mock-api');
+  };
+
 
   return (
     <ConfigProvider locale={zhCN}>
       {currentPlatform === 'home' ? (
-        <HomePage 
-          onNavigateToAI={navigateToAITestcase} 
-          onNavigateToIoT={navigateToIoTMock} 
+        <HomePage
+          onNavigateToAI={navigateToAITestcase}
+          onNavigateToIoT={navigateToIoTMock}
           onNavigateToScheduledTask={navigateToScheduledTask}
+          onNavigateToMock={navigateToMock}
         />
       ) : currentPlatform === 'iot-mock' ? (
         <div>
@@ -956,7 +963,7 @@ const App: React.FC = () => {
             <h1 style={{ margin: 0 }}>IoT 数据推送平台</h1>
             <Button onClick={navigateToHome}>返回首页</Button>
           </div>
-          <IoTMockPlatform />
+          <IoTDataPushPlatform />
         </div>
       ) : currentPlatform === 'scheduled-task' ? (
         <div>
@@ -967,6 +974,14 @@ const App: React.FC = () => {
           <div style={{ padding: '16px' }}>
             <ScheduledTaskManager />
           </div>
+        </div>
+      ) : currentPlatform === 'mock-api' ? (
+        <div>
+          <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h1 style={{ margin: 0 }}>Mock 接口平台</h1>
+            <Button onClick={navigateToHome}>返回首页</Button>
+          </div>
+          <IoTMockPlatform />
         </div>
       ) : (
         <Layout style={{ minHeight: '100vh' }}>

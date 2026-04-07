@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Row, Col, Typography, Space } from 'antd';
-import { RocketOutlined, ApiOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { RocketOutlined, ApiOutlined, ClockCircleOutlined, ExperimentOutlined } from '@ant-design/icons';
 
 const { Title, Paragraph } = Typography;
 
@@ -8,9 +8,10 @@ interface HomePageProps {
   onNavigateToAI: () => void;
   onNavigateToIoT: () => void;
   onNavigateToScheduledTask: () => void;
+  onNavigateToMock: () => void;
 }
 
-const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, onNavigateToScheduledTask }) => {
+const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, onNavigateToScheduledTask, onNavigateToMock }) => {
   return (
     <div style={{ 
       padding: '40px', 
@@ -35,12 +36,12 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
         </Paragraph>
       </div>
       
-      <Row 
-        gutter={[48, 48]} 
+      <Row
+        gutter={[48, 48]}
         justify="center"
         style={{ flex: 1, alignItems: 'center' }}
       >
-        <Col xs={24} sm={12} md={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card
             hoverable
             cover={
@@ -92,15 +93,15 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
           </Card>
         </Col>
         
-        <Col xs={24} sm={12} md={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card
             hoverable
             cover={
-              <div style={{ 
-                height: '220px', 
-                background: '#f6ffed', 
-                display: 'flex', 
-                alignItems: 'center', 
+              <div style={{
+                height: '220px',
+                background: '#f6ffed',
+                display: 'flex',
+                alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: '90px',
                 transition: 'all 0.3s ease'
@@ -144,15 +145,15 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
           </Card>
         </Col>
         
-        <Col xs={24} sm={12} md={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card
             hoverable
             cover={
-              <div style={{ 
-                height: '220px', 
-                background: '#fff7e6', 
-                display: 'flex', 
-                alignItems: 'center', 
+              <div style={{
+                height: '220px',
+                background: '#fff7e6',
+                display: 'flex',
+                alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: '90px',
                 transition: 'all 0.3s ease'
@@ -191,6 +192,58 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
                 lineHeight: '1.6'
               }}>
                 管理定时任务，查看执行日志，支持间隔和Cron表达式调度，以及响应数据后置提取。
+              </Paragraph>
+            </Space>
+          </Card>
+        </Col>
+
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            cover={
+              <div style={{
+                height: '220px',
+                background: '#f9f0ff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '90px',
+                transition: 'all 0.3s ease'
+              }}>
+                <ExperimentOutlined style={{ color: '#722ed1' }} />
+              </div>
+            }
+            onClick={onNavigateToMock}
+            style={{
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+              borderRadius: '12px',
+              transition: 'all 0.3s ease',
+              border: '1px solid #e8e8e8'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-4px)';
+              e.currentTarget.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.15)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+            }}
+          >
+            <Space direction="vertical" size="middle" style={{ width: '100%', padding: '0 16px' }}>
+              <Title level={4} style={{
+                textAlign: 'center',
+                marginBottom: '12px',
+                color: '#333'
+              }}>
+                Mock 接口平台
+              </Title>
+              <Paragraph style={{
+                textAlign: 'center',
+                color: '#666',
+                lineHeight: '1.6'
+              }}>
+                配置Mock接口，支持URL匹配和参数化响应，快速模拟后端接口返回。
               </Paragraph>
             </Space>
           </Card>

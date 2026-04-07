@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -253,4 +253,19 @@ export const scheduledTaskApi = {
 
   // 手动触发定时任务
   runTask: (taskId: number): Promise<ApiResponse> => api.post(`/scheduled-tasks/${taskId}/run`)
+};
+
+// Mock配置API
+export const mockConfigApi = {
+  // 获取所有Mock配置
+  getConfigs: (): Promise<ApiResponse<MockConfig[]>> => api.get('/mock-configs'),
+
+  // 创建Mock配置
+  createConfig: (config: Omit<MockConfig, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<MockConfig>> => api.post('/mock-configs', config),
+
+  // 更新Mock配置
+  updateConfig: (configId: number, config: Partial<MockConfig>): Promise<ApiResponse<MockConfig>> => api.put(`/mock-configs/${configId}`, config),
+
+  // 删除Mock配置
+  deleteConfig: (configId: number): Promise<ApiResponse> => api.delete(`/mock-configs/${configId}`)
 };
