@@ -15,7 +15,7 @@ router = APIRouter(prefix="/scheduled-tasks", tags=["scheduled-tasks"])
 @router.get("", response_model=Response[List[ScheduledTask]])
 def get_scheduled_tasks(session: SessionDep):
     """获取所有定时任务"""
-    tasks = session.exec(select(ScheduledTask).order_by(ScheduledTask.updated_at.desc())).all()
+    tasks = session.exec(select(ScheduledTask).order_by(ScheduledTask.created_at.desc())).all()
     # 附加每个任务的请求名称信息
     result = []
     for task in tasks:
