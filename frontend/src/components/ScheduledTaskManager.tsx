@@ -14,11 +14,13 @@ import {
   Form,
   Input,
   Select,
-  InputNumber
+  InputNumber,
+  Radio
 } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { scheduledTaskApi } from '../services/api';
 import type { ScheduledTask } from '../types';
+import FileUpload, { UploadedFileResult } from './FileUpload';
 import axios from 'axios';
 
 const { Text, Paragraph } = Typography;
@@ -35,7 +37,38 @@ const ScheduledTaskManager: React.FC = () => {
   const [environments, setEnvironments] = useState<any[]>([]);
   const [selectedRequestToAdd, setSelectedRequestToAdd] = useState<number | undefined>(undefined);
   const [requestIds, setRequestIds] = useState<number[]>([]);
+  const [taskParameters, setTaskParameters] = useState<Array<{ key: string; value: string; type?: 'text' | 'file'; file?: UploadedFileResult }>>([]);
+
+  // 切换参数类型
+  const handleTaskParamTypeChange = (index: number, type: 'text' | 'file') => {
+    const newParams = [...taskParameters];
+    newParams[index] = { ...newParams[index], type };
+    if (type === 'text') {
+      delete newParams[index].file;
+      newParams[index].value = '';
+    }
+    setTaskParameters(newParams);
+  };
+
+  // 文件上传/删除回调
+  const handleTaskParamFileChange = (index: number, fileResult?: UploadedFileResult) => {
+    const newParams = [...taskParameters];
+    if (fileResult) {
+      newParams[index] = { ...newParams[index], file: fileResult, value: fileResult.fileId };
+    } else {
+      // 文件被删除，清空文件信息
+      newParams[index] = { ...newParams[index], file: undefined, value: '' };
+    }
+    setTaskParameters(newParams);
+  };
+
   const [form] = Form.useForm();
+
+  // 获取当前选中环境的参数（用于 FileUpload 的 baseUrl 和 accessToken）
+  const currentEnvironmentId = Form.useWatch('environment_id', form);
+  const currentEnv = environments.find((e: any) => e.id === currentEnvironmentId);
+  const envBaseUrl = currentEnv?.parameters?.find((p: any) => p.key === 'baseUrl')?.value;
+  const envAccessToken = currentEnv?.parameters?.find((p: any) => p.key === 'access-token')?.value;
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -149,6 +182,7 @@ const ScheduledTaskManager: React.FC = () => {
       environment_id: copiedTask.environment_id,
     });
     setRequestIds(copiedTask.request_ids || []);
+    setTaskParameters(copiedTask.parameters || []);
     setSelectedRequestToAdd(undefined);
     setIsFormVisible(true);
     message.info('已复制任务，请修改并保存');
@@ -159,6 +193,7 @@ const ScheduledTaskManager: React.FC = () => {
     form.resetFields();
     form.setFieldsValue({ name: '', schedule_type: 'interval', interval_seconds: 60, request_ids: [], environment_id: undefined });
     setRequestIds([]);
+    setTaskParameters([]);
     setSelectedRequestToAdd(undefined);
     setIsFormVisible(true);
   };
@@ -174,6 +209,7 @@ const ScheduledTaskManager: React.FC = () => {
       environment_id: task.environment_id,
     });
     setRequestIds(task.request_ids || []);
+    setTaskParameters(task.parameters || []);
     setSelectedRequestToAdd(undefined);
     setIsFormVisible(true);
   };
@@ -183,6 +219,8 @@ const ScheduledTaskManager: React.FC = () => {
       // 确保 request_ids 字段的值与 requestIds 状态同步
       form.setFieldsValue({ request_ids: requestIds });
       const values = await form.validateFields();
+      // 附上任务参数（文件类型保留 fileId 作为 value）
+      values.parameters = taskParameters.filter(p => p.key && (p.value || p.file));
       if (editingTask) {
         await axios.put(`/api/scheduled-tasks/${editingTask.id}`, values);
         message.success('定时任务已更新');
@@ -202,16 +240,32 @@ const ScheduledTaskManager: React.FC = () => {
     }
   };
 
-  const handleViewLog = (task: ScheduledTask) => {
-    setSelectedTask(task);
-    if (task.last_run_result) {
-      try {
-        setParsedLog(JSON.parse(task.last_run_result));
-      } catch (error) {
+  const handleViewLog = async (task: ScheduledTask) => {
+    // 重新获取任务最新数据（避免显示缓存的旧日志）
+    try {
+      const response = await scheduledTaskApi.getTasks();
+      if (response.code === 200 && response.data) {
+        const latest = response.data.find((t: ScheduledTask) => t.id === task.id);
+        setSelectedTask(latest || task);
+        const resultToParse = (latest || task).last_run_result;
+        if (resultToParse) {
+          setParsedLog(JSON.parse(resultToParse));
+        } else {
+          setParsedLog([]);
+        }
+      }
+    } catch (error) {
+      // 回退到本地数据
+      setSelectedTask(task);
+      if (task.last_run_result) {
+        try {
+          setParsedLog(JSON.parse(task.last_run_result));
+        } catch {
+          setParsedLog([]);
+        }
+      } else {
         setParsedLog([]);
       }
-    } else {
-      setParsedLog([]);
     }
     setLogModalVisible(true);
   };
@@ -535,7 +589,7 @@ const ScheduledTaskManager: React.FC = () => {
         open={isFormVisible}
         onOk={handleFormSubmit}
         onCancel={() => setIsFormVisible(false)}
-        width={500}
+        width={600}
         bodyStyle={{ maxHeight: 600, overflowY: 'auto', paddingRight: '16px' }}
       >
         <Form form={form} layout="vertical">
@@ -654,6 +708,80 @@ const ScheduledTaskManager: React.FC = () => {
             <Select placeholder="选择环境" allowClear style={{ width: '100%' }}
               options={environments.map(e => ({ label: e.name, value: e.id || undefined }))}
             />
+          </Form.Item>
+
+          <Form.Item
+            label="任务参数"
+            extra="配置任务级参数，优先级高于执行环境中的同名参数；文件类型的值将作为 file_params 发送"
+          >
+            <div>
+              {taskParameters.map((param, index) => (
+                <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+                  <Radio.Group
+                    value={param.type || 'text'}
+                    size="small"
+                    optionType="button"
+                    buttonStyle="solid"
+                    options={[
+                      { label: '文本', value: 'text' },
+                      { label: '文件', value: 'file' },
+                    ]}
+                    onChange={(e) => handleTaskParamTypeChange(index, e.target.value as 'text' | 'file')}
+                  />
+                  <Input
+                    placeholder="参数名"
+                    value={param.key}
+                    onChange={e => {
+                      const newParams = [...taskParameters];
+                      newParams[index] = { ...newParams[index], key: e.target.value };
+                      setTaskParameters(newParams);
+                    }}
+                    style={{ width: 140 }}
+                  />
+                  {param.type === 'file' ? (
+                    <div style={{ flex: 1, minWidth: 240 }}>
+                      <FileUpload
+                        value={param.file ? [param.file] : []}
+                        onChange={(files) => handleTaskParamFileChange(index, files?.[0])}
+                        maxSize={50}
+                        onUploadSuccess={(result) => {
+                          const newParams = [...taskParameters];
+                          newParams[index] = { ...newParams[index], file: result, value: result.fileId };
+                          setTaskParameters(newParams);
+                        }}
+                        baseUrl={envBaseUrl}
+                        accessToken={envAccessToken}
+                      />
+                    </div>
+                  ) : (
+                    <Input
+                      placeholder="参数值"
+                      value={param.value}
+                      onChange={e => {
+                        const newParams = [...taskParameters];
+                        newParams[index] = { ...newParams[index], value: e.target.value };
+                        setTaskParameters(newParams);
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                  )}
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => setTaskParameters(taskParameters.filter((_, i) => i !== index))}
+                  />
+                </div>
+              ))}
+              <Button
+                type="dashed"
+                block
+                icon={<PlusOutlined />}
+                onClick={() => setTaskParameters([...taskParameters, { key: '', value: '' }])}
+                style={{ marginTop: taskParameters.length > 0 ? 4 : 0 }}
+              >
+                新增参数
+              </Button>
+            </div>
           </Form.Item>
         </Form>
       </Modal>

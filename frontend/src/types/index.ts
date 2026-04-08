@@ -96,7 +96,7 @@ export interface SavedRequest {
   method: string;
   url: string;
   headers: Array<{ key: string; value: string }>;
-  parameters: Array<{ key: string; value: string }>;
+  parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
   body?: string;
   post_extractions?: Array<{ variable: string; jsonpath: string }>;
   created_at: string;
@@ -120,6 +120,7 @@ export interface ProxyRequest {
   headers: Record<string, string>;
   data?: any;
   params: Record<string, string>;
+  file_params?: Array<{ key: string; fileId: string; fileName: string }>; // 文件参数列表
   environment_id: number | null;
 }
 
@@ -146,6 +147,7 @@ export interface ScheduledTask {
   cron_expression: string | null;
   request_ids: number[];
   environment_id: number | null;
+  parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
   enabled: boolean;
   last_run_at: string | null;
   last_run_result: string | null;

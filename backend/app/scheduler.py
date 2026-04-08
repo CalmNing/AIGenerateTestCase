@@ -62,18 +62,26 @@ def strip_json_comments(text: str) -> str:
     return ''.join(result)
 
 
-async def execute_scheduled_task(task_id: int):
-    """执行定时任务：按顺序执行所有关联的请求"""
+async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
+    """执行定时任务：按顺序执行所有关联的请求
+
+    Args:
+        force_run: 手动执行时为 True，忽略 enabled 检查
+    """
     with Session(engine) as db:
         task = db.get(ScheduledTask, task_id)
-        if not task or not task.enabled:
+        if not task:
+            return
+        if not force_run and not task.enabled:
             return
 
         logger.info("Executing scheduled task [%s] (id=%d)", task.name, task_id)
         results = []
 
-        # 构建环境参数映射
-        param_map = build_param_map(db, task.environment_id, [])
+        # 构建参数映射：先加载环境参数，再用定时任务自身参数覆盖（任务参数优先级更高）
+        param_map = build_param_map(db, task.environment_id, task.parameters or [])
+        logger.info("Task [%s] param_map (env=%s, task_params=%s): %s",
+                     task.name, task.environment_id, task.parameters, param_map)
         unresolved: set[str] = set()
 
         for req_id in task.request_ids:
@@ -92,8 +100,6 @@ async def execute_scheduled_task(task_id: int):
                 final_url = substitute_variables(saved_req.url, param_map, unresolved)
                 headers_dict = {h["key"]: h["value"] for h in saved_req.headers if h.get("key") and h.get("value")}
                 final_headers = substitute_in_headers(headers_dict, param_map, unresolved)
-                params_dict = {p["key"]: p["value"] for p in saved_req.parameters if p.get("key") and p.get("value")}
-                final_params = substitute_in_params(params_dict, param_map, unresolved)
 
                 # 解析 body（去除注释后再解析）
                 request_data = None
@@ -104,6 +110,34 @@ async def execute_scheduled_task(task_id: int):
                     except json.JSONDecodeError:
                         request_data = saved_req.body
                 final_data = substitute_in_data(request_data, param_map, unresolved)
+
+                # 处理请求参数：分离文件类型参数和文本参数（支持任务参数优先级）
+                final_request_params = {}
+                file_params = []
+                for p in (saved_req.parameters or []):
+                    if not p.get("key"):
+                        continue
+                    key = p["key"]
+                    raw_value = p.get("value", "")
+
+                    # 文件类型参数：提取为 file_params
+                    if p.get("type") == "file" and raw_value:
+                        resolved_value = substitute_variables(str(raw_value), param_map, unresolved)
+                        # 如果解析成功（不再是模板占位符），作为文件参数
+                        if resolved_value and "{{" not in resolved_value:
+                            file_params.append({
+                                "key": key,
+                                "fileId": resolved_value,
+                                "fileName": p.get("fileName") or f"{key}.dat",
+                            })
+                            continue
+
+                    # 文本参数：正常变量替换
+                    resolved = substitute_variables(str(raw_value), param_map, unresolved)
+                    final_request_params[key] = resolved
+
+                # 对最终文本参数再做一次未解析变量检查
+                final_params = substitute_in_params(final_request_params, param_map, unresolved)
 
                 if unresolved:
                     results.append({
@@ -138,7 +172,101 @@ async def execute_scheduled_task(task_id: int):
                     })
                     continue
 
-                # 发送请求
+                # 发送请求（如果有文件参数，通过本地代理转发以支持文件上传）
+                if file_params:
+                    # 通过本地代理转发，支持 file_params
+                    import asyncio as _asyncio
+                    try:
+                        async with httpx.AsyncClient() as proxy_client:
+                            proxy_resp = await proxy_client.post(
+                                "http://127.0.0.1:8000/api/proxy/forward",
+                                json={
+                                    "url": final_url,
+                                    "method": saved_req.method,
+                                    "headers": final_headers,
+                                    "params": final_params,
+                                    "data": final_data,
+                                    "file_params": file_params,
+                                    "environment_id": task.environment_id,
+                                },
+                                timeout=60.0,
+                            )
+                            proxy_result = proxy_resp.json()
+
+                            response_data = proxy_result.get("data")
+                            status_code = proxy_result.get("status_code", 500)
+
+                            result_entry = {
+                                "request_id": req_id,
+                                "request_name": saved_req.name,
+                                "status": "success" if 200 <= status_code < 300 else "failed",
+                                "status_code": status_code,
+                                "request": {
+                                    "url": final_url,
+                                    "method": saved_req.method,
+                                    "headers": final_headers,
+                                    "params": final_params,
+                                    "body": final_data,
+                                    "file_params": file_params,
+                                },
+                                "response": {
+                                    "status_code": status_code,
+                                    "body": response_data,
+                                }
+                            }
+
+                            # 后置提取（与下方逻辑一致）
+                            if saved_req.post_extractions and task.environment_id and isinstance(response_data, (dict, list)):
+                                env = db.get(GlobalParameter, task.environment_id)
+                                if env:
+                                    params = list(env.parameters)
+                                    param_index = {p.get("key"): i for i, p in enumerate(params) if isinstance(p, dict) and p.get("key")}
+                                    extracted = {}
+                                    for rule in saved_req.post_extractions:
+                                        if not rule.get("variable") or not rule.get("jsonpath"):
+                                            continue
+                                        try:
+                                            jsonpath_expr = parse(rule["jsonpath"])
+                                            matches = jsonpath_expr.find(response_data)
+                                            if matches:
+                                                value = matches[0].value
+                                                val_str = str(value) if not isinstance(value, str) else value
+                                                extracted[rule["variable"]] = val_str
+                                                if rule["variable"] in param_index:
+                                                    idx = param_index[rule["variable"]]
+                                                    params[idx] = {**params[idx], "value": val_str}
+                                                else:
+                                                    params.append({"key": rule["variable"], "value": val_str})
+                                                    param_index[rule["variable"]] = len(params) - 1
+                                        except Exception:
+                                            pass
+                                    if extracted:
+                                        env.parameters = params
+                                        db.add(env)
+                                        db.commit()
+                                        param_map.update(extracted)
+                                        result_entry["extracted"] = extracted
+
+                            results.append(result_entry)
+                        continue
+                    except Exception as e:
+                        results.append({
+                            "request_id": req_id,
+                            "request_name": saved_req.name,
+                            "status": "error",
+                            "detail": str(e),
+                            "request": {
+                                "url": final_url,
+                                "method": saved_req.method,
+                                "headers": final_headers,
+                                "params": final_params,
+                                "body": final_data,
+                                "file_params": file_params,
+                            }
+                        })
+                        continue
+
+                # 无文件参数时直接发送
                 async with httpx.AsyncClient() as client:
                     response = await client.request(
                         method=saved_req.method,

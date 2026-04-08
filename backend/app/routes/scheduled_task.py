@@ -95,6 +95,6 @@ async def run_task_now(session: SessionDep, task_id: int):
 
     from app.scheduler import execute_scheduled_task
     import asyncio
-    asyncio.create_task(execute_scheduled_task(task_id))
+    asyncio.create_task(execute_scheduled_task(task_id, force_run=True))
 
     return Response(message="任务已触发执行")

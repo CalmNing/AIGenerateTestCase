@@ -149,6 +149,7 @@ class ScheduledTask(BaseModel, table=True):
     cron_expression: Optional[str] = Field(default=None, description="Cron 表达式（cron类型）")
     request_ids: List[int] = Field(default_factory=list, sa_type=JSON, description="关联的保存请求ID列表")
     environment_id: Optional[int] = Field(default=None, description="执行时使用的环境ID")
+    parameters: List[dict] = Field(default_factory=list, sa_type=JSON, description="任务级参数（优先级高于环境参数）")
     enabled: bool = Field(default=True, description="是否启用")
     last_run_at: Optional[datetime] = Field(default=None, description="上次执行时间")
     last_run_result: Optional[str] = Field(default=None, description="上次执行结果（JSON字符串）")

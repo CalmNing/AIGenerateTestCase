@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Form, Select, Input, Button, Tabs, Space, Table, message, Modal, Tooltip } from 'antd';
+import { Form, Select, Input, Button, Tabs, Space, Table, message, Modal, Tooltip, Radio } from 'antd';
 import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined, EditOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { savedRequestApi, globalParameterApi, proxyApi } from '../services/api';
 import { SavedRequest as SavedRequestType } from '../types';
+import FileUpload, { UploadedFileResult } from './FileUpload';
 
 interface HeaderItem {
   key: string;
@@ -14,6 +15,8 @@ interface HeaderItem {
 interface ParameterItem {
   key: string;
   value: string;
+  type?: 'text' | 'file';  // 参数类型：文本或文件
+  file?: UploadedFileResult; // 文件上传结果（type=file 时有效）
 }
 
 interface ExtractionRule {
@@ -653,6 +656,24 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
     });
   };
 
+  const handleParameterTypeChange = (index: number, type: 'text' | 'file') => {
+    const newParameters = [...parameters];
+    newParameters[index] = { ...newParameters[index], type, file: undefined, value: type === 'file' ? '' : (newParameters[index].value || '') };
+    setParameters(newParameters);
+    updateCurrentTab({ parameters: newParameters });
+  };
+
+  const handleParameterFileChange = (index: number, fileResult?: UploadedFileResult) => {
+    const newParameters = [...parameters];
+    if (fileResult) {
+      newParameters[index] = { ...newParameters[index], file: fileResult, value: fileResult.fileId };
+    } else {
+      newParameters[index] = { ...newParameters[index], file: undefined, value: '' };
+    }
+    setParameters(newParameters);
+    updateCurrentTab({ parameters: newParameters });
+  };
+
   // 后置提取规则操作
   const handleAddExtraction = () => {
     const newExtractions = [...postExtractions, { variable: '', jsonpath: '' }];
@@ -773,13 +794,25 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
         return acc;
       }, {} as Record<string, string>);
 
-      // 构建 params 字典
+      // 构建 params 字典（文件类型参数使用 fileId 作为值）
       const processedParams = parameters.reduce((acc, param) => {
         if (param.key && param.value) {
           acc[param.key] = param.value;
         }
         return acc;
       }, {} as Record<string, string>);
+
+      // 收集文件参数信息，供后端构建 multipart
+      const fileParams: Array<{ key: string; fileId: string; fileName: string }> = [];
+      for (const param of parameters) {
+        if (param.type === 'file' && param.key && param.file) {
+          fileParams.push({
+            key: param.key,
+            fileId: param.file.fileId,
+            fileName: param.file.fileName,
+          });
+        }
+      }
 
       // 解析 body
       let requestData: any = undefined;
@@ -799,6 +832,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
         headers: processedHeaders,
         data: requestData,
         params: processedParams,
+        file_params: fileParams.length > 0 ? fileParams : undefined,
         environment_id: envId,
       });
 
@@ -1255,42 +1289,66 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
                     </Form.Item>
 
                     <Form.Item label="请求参数" style={{ marginBottom: 0 }}>
-                      <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 200, overflow: 'auto' }}>
+                      <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 300, overflow: 'auto' }}>
                         {parameters.map((param, index) => (
-                          <Space
-                            key={index}
-                            style={{ width: '100%', marginBottom: '6px' }}
-                            align="center"
-                            size={4}
-                          >
+                          <div key={index} style={{ marginBottom: 6, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                            {/* 参数类型选择 */}
+                            <Radio.Group
+                              value={param.type || 'text'}
+                              size="small"
+                              optionType="button"
+                              buttonStyle="solid"
+                              options={[
+                                { label: '文本', value: 'text' },
+                                { label: '文件', value: 'file' },
+                              ]}
+                              onChange={(e) => handleParameterTypeChange(index, e.target.value as 'text' | 'file')}
+                              style={{ marginTop: 2 }}
+                            />
                             <Input
                               placeholder="参数名"
                               value={param.key}
                               onChange={(e) => handleParameterChange(index, 'key', e.target.value)}
-                              style={{ width: 200 }}
-                            // size="small"
+                              style={{ width: 160 }}
                             />
-                            <Input
-                              placeholder="参数值"
-                              value={param.value}
-                              onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
-                              style={{ flex: 1, width: 330 }}
-                            // size="small"
-                            />
+                            {param.type === 'file' ? (
+                              /* 文件类型：显示文件上传组件 */
+                              <div style={{ flex: 1, minWidth: 280 }}>
+                                <FileUpload
+                                  value={param.file ? [param.file] : []}
+                                  onChange={(files) => handleParameterFileChange(index, files[0])}
+                                  maxSize={50}
+                                  onUploadSuccess={(result) => {
+                                    const newParams = [...parameters];
+                                    newParams[index] = { ...newParams[index], file: result, value: result.fileId };
+                                    setParameters(newParams);
+                                  }}
+                                  baseUrl={getCurrentEnvironment().parameters.find(p => p.key === 'baseUrl')?.value}
+                                  accessToken={getCurrentEnvironment().parameters.find(p => p.key === 'access-token')?.value}
+                                />
+                              </div>
+                            ) : (
+                              /* 文本类型：普通输入框 */
+                              <Input
+                                placeholder="参数值"
+                                value={param.value}
+                                onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
+                                style={{ flex: 1, minWidth: 200 }}
+                              />
+                            )}
                             <Button
                               icon={<MinusOutlined />}
                               danger
                               onClick={() => handleRemoveParameter(index)}
-                            // size="small"
+                              style={{ marginTop: 2 }}
                             />
-                          </Space>
+                          </div>
                         ))}
                         <Button
                           type="dashed"
                           icon={<PlusOutlined />}
                           onClick={handleAddParameter}
                           style={{ marginTop: '4px' }}
-                          // size="small"
                           block
                         >
                           添加参数
