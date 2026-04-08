@@ -13,7 +13,7 @@ router = APIRouter(prefix="/mock-configs", tags=["mock-configs"])
 @router.get("", response_model=Response[List[MockConfig]])
 def get_mock_configs(session: SessionDep):
     """获取所有Mock配置"""
-    configs = session.exec(select(MockConfig).order_by(MockConfig.updated_at.desc())).all()
+    configs = session.exec(select(MockConfig).order_by(MockConfig.created_at.desc())).all()
     return Response(data=configs)
 
 
