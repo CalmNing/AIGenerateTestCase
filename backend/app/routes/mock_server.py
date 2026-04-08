@@ -286,6 +286,7 @@ async def mock_handler(request: Request, path: str):
                         original_len = len(data_array)
                         response_body_template = json.loads(matched_config.response_body)
                         item_template = response_body_template['data']['items'][0]
+                        data_template = response_body_template['data'][0]
                         start_time = datetime.now()
                         for _ in range(original_len, target_count):
                             # 重新生成元素并替换变量
@@ -294,6 +295,15 @@ async def mock_handler(request: Request, path: str):
                             # original_item = data_array[i % original_len]
                             # 转换为字符串并重新替换变量
                             item_str = json.dumps(item_template)
+                            item_str = _substitute_variables(item_str, matched_config.environment_id, path_params)
+                            data_array.append(json.loads(item_str))
+                        for _ in range(original_len, target_count):
+                            # 重新生成元素并替换变量
+                            # 获取原始模板
+
+                            # original_item = data_array[i % original_len]
+                            # 转换为字符串并重新替换变量
+                            item_str = json.dumps(data_template)
                             item_str = _substitute_variables(item_str, matched_config.environment_id, path_params)
                             data_array.append(json.loads(item_str))
                         end_time = datetime.now()
