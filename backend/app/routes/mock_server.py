@@ -272,6 +272,8 @@ async def mock_handler(request: Request, path: str):
                     data_array = parsed_body
                 elif isinstance(parsed_body, dict) and 'items' in parsed_body and isinstance(parsed_body['items'], list):
                     data_array = parsed_body['items']
+                elif isinstance(parsed_body, dict) and 'data' in parsed_body and isinstance(parsed_body['data'], list):
+                    data_array = parsed_body['data']
                 elif isinstance(parsed_body, dict) and 'data' in parsed_body and isinstance(parsed_body['data'], dict) and 'items' in parsed_body['data'] and isinstance(parsed_body['data']['items'], list):
                     data_array = parsed_body['data']['items']
                 
