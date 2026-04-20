@@ -39,11 +39,10 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
       <Space>
         <span style={{
           fontSize: "16px",
-          lineHeight: "1.5",
-          width: "140px",
+          lineHeight: "40px",
+          width: "130px",
           height: "40px",
-          display: "flex",
-          alignItems: "center",
+          display: "block",     
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -96,6 +95,7 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             icon={<EllipsisOutlined />}
             size="small"
             onClick={(e) => e.stopPropagation()}
+            style={{ marginLeft: 'auto' }}
           />
         </Popover>
       </Space>
@@ -123,7 +123,11 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
       </div>
       <Menu
         mode="vertical"
-        style={{ margin: '0' }}
+        style={{
+          margin: '0',
+          maxHeight: 'calc(100vh - 210px)',
+          overflow: 'auto',
+        }}
         selectedKeys={selectedSession ? [String(selectedSession.id)] : []}
         items={menuItems}
       />
