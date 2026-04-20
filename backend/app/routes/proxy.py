@@ -370,7 +370,7 @@ async def forward_request(
                 method=request.method,
                 url=final_url,
                 headers=final_headers,
-                json=None if not isinstance(final_data, dict) else final_data,
+                json=None if not isinstance(final_data, dict | list) else final_data,
                 data=None if not isinstance(final_data, str) else final_data,
                 params=final_params,
                 timeout=30.0
