@@ -169,6 +169,7 @@ export interface MockConfig {
   environment_id: number | null;
   response_count: number;
   page_size?: number;
+  json_path?: string;
   created_at: string;
   updated_at: string;
 }

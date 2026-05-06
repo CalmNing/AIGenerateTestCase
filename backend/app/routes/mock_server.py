@@ -19,6 +19,114 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mock", tags=["mock-server"])
 
 
+def _resolve_json_path(obj, json_path: str):
+    """按 JSONPath 语法从嵌套结构中提取值，支持 $.data.items 格式
+    
+    Args:
+        obj: 解析后的 JSON 对象（dict 或 list）
+        json_path: JSONPath 表达式，如 $.data.items、$.items、$（根路径）
+    
+    Returns:
+        提取的值，如果路径无效则返回 None
+    """
+    if not json_path or json_path == "$":
+        return obj
+    
+    # 去掉 $ 前缀和开头的点号
+    path = json_path
+    if path.startswith("$."):
+        path = path[2:]
+    elif path.startswith("$"):
+        path = path[1:]
+    
+    if not path:
+        return obj
+    
+    # 按点号分段，支持数组索引如 data.items[0]
+    parts = re.findall(r'[^.\[\]]+|\[\d+\]', path)
+    
+    current = obj
+    for part in parts:
+        if current is None:
+            return None
+        # 数组索引 [n]
+        if part.startswith("[") and part.endswith("]"):
+            try:
+                idx = int(part[1:-1])
+                if isinstance(current, list) and 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return None
+            except (ValueError, IndexError):
+                return None
+        # 字典键
+        elif isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+    
+    return current
+
+
+def _set_json_path(obj, json_path: str, value):
+    """按 JSONPath 语法在嵌套结构中设置值
+    
+    Args:
+        obj: 解析后的 JSON 对象（dict 或 list）
+        json_path: JSONPath 表达式
+        value: 要设置的值
+    
+    Returns:
+        设置后的对象
+    """
+    if not json_path or json_path == "$":
+        return value
+    
+    path = json_path
+    if path.startswith("$."):
+        path = path[2:]
+    elif path.startswith("$"):
+        path = path[1:]
+    
+    if not path:
+        return value
+    
+    parts = re.findall(r'[^.\[\]]+|\[\d+\]', path)
+    
+    current = obj
+    # 遍历到倒数第二个元素
+    for i, part in enumerate(parts[:-1]):
+        if current is None:
+            return obj
+        if part.startswith("[") and part.endswith("]"):
+            try:
+                idx = int(part[1:-1])
+                if isinstance(current, list) and 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return obj
+            except (ValueError, IndexError):
+                return obj
+        elif isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return obj
+    
+    # 设置最后一个路径元素
+    last_part = parts[-1]
+    if last_part.startswith("[") and last_part.endswith("]"):
+        try:
+            idx = int(last_part[1:-1])
+            if isinstance(current, list) and 0 <= idx < len(current):
+                current[idx] = value
+        except (ValueError, IndexError):
+            pass
+    elif isinstance(current, dict):
+        current[last_part] = value
+    
+    return obj
+
+
 def _substitute_builtins(text: str) -> str:
     """替换 {{$function}} 内置函数"""
     def _replace(match):
@@ -263,52 +371,59 @@ async def mock_handler(request: Request, path: str):
                 logger.info("Parsed response body: %s", parsed_body)
                 logger.info("Parsed body type: %s", type(parsed_body))
                 
-                # 支持两种格式：
-                # 1. 直接数组：[1, 2, 3]
-                # 2. 嵌套对象：{ "items": [1, 2, 3] }
-                # 3. 深层嵌套：{ "data": { "items": [1, 2, 3] } }
                 data_array = None
-                if isinstance(parsed_body, list):
-                    data_array = parsed_body
-                elif isinstance(parsed_body, dict) and 'items' in parsed_body and isinstance(parsed_body['items'], list):
-                    data_array = parsed_body['items']
-                elif isinstance(parsed_body, dict) and 'data' in parsed_body and isinstance(parsed_body['data'], list):
-                    data_array = parsed_body['data']
-                elif isinstance(parsed_body, dict) and 'data' in parsed_body and isinstance(parsed_body['data'], dict) and 'items' in parsed_body['data'] and isinstance(parsed_body['data']['items'], list):
-                    data_array = parsed_body['data']['items']
+                # 1. 如果配置了 json_path，优先使用
+                if matched_config.json_path:
+                    resolved = _resolve_json_path(parsed_body, matched_config.json_path)
+                    if isinstance(resolved, list):
+                        data_array = resolved
+                    else:
+                        logger.warning("json_path=%s 未指向数组，回退自动检测", matched_config.json_path)
+                
+                # 2. 未配置 json_path 或路径无效时，自动检测
+                if data_array is None:
+                    if isinstance(parsed_body, list):
+                        data_array = parsed_body
+                    elif isinstance(parsed_body, dict) and 'items' in parsed_body and isinstance(parsed_body['items'], list):
+                        data_array = parsed_body['items']
+                        if not matched_config.json_path:
+                            matched_config.json_path = "$.items"
+                    elif isinstance(parsed_body, dict) and 'data' in parsed_body and isinstance(parsed_body['data'], list):
+                        data_array = parsed_body['data']
+                        if not matched_config.json_path:
+                            matched_config.json_path = "$.data"
+                    elif isinstance(parsed_body, dict) and 'data' in parsed_body and isinstance(parsed_body['data'], dict) and 'items' in parsed_body['data'] and isinstance(parsed_body['data']['items'], list):
+                        data_array = parsed_body['data']['items']
+                        if not matched_config.json_path:
+                            matched_config.json_path = "$.data.items"
                 
                 # 只有当找到数组时才进行分页
                 if data_array is not None:
-                    # 如果配置的 response_count 大于数组长度，则扩展数组
-                    target_count = matched_config.page_size
+                    target_count = matched_config.response_count
                     if len(data_array) < target_count:
-                        # 重新生成数组元素直到达到目标数量
+                        # 从原始响应体模板中提取数组首个元素作为模板（含未替换的 {{}} 变量）
+                        original_template = json.loads(matched_config.response_body)
+                        raw_first_item = _resolve_json_path(original_template, matched_config.json_path or "$")
+                        if isinstance(raw_first_item, list) and len(raw_first_item) > 0:
+                            raw_item_template = raw_first_item[0]
+                        else:
+                            raw_item_template = data_array[0] if data_array else None
+
                         original_len = len(data_array)
-                        response_body_template = json.loads(matched_config.response_body)
-                        item_template = response_body_template['data']['items'][0]
-                        data_template = response_body_template['data'][0]
                         start_time = datetime.now()
                         for _ in range(original_len, target_count):
-                            # 重新生成元素并替换变量
-                            # 获取原始模板
-                      
-                            # original_item = data_array[i % original_len]
-                            # 转换为字符串并重新替换变量
-                            item_str = json.dumps(item_template)
-                            item_str = _substitute_variables(item_str, matched_config.environment_id, path_params)
-                            data_array.append(json.loads(item_str))
-                        for _ in range(original_len, target_count):
-                            # 重新生成元素并替换变量
-                            # 获取原始模板
-
-                            # original_item = data_array[i % original_len]
-                            # 转换为字符串并重新替换变量
-                            item_str = json.dumps(data_template)
-                            item_str = _substitute_variables(item_str, matched_config.environment_id, path_params)
-                            data_array.append(json.loads(item_str))
+                            if raw_item_template is not None:
+                                # 每次循环都重新序列化模板并替换变量，确保 $timestamp / $uuid / $randomInt 各不相同
+                                item_str = json.dumps(raw_item_template)
+                                item_str = _substitute_variables(item_str, matched_config.environment_id, path_params)
+                                try:
+                                    data_array.append(json.loads(item_str))
+                                except json.JSONDecodeError:
+                                    data_array.append(copy.deepcopy(raw_item_template))
                         end_time = datetime.now()
-                        logger.info("Pagination time: %s", end_time - start_time)
+                        logger.info("Pagination time: %s, items generated: %d", end_time - start_time, target_count - original_len)
                     logger.info("Extended data_array length: %d", len(data_array))
+                    
                     # 获取分页参数
                     query_params = dict(request.query_params)
                     page = int(query_params.get('page', 1))
@@ -321,17 +436,24 @@ async def mock_handler(request: Request, path: str):
                     page_data = data_array[start:end]
                     
                     # 构建分页响应
-                    body = json.dumps({
-                        "code": 200,
-                        "message": "success",
-                        "data": page_data,
-                        "pagination": {
-                            "total": total,
-                            "page": page,
-                            "page_size": page_size,
-                            "total_pages": (total + page_size - 1) // page_size
-                        }
-                    }, ensure_ascii=False)
+                    if matched_config.json_path and matched_config.json_path != "$":
+                        # 将分页数据放回原位置，保持原响应结构
+                        paginated_body = copy.deepcopy(parsed_body)
+                        _set_json_path(paginated_body, matched_config.json_path, page_data)
+                        body = json.dumps(paginated_body, ensure_ascii=False)
+                    else:
+                        # 根路径是数组，直接返回分页数据 + 分页信息
+                        body = json.dumps({
+                            "code": 200,
+                            "message": "success",
+                            "data": page_data,
+                            "pagination": {
+                                "total": total,
+                                "page": page,
+                                "page_size": page_size,
+                                "total_pages": (total + page_size - 1) // page_size
+                            }
+                        }, ensure_ascii=False)
                     
                     logger.info("Mock pagination: total=%d, page=%d, page_size=%d, returned=%d", 
                                total, page, page_size, len(page_data))

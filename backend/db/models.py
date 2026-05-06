@@ -167,3 +167,4 @@ class MockConfig(BaseModel, table=True):
     environment_id: Optional[int] = Field(default=None, description="参数化使用的环境ID")
     response_count: int = Field(default=1, ge=1, description="返回数据条目数量（分页用）")
     page_size: Optional[int] = Field(default=None, ge=1, description="分页大小（可选，默认为1）")
+    json_path: Optional[str] = Field(default=None, description="JSON路径，指定响应体中返回批量数据的字段，如 $.data.items")

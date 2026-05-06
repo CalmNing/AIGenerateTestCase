@@ -96,6 +96,7 @@ const IoTMockPlatform: React.FC = () => {
       environment_id: record.environment_id,
       response_count: record.response_count || 1,
       page_size: record.page_size || undefined,
+      json_path: record.json_path || undefined,
     });
     setResponseHeaders(record.response_headers?.map(h => ({ key: h.key, value: h.value })) || []);
     setModalVisible(true);
@@ -111,6 +112,7 @@ const IoTMockPlatform: React.FC = () => {
       response_body: record.response_body || '',
       enabled: false,
       environment_id: record.environment_id,
+      json_path: record.json_path || undefined,
     });
     setResponseHeaders(record.response_headers?.map(h => ({ key: h.key, value: h.value })) || []);
     setModalVisible(true);
@@ -167,7 +169,7 @@ const IoTMockPlatform: React.FC = () => {
       const params = new URLSearchParams();
       if (editingConfig.response_count > 1) {
         params.append('page', '1');
-        params.append('page_size', String(editingConfig.page_size || 10));
+        params.append('page_size', String(editingConfig.response_count || 10));
       }
       const fullUrl = params.toString() ? `${url}?${params.toString()}` : url;
       const response = await fetch(fullUrl, { method: editingConfig.method });
@@ -187,21 +189,24 @@ const IoTMockPlatform: React.FC = () => {
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name', width: 150, ellipsis: true, render: (t: string) => <Text strong ellipsis>{t}</Text> },
     { title: '方法', dataIndex: 'method', key: 'method', width: 80, render: (m: string) => <Tag color="blue">{m}</Tag> },
-    { title: 'URL路径', dataIndex: 'url_path', key: 'url_path', width: 200, ellipsis: true, render: (t: string) => <Text code copyable style={{ fontSize: 13 }}>{t}</Text> },
+    { title: 'URL路径', dataIndex: 'url_path', key: 'url_path', width: 200, ellipsis: true, render: (t: string) => <Text code copyable style={{ fontSize: 13 }}>/api/mock{t}</Text> },
     { title: '状态码', dataIndex: 'status_code', key: 'status_code', width: 80 },
     { title: '分页', key: 'pagination', width: 100, render: (_: any, r: MockConfig) => r.response_count > 1 ? <Tag color="green">{r.response_count}条/页</Tag> : '-' },
+    { title: 'JSON路径', dataIndex: 'json_path', key: 'json_path', width: 120, ellipsis: true, render: (t: string) => t ? <Text code style={{ fontSize: 12 }}>{t}</Text> : '-' },
     { title: '环境', key: 'env', width: 90, render: (_: any, r: MockConfig) => { const env = environments.find(e => e.id === r.environment_id); return env ? <Text ellipsis>{env.name}</Text> : '-'; } },
     { title: '启用', dataIndex: 'enabled', key: 'enabled', width: 70, render: (enabled: boolean, record: MockConfig) => <Switch size="small" checked={enabled} onChange={() => handleToggle(record)} /> },
-    { title: '操作', key: 'action', width: 200, render: (_: any, record: MockConfig) => (
-      <Space size={0}>
-        <Button type="text" size="small" onClick={() => handleTest(record)} style={{ color: '#52c41a' }}>测试</Button>
-        <Button type="text" size="small" onClick={() => openEdit(record)} style={{ color: '#1890ff' }}>编辑</Button>
-        <Button type="text" size="small" onClick={() => handleCopy(record)} style={{ color: '#1890ff' }}>复制</Button>
-        <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
-          <Button type="text" size="small" danger>删除</Button>
-        </Popconfirm>
-      </Space>
-    ) },
+    {
+      title: '操作', key: 'action', width: 200, render: (_: any, record: MockConfig) => (
+        <Space size={0}>
+          <Button type="text" size="small" onClick={() => handleTest(record)} style={{ color: '#52c41a' }}>测试</Button>
+          <Button type="text" size="small" onClick={() => openEdit(record)} style={{ color: '#1890ff' }}>编辑</Button>
+          <Button type="text" size="small" onClick={() => handleCopy(record)} style={{ color: '#1890ff' }}>复制</Button>
+          <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
+            <Button type="text" size="small" danger>删除</Button>
+          </Popconfirm>
+        </Space>
+      )
+    },
   ];
 
   const addHeader = () => setResponseHeaders(prev => [...prev, { key: '', value: '' }]);
@@ -239,7 +244,8 @@ const IoTMockPlatform: React.FC = () => {
             <p>1. <strong>新建 Mock</strong>：配置 URL 路径、HTTP 方法和响应内容</p>
             <p>2. <strong>URL 路径</strong>：支持路径参数，如 <Text code>/users/{'{'}id{'}'}</Text>，访问 <Text code>/api/mock/users/123</Text> 时，<Text code>{'{{id}}'}</Text> 会被替换为 <Text code>123</Text></p>
             <p>3. <strong>分页功能</strong>：设置"返回数据条目数量"大于1时启用分页，通过 <Text code>?page=1&page_size=10</Text> 参数控制分页</p>
-            <p>4. <strong>参数化</strong>：在响应体中使用以下格式引用变量</p>
+            <p>4. <strong>JSON 路径</strong>：指定响应体中哪个字段包含数组数据，如 <Text code>$.data.items</Text>，留空则自动检测</p>
+            <p>5. <strong>参数化</strong>：在响应体中使用以下格式引用变量</p>
             <p style={{ marginTop: 12, padding: '8px 12px', background: '#e6f7ff', borderRadius: 6, border: '1px solid #91d5ff' }}>
               <strong>Mock 服务基础路径：</strong><Text code copyable>/api/mock</Text><br />
               例如配置路径 <Text code>/hello</Text>，访问地址为 <Text code copyable>/api/mock/hello</Text>
@@ -251,10 +257,10 @@ const IoTMockPlatform: React.FC = () => {
           <div style={{ lineHeight: 1.8, color: '#555', fontSize: 13 }}>
             <p><strong>1. 路径参数：</strong><Text code copyable>{'{{参数名}}'}</Text> 或 <Text code copyable>{'${参数名}'}</Text></p>
             <p style={{ marginLeft: 16, color: '#666' }}>从 URL 路径中提取，如 <Text code>/users/{'{'}id{'}'}</Text> 匹配 <Text code>/users/123</Text>，则 <Text code>{'{{id}}'}</Text> = <Text code>123</Text></p>
-            
+
             <p style={{ marginTop: 8 }}><strong>2. JS 表达式：</strong><Text code copyable>{'{{@表达式}}'}</Text></p>
             <p style={{ marginLeft: 16, color: '#666' }}>示例：<Text code copyable>{'{{@Math.random().toFixed(2)}}'}</Text>、<Text code copyable>{'{{@new Date().toISOString()}}'}</Text></p>
-            
+
             <p style={{ marginTop: 8 }}><strong>3. 内置函数：</strong><Text code copyable>{'{{$函数}}'}</Text></p>
             <div style={{ marginLeft: 16, color: '#666' }}>
               <p>• <Text code copyable>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
@@ -265,7 +271,7 @@ const IoTMockPlatform: React.FC = () => {
               <p>• <Text code copyable>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
               <p>• <Text code copyable>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
             </div>
-            
+
             <p style={{ marginTop: 8 }}><strong>4. 环境变量：</strong><Text code copyable>{'{{变量名}}'}</Text> 或 <Text code copyable>{'${变量名}'}</Text></p>
             <p style={{ marginLeft: 16, color: '#666' }}>示例：<Text code copyable>{'{{baseUrl}}'}</Text>、<Text code copyable>{'${apiToken}'}</Text></p>
           </div>
@@ -313,29 +319,37 @@ const IoTMockPlatform: React.FC = () => {
             <Form.Item name="method" label="HTTP 方法" rules={[{ required: true }]}>
               <Select options={METHOD_OPTIONS} style={{ width: 130 }} />
             </Form.Item>
-            <Form.Item name="url_path" label="URL 路径" rules={[{ required: true, message: '请输入URL路径' }]}
-              extra="如 /api/users/{id}，实际访问为 /api/mock/api/users/123">
-              <Input placeholder="/api/users/{id}" style={{ width: 380 }} />
+            <Form.Item name="url_path" label="URL 路径" rules={[{ required: true, message: '请输入URL路径' }]}>
+              <Input placeholder="如 /api/users/{id}，实际访问为 /api/mock/api/users/123" style={{ width: 380 }} />
             </Form.Item>
             <Form.Item name="status_code" label="响应状态码">
               <InputNumber min={100} max={599} style={{ width: 100 }} />
             </Form.Item>
           </Space>
+          <Space style={{ width: '100%' }} size="large">
+            <Form.Item name="environment_id" label="参数化环境">
+              <Select placeholder="选择环境后，响应体中的 {{变量名}} 将被替换为环境参数值（可选）" allowClear style={{ width: '100%' }}
+                options={environments.map(e => ({ label: e.name, value: e.id }))} />
+            </Form.Item>
+            <Form.Item name="enabled" label="启用" valuePropName="checked">
+              <Switch />
+            </Form.Item>
 
-          <Form.Item name="environment_id" label="参数化环境"
-            extra="选择环境后，响应体中的 {{变量名}} 将被替换为环境参数值">
-            <Select placeholder="选择环境（可选）" allowClear style={{ width: '100%' }}
-              options={environments.map(e => ({ label: e.name, value: e.id }))} />
-          </Form.Item>
+          </Space>
 
           <Space style={{ width: '100%' }} size="large">
-            <Form.Item name="response_count" label="返回数据条目数量" extra="大于1时启用分页功能">
+            <Form.Item name="response_count" label="返回数据条目数量">
               <InputNumber min={1} max={10000} style={{ width: 200 }} placeholder="1" />
             </Form.Item>
-            <Form.Item name="page_size" label="分页大小" extra="每页返回的数据条数，默认10">
+            {/* <Form.Item name="page_size" label="分页大小" extra="每页返回的数据条数，默认10">
               <InputNumber min={1} max={1000} style={{ width: 200 }} placeholder="10" />
+            </Form.Item> */}
+            <Form.Item name="json_path" label="JSON 路径">
+              <Input placeholder="响应体中返回数据JSON路径, 如 $.data.items" style={{ width: '100%', minWidth: '350px' }} />
             </Form.Item>
           </Space>
+
+
 
           {/* 响应头 */}
           <div style={{ marginBottom: 16 }}>
@@ -358,7 +372,19 @@ const IoTMockPlatform: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontWeight: 500, fontSize: 14 }}>
                 响应体
-                <Tooltip title="支持 {{路径参数}}、{{@JS表达式}}、{{$内置函数}}、{{环境变量}}、${环境变量} 参数化">
+                <Tooltip
+                  title={
+                    <div style={{ color: '#ffffff', lineHeight: 1.8 }}>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$now}}'}</Text> - 秒级时间戳</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$uuid}}'}</Text> - 生成 UUID</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$randomInt}}'}</Text> - 0~100 随机整数</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$randomInt(1,100)}}'}</Text> - 指定范围随机整数</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
+                    </div>
+                  }
+                >
                   <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', fontSize: 13 }} />
                 </Tooltip>
               </span>
@@ -377,36 +403,45 @@ const IoTMockPlatform: React.FC = () => {
                 >格式化</Button>
                 <Button
                   type="text" size="small" onClick={() => {
-                    form.setFieldsValue({ response_body: JSON.stringify({
-                      code: 200,
-                      message: "success",
-                      data: {
-                        id: "{{id}}",
-                        userId: "{{userId}}",
-                        timestamp: "{{$timestamp}}",
-                        date: "{{$date(YYYY-MM-DD HH:mm:ss)}}",
-                        random: "{{$randomInt(1,1000)}}",
-                        randomFloat: "{{@Math.random().toFixed(4)}}",
-                        isoTime: "{{@new Date().toISOString()}}"
-                      }
-                    }, null, 2) });
+                    form.setFieldsValue({
+                      response_body: JSON.stringify({
+                        code: 200,
+                        message: "success",
+                        data: {
+                          id: "{{id}}",
+                          userId: "{{userId}}",
+                          timestamp: "{{$timestamp}}",
+                          date: "{{$date(YYYY-MM-DD HH:mm:ss)}}",
+                          random: "{{$randomInt(1,1000)}}",
+                          randomFloat: "{{@Math.random().toFixed(4)}}",
+                          isoTime: "{{@new Date().toISOString()}}"
+                        }
+                      }, null, 2)
+                    });
                   }}
                 >模板</Button>
                 <Button
                   type="text" size="small" onClick={() => {
-                    const items = Array.from({ length: 100 }, (_, i) => ({
-                      id: i + 1,
-                      name: `User ${i + 1}`,
-                      email: `user${i + 1}@example.com`
-                    }));
-                    form.setFieldsValue({ 
+                    form.setFieldsValue({
                       response_body: JSON.stringify({
                         code: 200,
                         message: "success",
-                        data: { items }
-                      }, null, 2) 
+                        data: {
+                          items: [
+                            {
+                              id: "{{id}}",
+                              userId: "{{userId}}",
+                              timestamp: "{{$timestamp}}",
+                              date: "{{$date(YYYY-MM-DD HH:mm:ss)}}",
+                              random: "{{$randomInt(1,1000)}}",
+                              randomFloat: "{{@Math.random().toFixed(4)}}",
+                              isoTime: "{{@new Date().toISOString()}}"
+                            }
+                          ]
+                        }
+                      }, null, 2)
                     });
-                    form.setFieldsValue({ response_count: 100, page_size: 10 });
+                    form.setFieldsValue({ response_count: 100, page_size: 10, json_path: '$.data.items' });
                   }}
                 >分页模板</Button>
               </Space>
@@ -424,9 +459,7 @@ const IoTMockPlatform: React.FC = () => {
             />
           </Form.Item>
 
-          <Form.Item name="enabled" label="启用" valuePropName="checked">
-            <Switch />
-          </Form.Item>
+
         </Form>
       </Modal>
 
