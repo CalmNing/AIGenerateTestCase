@@ -218,6 +218,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
   });
   const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false); // 全局参数模态框
   const [postExtractions, setPostExtractions] = useState<ExtractionRule[]>([]); // 后置提取规则
+  const [searchRequests, setSearchRequests] = useState(''); // 保存的请求搜索关键词
 
 
   // 稳定 CodeMirror 扩展引用，避免每次渲染重建
@@ -1701,17 +1702,28 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
                   </Tooltip>
                 </Space>
               </div>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <Table
-                  columns={savedRequestsColumns}
-                  dataSource={savedRequests}
-                  rowKey="id"
-                  pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
-                  size="small"
-                  style={{ fontSize: 13 }}
-                  sticky
-                  scroll={{ y: 100 * 6 }}
-                />
+              <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '8px 12px', borderBottom: '1px solid #f0f0f0' }}>
+                  <Input.Search
+                    // size="small"
+                    placeholder="搜索名称..."
+                    allowClear
+                    onChange={(e) => setSearchRequests(e.target.value)}
+                    onSearch={(val) => setSearchRequests(val)}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                <div style={{ flex: 1, overflow: 'auto' }}>
+                  <Table
+                    columns={savedRequestsColumns}
+                    dataSource={savedRequests.filter(r => !searchRequests || r.name.toLowerCase().includes(searchRequests.toLowerCase()))}
+                    rowKey="id"
+                    pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
+                    size="small"
+                    style={{ fontSize: 13 }}
+                    sticky
+                  />
+                </div>
               </div>
             </div>
           )}

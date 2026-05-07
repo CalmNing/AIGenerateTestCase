@@ -127,6 +127,66 @@ def _set_json_path(obj, json_path: str, value):
     return obj
 
 
+def _strip_json_comments(text: str) -> str:
+    """去除 JSON 字符串中的注释（支持 // 和 /* */），返回纯净 JSON"""
+    result = []
+    i = 0
+    in_string = False
+    string_char = ''
+    while i < len(text):
+        if in_string:
+            if text[i] == '\\' and i + 1 < len(text):
+                result.append(text[i])
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if text[i] == string_char:
+                in_string = False
+            result.append(text[i])
+            i += 1
+        elif text[i] == '"' or text[i] == "'":
+            in_string = True
+            string_char = text[i]
+            result.append(text[i])
+            i += 1
+        elif text[i] == '/' and i + 1 < len(text) and text[i + 1] == '/':
+            while i < len(text) and text[i] != '\n':
+                i += 1
+        elif text[i] == '/' and i + 1 < len(text) and text[i + 1] == '*':
+            i += 2
+            while i < len(text) and not (text[i] == '*' and i + 1 < len(text) and text[i + 1] == '/'):
+                i += 1
+            if i < len(text):
+                i += 2
+        else:
+            result.append(text[i])
+            i += 1
+    return ''.join(result)
+
+
+def _smart_parse_json(text: str):
+    """智能解析可能带注释/单引号/尾逗号的 JSON 字符串，兼容 JavaScript 风格
+    
+    先尝试标准 json.loads（最快），失败后用 json5 库做宽大解析。
+    如果 json5 不可用，返回 None 由调用方处理。
+    """
+    if not text or not text.strip():
+        return None
+    cleaned = _strip_json_comments(text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    try:
+        import json5 as _json5
+        return _json5.loads(cleaned)
+    except ImportError:
+        logger.warning("json5 not installed, falling back to strict JSON parsing")
+    except Exception:
+        pass
+    return None
+
+
 def _substitute_builtins(text: str) -> str:
     """替换 {{$function}} 内置函数"""
     def _replace(match):
@@ -367,7 +427,7 @@ async def mock_handler(request: Request, path: str):
         if matched_config.response_count > 1:
             try:
                 # 解析响应体
-                parsed_body = json.loads(body)
+                parsed_body = _smart_parse_json(body)
                 logger.info("Parsed response body: %s", parsed_body)
                 logger.info("Parsed body type: %s", type(parsed_body))
                 
@@ -401,12 +461,19 @@ async def mock_handler(request: Request, path: str):
                 if data_array is not None:
                     target_count = matched_config.response_count
                     if len(data_array) < target_count:
-                        # 从原始响应体模板中提取数组首个元素作为模板（含未替换的 {{}} 变量）
-                        original_template = json.loads(matched_config.response_body)
-                        raw_first_item = _resolve_json_path(original_template, matched_config.json_path or "$")
-                        if isinstance(raw_first_item, list) and len(raw_first_item) > 0:
-                            raw_item_template = raw_first_item[0]
-                        else:
+                        # 尝试从原始响应体模板中提取数组首个元素模板（含未替换的 {{}} 变量）
+                        raw_item_template = None
+                        try:
+                            original_template = _smart_parse_json(matched_config.response_body)
+                            raw_first_item = _resolve_json_path(original_template, matched_config.json_path or "$")
+                            if isinstance(raw_first_item, list) and len(raw_first_item) > 0:
+                                raw_item_template = raw_first_item[0]
+                        except Exception:
+                            logger.warning("无法解析原始模板，使用已替换后的首个元素作为模板")
+                            raw_item_template = None
+
+                        # 如果无法从原始模板中提取，回退使用已替换的首个元素
+                        if raw_item_template is None:
                             raw_item_template = data_array[0] if data_array else None
 
                         original_len = len(data_array)
@@ -461,13 +528,13 @@ async def mock_handler(request: Request, path: str):
                     # 响应体不是数组或嵌套对象格式，不进行分页，保持原样
                     logger.warning("Response body is not an array or nested object with items array, skipping pagination")
                     try:
-                        json.loads(body)
+                        _smart_parse_json(body)
                     except json.JSONDecodeError:
                         pass
             except (json.JSONDecodeError, ValueError, TypeError) as e:
                 logger.warning("Pagination failed: %s, returning original body", e)
                 try:
-                    json.loads(body)
+                    _smart_parse_json(body)
                 except json.JSONDecodeError:
                     pass
 

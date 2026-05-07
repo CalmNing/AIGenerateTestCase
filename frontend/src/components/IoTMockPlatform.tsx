@@ -41,6 +41,7 @@ const IoTMockPlatform: React.FC = () => {
   const [configs, setConfigs] = useState<MockConfig[]>([]);
   const [environments, setEnvironments] = useState<GlobalParameter[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchConfig, setSearchConfig] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingConfig, setEditingConfig] = useState<MockConfig | null>(null);
   const [testModalVisible, setTestModalVisible] = useState(false);
@@ -166,13 +167,28 @@ const IoTMockPlatform: React.FC = () => {
     setTesting(true);
     try {
       const url = `/api/mock${editingConfig.url_path}`;
-      const params = new URLSearchParams();
+      const method = editingConfig.method;
+      const isPost = ['POST', 'PUT', 'PATCH'].includes(method);
+      let fullUrl = url;
+      let requestBody: any = undefined;
+
       if (editingConfig.response_count > 1) {
-        params.append('page', '1');
-        params.append('page_size', String(editingConfig.response_count || 10));
+        const paginationParams = { page: 1, page_size: editingConfig.page_size || 10 };
+        if (isPost) {
+          requestBody = paginationParams;
+        } else {
+          const params = new URLSearchParams();
+          params.append('page', String(paginationParams.page));
+          params.append('page_size', String(paginationParams.page_size));
+          fullUrl = `${url}?${params.toString()}`;
+        }
       }
-      const fullUrl = params.toString() ? `${url}?${params.toString()}` : url;
-      const response = await fetch(fullUrl, { method: editingConfig.method });
+
+      const response = await fetch(fullUrl, {
+        method,
+        headers: isPost ? { 'Content-Type': 'application/json' } : undefined,
+        body: requestBody ? JSON.stringify(requestBody) : undefined,
+      });
       const contentType = response.headers.get('content-type') || '';
       let body: any;
       if (contentType.includes('application/json')) {
@@ -233,13 +249,13 @@ const IoTMockPlatform: React.FC = () => {
       <div style={{ width: '60%', padding: 16, overflow: 'auto' }}>
         <Card
           title={<Space><ExperimentOutlined />Mock 接口配置</Space>}
-          extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建 Mock</Button>}
+          extra={<Space><Input.Search placeholder="搜索名称..." allowClear style={{ width: 220 }} onChange={(e) => setSearchConfig(e.target.value)} onSearch={(val) => setSearchConfig(val)} /><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建 Mock</Button></Space>}
           style={{ height: '100%' }}
           bodyStyle={{ padding: 0, overflow: 'auto', height: 'calc(100% - 57px)' }}
         >
           <Table
             columns={columns}
-            dataSource={configs}
+            dataSource={configs.filter(c => !searchConfig || c.name.toLowerCase().includes(searchConfig.toLowerCase()))}
             rowKey="id"
             loading={loading}
             // size="small"
@@ -394,6 +410,7 @@ const IoTMockPlatform: React.FC = () => {
                       <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$randomInt(1,100)}}'}</Text> - 指定范围随机整数</p>
                       <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
                       <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{@[10,20,30][Math.floor(Math.random()*3)]}}'}</Text> - 随机指定列表中的数据</p>
                     </div>
                   }
                 >

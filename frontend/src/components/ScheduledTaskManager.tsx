@@ -28,6 +28,7 @@ const { Text, Paragraph } = Typography;
 const ScheduledTaskManager: React.FC = () => {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchTask, setSearchTask] = useState('');
   const [logModalVisible, setLogModalVisible] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ScheduledTask | null>(null);
   const [parsedLog, setParsedLog] = useState<any[]>([]);
@@ -438,18 +439,31 @@ const ScheduledTaskManager: React.FC = () => {
   ];
 
   return (
-    <Card title="定时任务管理" bordered={false}>
-      <div style={{ marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreate}>创建定时任务</Button>
-      </div>
-      <Table
-        columns={columns}
-        dataSource={tasks}
-        rowKey="id"
-        loading={loading}
-        pagination={{ pageSize: 10 }}
-      // size="small"
-      />
+    <div style={{ height: 'calc(100vh - 100px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Card title="定时任务管理" bordered={false} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        bodyStyle={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 16, overflow: 'hidden' }}>
+        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreate}>创建定时任务</Button>
+          <Input.Search
+            placeholder="搜索任务名称..."
+            allowClear
+            style={{ width: 300 }}
+            onChange={(e) => setSearchTask(e.target.value)}
+            onSearch={(val) => setSearchTask(val)}
+          />
+        </div>
+
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <Table
+            columns={columns}
+            dataSource={tasks.filter(t => !searchTask || t.name.toLowerCase().includes(searchTask.toLowerCase()))}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 10 }}
+            // size="small"
+            scroll={{ y: 'calc(100vh - 240px)' }}
+          />
+        </div>
 
       <Modal
         title={`${selectedTask?.name || ''} - 执行日志`}
@@ -786,6 +800,7 @@ const ScheduledTaskManager: React.FC = () => {
         </Form>
       </Modal>
     </Card>
+    </div>
   );
 };
 
