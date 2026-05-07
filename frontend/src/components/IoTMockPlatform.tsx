@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Form, Select, Input, Button, Space, Table, Tag, message, Modal, Switch, Tooltip, Card, Popconfirm, InputNumber, Typography } from 'antd';
-import { PlusOutlined, DeleteOutlined, ReloadOutlined, ExperimentOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, ReloadOutlined, CopyOutlined, ExperimentOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { mockConfigApi, globalParameterApi } from '../services/api';
@@ -189,10 +189,22 @@ const IoTMockPlatform: React.FC = () => {
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name', width: 150, ellipsis: true, render: (t: string) => <Text strong ellipsis>{t}</Text> },
     { title: '方法', dataIndex: 'method', key: 'method', width: 80, render: (m: string) => <Tag color="blue">{m}</Tag> },
-    { title: 'URL路径', dataIndex: 'url_path', key: 'url_path', width: 200, ellipsis: true, render: (t: string) => <Text code copyable style={{ fontSize: 13 }}>/api/mock{t}</Text> },
+    { title: 'URL路径', dataIndex: 'url_path', key: 'url_path', width: 150, ellipsis: true, render: (t: string) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
+        <Text code ellipsis style={{ fontSize: 13, flex: 1, minWidth: 0 }}>
+          {t}
+        </Text>
+        <Button
+          type="text" size="small"
+          icon={<CopyOutlined style={{ fontSize: 12 }} />}
+          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`/api/mock${t}`); message.success('已复制'); }}
+          style={{ flexShrink: 0, padding: 0, height: 20, width: 20, opacity: 0.65 }}
+        />
+      </div>
+    ) },
     { title: '状态码', dataIndex: 'status_code', key: 'status_code', width: 80 },
     { title: '分页', key: 'pagination', width: 100, render: (_: any, r: MockConfig) => r.response_count > 1 ? <Tag color="green">{r.response_count}条/页</Tag> : '-' },
-    { title: 'JSON路径', dataIndex: 'json_path', key: 'json_path', width: 120, ellipsis: true, render: (t: string) => t ? <Text code style={{ fontSize: 12 }}>{t}</Text> : '-' },
+    { title: 'JSON路径', dataIndex: 'json_path', key: 'json_path', width: 150, render: (t: string) => t ? <Text code style={{ fontSize: 13 }}>{t}</Text> : '-' },
     { title: '环境', key: 'env', width: 90, render: (_: any, r: MockConfig) => { const env = environments.find(e => e.id === r.environment_id); return env ? <Text ellipsis>{env.name}</Text> : '-'; } },
     { title: '启用', dataIndex: 'enabled', key: 'enabled', width: 70, render: (enabled: boolean, record: MockConfig) => <Switch size="small" checked={enabled} onChange={() => handleToggle(record)} /> },
     {
