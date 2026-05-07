@@ -193,6 +193,8 @@ interface Tab {
   body?: string;
   savedRequestId?: number; // 关联的保存请求ID
   hasUnsavedChanges?: boolean; // 是否有未保存的更改
+  response?: any; // 当前 tab 的响应结果
+  responseTime?: number; // 当前 tab 的响应耗时
 }
 
 interface IoTDataPushPlatformProps {
@@ -203,8 +205,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
   const [form] = Form.useForm();
   const [activeTabId, setActiveTabId] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<any>(null);
-  const [responseTime, setResponseTime] = useState<number>(0);
   const [headers, setHeaders] = useState<HeaderItem[]>([{ key: 'Content-Type', value: 'application/json' }]);
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
   const [savedRequests, setSavedRequests] = useState<SavedRequest[]>([]);
@@ -222,6 +222,11 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
 
   // 稳定 CodeMirror 扩展引用，避免每次渲染重建
   const jsonExtensions = useMemo(() => [json()], []);
+
+  // 从当前活跃 Tab 中读取响应结果
+  const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId), [tabs, activeTabId]);
+  const response = activeTab?.response || null;
+  const responseTime = activeTab?.responseTime || 0;
 
   // 请求体内容变更回调
   const handleBodyChange = useCallback((value: string) => {
@@ -836,15 +841,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
         environment_id: envId,
       });
 
-      // 更新当前标签页的内容
-      updateCurrentTab({
-        method,
-        url,
-        body,
-        headers,
-        parameters,
-      });
-
       const endTime = Date.now();
       const timeTaken = endTime - startTime;
 
@@ -856,8 +852,17 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
         data: proxyResponse.data
       };
 
-      setResponse(axiosResponse);
-      setResponseTime(timeTaken);
+      // 更新当前标签页的内容及响应结果
+      updateCurrentTab({
+        method,
+        url,
+        body,
+        headers,
+        parameters,
+        response: axiosResponse,
+        responseTime: timeTaken,
+      });
+
       message.success('请求成功');
 
       // 后置提取：从响应中提取变量并保存到环境
@@ -887,18 +892,17 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
         if (error.response.data) {
           // 目标服务器返回的错误
           const proxyError = error.response.data;
-          setResponse({
+          const errResponse = {
             status: proxyError.status_code || error.response.status,
             statusText: '',
             headers: proxyError.headers || {},
             data: proxyError.data || error.response.data
-          });
-          setResponseTime(0);
+          };
+          updateCurrentTab({ response: errResponse, responseTime: 0 });
           message.error(`请求失败: ${proxyError.status_code || error.response.status} ${proxyError.detail || 'Unknown error'}`);
         } else {
           // 代理服务本身的错误
-          setResponse(error.response);
-          setResponseTime(0);
+          updateCurrentTab({ response: error.response, responseTime: 0 });
           message.error(`请求失败: ${error.response.status} ${error.response.statusText}`);
         }
       } else if (error.request) {
