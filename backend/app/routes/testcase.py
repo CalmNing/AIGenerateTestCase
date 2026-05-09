@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete
 from sqlmodel import select, desc, func
 
-from app.deps import SessionDep
+from app.deps import SessionDep, CurrentUser
 from db.models import TestCase, StatusValue
 from utils.base_response import Response
 
@@ -30,6 +30,7 @@ class TestCasePage(BaseModel):
 def get_testcases(
         session_id: int,
         session: SessionDep,
+        user: CurrentUser,
         module_id: int = None,
         offset: int = 0,
         limit: Annotated[int, Query(le=1000)] = 1000,
@@ -39,7 +40,7 @@ def get_testcases(
         exist_bug: bool = False
 ):
     """获取会话的测试用例"""
-    query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
+    query = select(TestCase).where(TestCase.session_id == session_id, TestCase.user_id == user.user_id).order_by(TestCase.case_level,
                                                                                desc(TestCase.created_at))
     if module_id:
         query = query.where(TestCase.module_id == module_id)
@@ -59,32 +60,32 @@ def get_testcases(
         testcase.session_id = int(testcase.session_id) if testcase.session_id else None
 
     # 构建基础查询条件
-    count_query_base = [TestCase.session_id == session_id]
+    count_query_base = [TestCase.session_id == session_id, TestCase.user_id == user.user_id]
     if module_id is not None:
         count_query_base.append(TestCase.module_id == module_id)
         # 统计总数
     totalNumber = session.scalar(select(func.count()).where(*count_query_base))
 
     # 统计已通过的用例数
-    passed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.PASSED]
+    passed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.PASSED, TestCase.user_id == user.user_id]
     if module_id is not None:
         passed_query.append(TestCase.module_id == module_id)
     passed = session.scalar(select(func.count()).where(*passed_query))
 
     # 统计未通过的用例数
-    failed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.FAILED]
+    failed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.FAILED, TestCase.user_id == user.user_id]
     if module_id is not None:
         failed_query.append(TestCase.module_id == module_id)
     failed = session.scalar(select(func.count()).where(*failed_query))
 
     # 统计未执行的用例数
-    not_run_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.NOT_RUN]
+    not_run_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.NOT_RUN, TestCase.user_id == user.user_id]
     if module_id is not None:
         not_run_query.append(TestCase.module_id == module_id)
     not_run = session.scalar(select(func.count()).where(*not_run_query))
 
     # 统计 Bug 数
-    total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None]
+    total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None, TestCase.user_id == user.user_id]
     if module_id is not None:
         total_bugs_query.append(TestCase.module_id == module_id)
     totalBugs = session.scalar(select(func.count()).where(*total_bugs_query))
@@ -113,6 +114,7 @@ class GenerateTestcasesRequest(BaseModel):
 @router.post("/{session_id}/testcases")
 async def generate_testcases(
         session: SessionDep,
+        user: CurrentUser,
         session_id: int,
         # 调整参数顺序，与前端发送的FormData顺序一致
         requirement: Optional[str] = Form(None),
@@ -172,6 +174,9 @@ async def generate_testcases(
         ollama_model=ollama_model,
 
     )
+    # 自动填充 user_id
+    for tc in testcases:
+        tc.user_id = user.user_id
     session.add_all(testcases)
     session.commit()
     return Response(message="生成测试用例成功")
@@ -180,6 +185,7 @@ async def generate_testcases(
 @router.put("/{session_id}/testcases/{testcase_id}", response_model=Response)
 def update_testcase(
         session: SessionDep,
+        user: CurrentUser,
         session_id: int,
         testcase_id: int,
         testcase: TestCase
@@ -189,6 +195,8 @@ def update_testcase(
     testcase_db = session.get(TestCase, testcase_id)
     if not testcase_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+    if testcase_db.user_id != user.user_id:
+        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此测试用例")
 
     testcase_data = testcase.model_dump(exclude_unset=True)
     testcase_data.pop("created_at")
@@ -203,9 +211,20 @@ def update_testcase(
 @router.delete("/{session_id}/testcases", response_model=Response[str])
 def delete_testcase(
         session: SessionDep,
+        user: CurrentUser,
         session_id: int,
         testcases: List[int]
 ):
+    # 检查是否有不属于当前用户的用例
+    user_testcases = session.exec(
+        select(TestCase).where(
+            TestCase.id.in_(testcases),
+            TestCase.user_id == user.user_id
+        )
+    ).all()
+    if len(user_testcases) != len(testcases):
+        return Response(code=status.HTTP_403_FORBIDDEN, message="存在无权删除的测试用例")
+
     testcase_status = session.exec(
         select(TestCase.status)
         .where(
@@ -220,7 +239,8 @@ def delete_testcase(
     # 批量删除测试用例
     statement = delete(TestCase).where(
         TestCase.id.in_(testcases),
-        TestCase.session_id == session_id
+        TestCase.session_id == session_id,
+        TestCase.user_id == user.user_id
     )
     session.exec(statement)
     session.commit()
@@ -236,6 +256,7 @@ class MoveTestcaseRequest(BaseModel):
 @router.post("/{testcase_id}/move", response_model=Response)
 def move_testcase(
         session: SessionDep,
+        user: CurrentUser,
         testcase_id: int,
         request: MoveTestcaseRequest
 ):
@@ -244,6 +265,8 @@ def move_testcase(
     testcase_db = session.get(TestCase, testcase_id)
     if not testcase_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+    if testcase_db.user_id != user.user_id:
+        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此测试用例")
     
     # 更新会话和模块
     testcase_db.session_id = request.session_id
@@ -265,16 +288,23 @@ class BatchMoveTestcaseRequest(BaseModel):
 @router.post("/move", response_model=Response)
 def batch_move_testcase(
         session: SessionDep,
+        user: CurrentUser,
         request: BatchMoveTestcaseRequest
 ):
     """批量移动测试用例到指定会话和模块"""
     # 查找测试用例
     testcases_db = session.exec(
-        select(TestCase).where(TestCase.id.in_(request.testcase_ids))
+        select(TestCase).where(
+            TestCase.id.in_(request.testcase_ids),
+            TestCase.user_id == user.user_id
+        )
     ).all()
     
     if not testcases_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+
+    if len(testcases_db) != len(request.testcase_ids):
+        return Response(code=status.HTTP_403_FORBIDDEN, message="存在无权操作的测试用例")
     
     # 批量更新会话和模块
     for testcase_db in testcases_db:
@@ -289,6 +319,7 @@ def batch_move_testcase(
 @router.post("/{session_id}/testcases/create", response_model=Response[TestCase])
 def create_testcase(
         session: SessionDep,
+        user: CurrentUser,
         session_id: int,
         testcase: TestCase
 ):
@@ -302,7 +333,8 @@ def create_testcase(
         expected_results=testcase.expected_results,
         session_id=session_id,
         module_id=testcase.module_id,
-        status=testcase.status or StatusValue.NOT_RUN
+        status=testcase.status or StatusValue.NOT_RUN,
+        user_id=user.user_id
     )
     
     session.add(testcase_db)

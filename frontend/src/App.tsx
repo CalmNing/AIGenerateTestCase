@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
-import { EnvironmentOutlined, PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
+import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
+import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi, historyPromptApi, globalParameterApi } from './services/api';
 
@@ -1158,63 +1159,36 @@ const App: React.FC = () => {
         />
       ) : currentPlatform === 'iot-mock' ? (
         <div>
-          <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 onClick={navigateToHome} style={{ margin: 0, cursor: 'pointer' }}>测试工具平台</h2>
-            <Space>
-              <span style={{ color: '#666', fontSize: '14px' }}>
-                当前环境: <strong>{getCurrentEnvironment()?.name}</strong>
-              </span>
-              <Button
-                icon={<EnvironmentOutlined />}
-                onClick={() => setIsGlobalParamsModalVisible(true)}
-              >
-                全局参数
-              </Button>
-              {/* <Button onClick={navigateToHome}>返回首页</Button> */}
-            </Space>
-          </div>
+          <SubPlatformHeader
+            title="测试工具平台"
+            onBackToHome={navigateToHome}
+            environmentName={getCurrentEnvironment()?.name}
+            onGlobalParamsOpen={() => setIsGlobalParamsModalVisible(true)}
+          />
           <IoTDataPushPlatform
             currentEnvironmentId={currentEnvironmentId}
           />
         </div>
       ) : currentPlatform === 'scheduled-task' ? (
         <div>
-          <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 onClick={navigateToHome} style={{ margin: 0, cursor: 'pointer' }}>测试工具平台</h2>
-            <Space>
-              <span style={{ color: '#666', fontSize: '14px' }}>
-                当前环境: <strong>{getCurrentEnvironment()?.name}</strong>
-              </span>
-              <Button
-                icon={<EnvironmentOutlined />}
-                onClick={() => setIsGlobalParamsModalVisible(true)}
-              >
-                全局参数
-              </Button>
-              {/* <Button onClick={navigateToHome}>返回首页</Button> */}
-            </Space>
-          </div>
+          <SubPlatformHeader
+            title="测试工具平台"
+            onBackToHome={navigateToHome}
+            environmentName={getCurrentEnvironment()?.name}
+            onGlobalParamsOpen={() => setIsGlobalParamsModalVisible(true)}
+          />
           <div style={{ padding: '16px' }}>
             <ScheduledTaskManager />
           </div>
         </div>
       ) : currentPlatform === 'mock-api' ? (
         <div>
-          <div style={{ padding: '16px', background: '#fff', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2 onClick={navigateToHome} style={{ margin: 0, cursor: 'pointer' }}>测试工具平台</h2>
-            <Space>
-              <span style={{ color: '#666', fontSize: '14px' }}>
-                当前环境: <strong>{getCurrentEnvironment()?.name}</strong>
-              </span>
-              <Button 
-                icon={<EnvironmentOutlined />} 
-                onClick={() => setIsGlobalParamsModalVisible(true)}
-              >
-                全局参数
-              </Button>
-              {/* <Button onClick={navigateToHome}>返回首页</Button> */}
-            </Space>
-          </div>
+          <SubPlatformHeader
+            title="测试工具平台"
+            onBackToHome={navigateToHome}
+            environmentName={getCurrentEnvironment()?.name}
+            onGlobalParamsOpen={() => setIsGlobalParamsModalVisible(true)}
+          />
           <IoTMockPlatform />
         </div>
       ) : (

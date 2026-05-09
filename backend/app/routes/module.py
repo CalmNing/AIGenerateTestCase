@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 from starlette import status
 
-from app.deps import SessionDep
+from app.deps import SessionDep, CurrentUser
 from db.models import Module, TestCase
 from utils.base_response import Response
 
@@ -54,32 +54,32 @@ def build_module_tree(modules: List[Module]) -> List[ModuleTree]:
 
 
 @router.get("/{session_id}/modules", response_model=Response[List[Module]])
-def get_modules(session_id: int, session: SessionDep):
+def get_modules(session_id: int, session: SessionDep, user: CurrentUser):
     """获取模块（平铺列表）"""
-    query = select(Module).where(Module.session_id == session_id)
+    query = select(Module).where(Module.session_id == session_id, Module.user_id == user.user_id)
     modules = session.exec(query).all()
     return Response(data=modules)
 
 
 @router.get("/{session_id}/modules/tree", response_model=Response[List[ModuleTree]])
-def get_modules_tree(session_id: int, session: SessionDep):
+def get_modules_tree(session_id: int, session: SessionDep, user: CurrentUser):
     """获取模块树形结构"""
-    query = select(Module).where(Module.session_id == session_id)
+    query = select(Module).where(Module.session_id == session_id, Module.user_id == user.user_id)
     modules = session.exec(query).all()
     tree = build_module_tree(list(modules))
     return Response(data=tree)
 
 
 @router.get("/{module_id}", response_model=Response[Module])
-def get_module(module_id: int, session: SessionDep):
+def get_module(module_id: int, session: SessionDep, user: CurrentUser):
     """获取单个模块"""
-    query = select(Module).where(Module.id == module_id)
+    query = select(Module).where(Module.id == module_id, Module.user_id == user.user_id)
     module = session.exec(query).first()
     return Response(data=module)
 
 
 @router.post("/", response_model=Response[Module])
-def create_module(module: Module, session: SessionDep):
+def create_module(module: Module, session: SessionDep, user: CurrentUser):
     """创建模块"""
     # 如果指定了 parent_id，检查父模块是否存在
     if module.parent_id:
@@ -94,7 +94,8 @@ def create_module(module: Module, session: SessionDep):
     new_module = Module(
         module_name=module.module_name,
         session_id=module.session_id,
-        parent_id=module.parent_id
+        parent_id=module.parent_id,
+        user_id=user.user_id
     )
     session.add(new_module)
     session.commit()
@@ -103,11 +104,13 @@ def create_module(module: Module, session: SessionDep):
 
 
 @router.put("/{module_id}", response_model=Response[Module])
-def update_module(module_id: int, module: Module, session: SessionDep):
+def update_module(module_id: int, module: Module, session: SessionDep, user: CurrentUser):
     """更新模块"""
     module_db = session.get(Module, module_id)
     if not module_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="模块不存在")
+    if module_db.user_id != user.user_id:
+        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此模块")
     
     # 如果要修改 parent_id，进行检查
     if module.parent_id is not None:
@@ -135,11 +138,13 @@ def update_module(module_id: int, module: Module, session: SessionDep):
 
 
 @router.delete("/{module_id}", response_model=Response)
-def delete_module(module_id: int, session: SessionDep):
+def delete_module(module_id: int, session: SessionDep, user: CurrentUser):
     """删除模块"""
     module_db = session.get(Module, module_id)
     if not module_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="模块不存在，删除失败！")
+    if module_db.user_id != user.user_id:
+        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此模块")
     
     # 检查是否有子模块
     children = session.exec(select(Module).where(Module.parent_id == module_id)).first()

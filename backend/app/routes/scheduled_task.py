@@ -5,7 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from app.deps import SessionDep
+from app.deps import SessionDep, CurrentUser
 from db.models import ScheduledTask, SavedRequest
 from utils.base_response import Response
 
@@ -13,9 +13,13 @@ router = APIRouter(prefix="/scheduled-tasks", tags=["scheduled-tasks"])
 
 
 @router.get("", response_model=Response[List[ScheduledTask]])
-def get_scheduled_tasks(session: SessionDep):
-    """获取所有定时任务"""
-    tasks = session.exec(select(ScheduledTask).order_by(ScheduledTask.created_at.desc())).all()
+def get_scheduled_tasks(session: SessionDep, user: CurrentUser):
+    """获取当前用户的所有定时任务"""
+    tasks = session.exec(
+        select(ScheduledTask)
+        .where(ScheduledTask.user_id == user.user_id)
+        .order_by(ScheduledTask.created_at.desc())
+    ).all()
     # 附加每个任务的请求名称信息
     result = []
     for task in tasks:
@@ -30,8 +34,9 @@ def get_scheduled_tasks(session: SessionDep):
 
 
 @router.post("", response_model=Response[ScheduledTask])
-def create_scheduled_task(session: SessionDep, task: ScheduledTask):
+def create_scheduled_task(session: SessionDep, user: CurrentUser, task: ScheduledTask):
     """创建定时任务"""
+    task.user_id = user.user_id
     session.add(task)
     session.commit()
     session.refresh(task)
@@ -44,11 +49,13 @@ def create_scheduled_task(session: SessionDep, task: ScheduledTask):
 
 
 @router.put("/{task_id}", response_model=Response[ScheduledTask])
-def update_scheduled_task(session: SessionDep, task_id: int, task: ScheduledTask):
+def update_scheduled_task(session: SessionDep, user: CurrentUser, task_id: int, task: ScheduledTask):
     """更新定时任务"""
     db_task = session.get(ScheduledTask, task_id)
     if not db_task:
         return Response(code=404, message="定时任务不存在")
+    if db_task.user_id != user.user_id:
+        return Response(code=403, message="无权操作此定时任务")
 
     task_data = task.model_dump(exclude_unset=True)
     task_data.pop("created_at", None)
@@ -70,11 +77,13 @@ def update_scheduled_task(session: SessionDep, task_id: int, task: ScheduledTask
 
 
 @router.delete("/{task_id}", response_model=Response)
-def delete_scheduled_task(session: SessionDep, task_id: int):
+def delete_scheduled_task(session: SessionDep, user: CurrentUser, task_id: int):
     """删除定时任务"""
     db_task = session.get(ScheduledTask, task_id)
     if not db_task:
         return Response(code=404, message="定时任务不存在")
+    if db_task.user_id != user.user_id:
+        return Response(code=403, message="无权操作此定时任务")
 
     session.delete(db_task)
     session.commit()
@@ -87,11 +96,13 @@ def delete_scheduled_task(session: SessionDep, task_id: int):
 
 
 @router.post("/{task_id}/run", response_model=Response)
-async def run_task_now(session: SessionDep, task_id: int):
+async def run_task_now(session: SessionDep, user: CurrentUser, task_id: int):
     """手动触发一次定时任务"""
     db_task = session.get(ScheduledTask, task_id)
     if not db_task:
         return Response(code=404, message="定时任务不存在")
+    if db_task.user_id != user.user_id:
+        return Response(code=403, message="无权操作此定时任务")
 
     from app.scheduler import execute_scheduled_task
     import asyncio

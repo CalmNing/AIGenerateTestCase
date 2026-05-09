@@ -1,6 +1,7 @@
 version: '3.8'
 volumes:
   backend_data:
+  postgres_data:
 services:
   backend:
     build: ./backend
@@ -13,6 +14,13 @@ services:
       - app-network
     environment:
       - TZ=Asia/Shanghai
+      - KEYCLOAK_SERVER_URL=http://keycloak:8080
+      # - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
+      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8080
+      - KEYCLOAK_REALM=ai-testcase
+      - KEYCLOAK_CLIENT_ID=backend
+      # - CORS_ORIGINS=http://localhost:5173,http://localhost:8001
+      - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
 
   frontend:
     build: ./frontend
@@ -23,6 +31,54 @@ services:
       - backend
     networks:
       - app-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak_password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      # KC_HOSTNAME: localhost
+      KC_HOSTNAME: 192.168.13.110
+      KC_HTTP_PORT: 8080
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-config.json:/opt/keycloak/data/import/realm-config.json
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e \"GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n\" >&3;if [ $? -eq 0 ];then echo 'Healthcheck Successful';exit 0;else echo 'Healthcheck Failed';exit 1;fi"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 networks:
   app-network:

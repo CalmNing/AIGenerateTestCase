@@ -2,6 +2,7 @@
 export interface Session {
   id: number;
   name: string;
+  user_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -26,6 +27,7 @@ export interface TestCase {
   bug_id?: number;
   session_id: number;
   module_id?: number | null;
+  user_id?: string;
 }
 
 // 测试用例类型
@@ -57,6 +59,7 @@ export interface Module {
   module_name: string;
   session_id: number | null;
   parent_id: number | null;
+  user_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +88,7 @@ export interface HistoryPrompt {
   content: string;
   module_id: number | null;
   session_id: number | null;
+  user_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +103,7 @@ export interface SavedRequest {
   parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
   body?: string;
   post_extractions?: Array<{ variable: string; jsonpath: string }>;
+  user_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -109,6 +114,7 @@ export interface GlobalParameter {
   name: string;
   parameters: Array<{ key: string; value: string }>;
   is_default: boolean;
+  user_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -151,6 +157,7 @@ export interface ScheduledTask {
   enabled: boolean;
   last_run_at: string | null;
   last_run_result: string | null;
+  user_id?: string;
   created_at: string;
   updated_at: string;
   request_names?: Array<{ id: number; name: string }>;
@@ -170,6 +177,7 @@ export interface MockConfig {
   response_count: number;
   page_size?: number;
   json_path?: string;
+  user_id?: string;
   created_at: string;
   updated_at: string;
 }

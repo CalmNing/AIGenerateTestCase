@@ -4,6 +4,7 @@ from fastapi import Depends
 from sqlmodel import Session
 
 from db.db import engine
+from app.auth import get_current_user, UserInfo
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -12,3 +13,4 @@ def get_db() -> Generator[Session, None, None]:
         yield session
     
 SessionDep = Annotated[Session, Depends(get_db)]
+CurrentUser = Annotated[UserInfo, Depends(get_current_user)]

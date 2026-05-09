@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Body  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from pydantic import BaseModel
@@ -12,10 +13,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# 配置CORS
+# 配置CORS - 从环境变量读取允许的 origins
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:8001").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 在生产环境中应该配置具体的前端域名
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

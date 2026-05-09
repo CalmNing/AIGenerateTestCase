@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app.routes.session import router as session_router
 from app.routes.testcase import router as testcase_router
 from app.routes.module import router as module_router
@@ -9,15 +9,20 @@ from app.routes.history_prompt import router as history_prompt_router
 from app.routes.scheduled_task import router as scheduled_task_router
 from app.routes.mock_config import router as mock_config_router
 from app.routes.mock_server import router as mock_server_router
+from app.auth import get_current_user
 
 api_router = APIRouter()
-api_router.include_router(session_router)
-api_router.include_router(testcase_router)
-api_router.include_router(module_router)
-api_router.include_router(saved_request_router)
-api_router.include_router(proxy_router)
-api_router.include_router(global_parameter_router)
-api_router.include_router(history_prompt_router)
-api_router.include_router(scheduled_task_router)
-api_router.include_router(mock_config_router)
+
+# 需要鉴权的路由：注入 get_current_user 依赖
+api_router.include_router(session_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(testcase_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(module_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(saved_request_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(proxy_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(global_parameter_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(history_prompt_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(scheduled_task_router, dependencies=[Depends(get_current_user)])
+api_router.include_router(mock_config_router, dependencies=[Depends(get_current_user)])
+
+# 免鉴权路由：Mock 运行服务需要外部可访问
 api_router.include_router(mock_server_router)

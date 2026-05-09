@@ -1,4 +1,5 @@
 import axios from 'axios';
+import keycloak from './keycloak';
 import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig } from '../types';
 
 // 创建axios实例
@@ -8,10 +9,13 @@ const api = axios.create({
   // 移除默认的Content-Type，让axios根据请求数据自动设置
 });
 
-// 请求拦截器
+// 请求拦截器 - 注入 Bearer Token
 api.interceptors.request.use(
   (config) => {
-    // 可以在这里添加认证信息
+    // 注入 Keycloak Token
+    if (keycloak.authenticated && keycloak.token) {
+      config.headers.Authorization = `Bearer ${keycloak.token}`;
+    }
     return config;
   },
   (error) => {
@@ -19,13 +23,35 @@ api.interceptors.request.use(
   }
 );
 
-// 响应拦截器
+// 响应拦截器 - 处理 401 自动刷新 Token
 api.interceptors.response.use(
   (response) => {
     return response.data;
   },
-  (error) => {
-    console.error('API请求错误:', error);
+  async (error) => {
+    const originalRequest = error.config;
+
+    // 如果是 401 且未重试过，尝试刷新 Token
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        const refreshed = await keycloak.updateToken(30);
+        if (refreshed) {
+          // Token 刷新成功，重试原请求
+          originalRequest.headers.Authorization = `Bearer ${keycloak.token}`;
+          return api(originalRequest);
+        }
+      } catch (refreshError) {
+        // Token 刷新失败，跳转登录
+        console.error('Token refresh failed, redirecting to login');
+        keycloak.login();
+        return Promise.reject(error);
+      }
+      // Token 未刷新但仍然 401，说明后端验证有问题，不再循环登录
+      console.error('Token is valid but server rejected it (401). Check backend auth configuration.');
+    }
+
     return Promise.reject(error);
   }
 );

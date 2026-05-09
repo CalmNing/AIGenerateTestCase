@@ -61,6 +61,7 @@ class BaseModel(SQLModel):
 class Session(BaseModel, table=True):
     """会话数据模型"""
     name: str
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
     # 定义与测试用例的一对多关系
     test_cases: List["TestCase"] = Relationship(back_populates="session")
     # 定义与模块的一对多关系
@@ -81,6 +82,7 @@ class TestCase(BaseModel, table=True):
     status: str = Field(default="NOT_RUN")  # 使用字符串类型，直接设置默认值created_at
     bug_id: Optional[int] = Field(default=None)
     module_id: Optional[int] = Field(default=None)
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
@@ -90,6 +92,7 @@ class Module(BaseModel, table=True):
     module_name: str = Field(default="")
     session_id: Optional[int] = Field(default=None, foreign_key="session.id")
     parent_id: Optional[int] = Field(default=None, foreign_key="module.id")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
     # 添加与会话的一对多关系
     session: Optional[Session] = Relationship(back_populates="modules")
@@ -114,7 +117,7 @@ class SavedRequest(BaseModel, table=True):
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON)
     body: Optional[str] = Field(default=None)
     post_extractions: List[dict] = Field(default_factory=list, sa_type=JSON)  # 后置提取规则
-    user_id: Optional[int] = Field(default=None)  # 可以根据需要添加用户关联
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")  # 激活用户关联
 
     # 定义与会话的多对一关系（可选）
     # session_id: Optional[int] = Field(default=None, foreign_key="session.id")
@@ -126,7 +129,7 @@ class GlobalParameter(BaseModel, table=True):
     name: str = Field(default="")  # 环境名称
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON)  # 参数列表
     is_default: bool = Field(default=False)  # 是否为默认环境
-    user_id: Optional[int] = Field(default=None)  # 可以根据需要添加用户关联
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")  # 激活用户关联
 
 
 class HistoryPrompt(BaseModel, table=True):
@@ -134,6 +137,7 @@ class HistoryPrompt(BaseModel, table=True):
     content: str = Field(default="", description="需求描述内容")
     module_id: Optional[int] = Field(default=None, foreign_key="module.id", description="关联模块ID")
     session_id: Optional[int] = Field(default=None, foreign_key="session.id", description="关联会话ID")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
     # 定义与模块的多对一关系
     module: Optional["Module"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[HistoryPrompt.module_id]"})
@@ -153,6 +157,7 @@ class ScheduledTask(BaseModel, table=True):
     enabled: bool = Field(default=True, description="是否启用")
     last_run_at: Optional[datetime] = Field(default=None, description="上次执行时间")
     last_run_result: Optional[str] = Field(default=None, description="上次执行结果（JSON字符串）")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
 
 class MockConfig(BaseModel, table=True):
@@ -168,3 +173,4 @@ class MockConfig(BaseModel, table=True):
     response_count: int = Field(default=1, ge=1, description="返回数据条目数量（分页用）")
     page_size: Optional[int] = Field(default=None, ge=1, description="分页大小（可选，默认为1）")
     json_path: Optional[str] = Field(default=None, description="JSON路径，指定响应体中返回批量数据的字段，如 $.data.items")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")

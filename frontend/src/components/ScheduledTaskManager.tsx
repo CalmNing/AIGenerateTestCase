@@ -18,10 +18,10 @@ import {
   Radio
 } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { scheduledTaskApi } from '../services/api';
+import { scheduledTaskApi, savedRequestApi, globalParameterApi } from '../services/api';
 import type { ScheduledTask } from '../types';
 import FileUpload, { UploadedFileResult } from './FileUpload';
-import axios from 'axios';
+
 
 const { Text, Paragraph } = Typography;
 
@@ -89,9 +89,9 @@ const ScheduledTaskManager: React.FC = () => {
 
   const fetchSavedRequests = async () => {
     try {
-      const response = await axios.get('/api/saved-requests');
-      if (response.data.code === 200 && response.data.data) {
-        setSavedRequests(response.data.data);
+      const response = await savedRequestApi.getRequests();
+      if (response.code === 200 && response.data) {
+        setSavedRequests(response.data);
       }
     } catch (error) {
       console.error('Failed to fetch saved requests:', error);
@@ -100,9 +100,9 @@ const ScheduledTaskManager: React.FC = () => {
 
   const fetchEnvironments = async () => {
     try {
-      const response = await axios.get('/api/global-parameters');
-      if (response.data.code === 200 && response.data.data) {
-        setEnvironments(response.data.data);
+      const response = await globalParameterApi.getEnvironments();
+      if (response.code === 200 && response.data) {
+        setEnvironments(response.data);
       }
     } catch (error) {
       console.error('Failed to fetch environments:', error);
@@ -223,10 +223,10 @@ const ScheduledTaskManager: React.FC = () => {
       // 附上任务参数（文件类型保留 fileId 作为 value）
       values.parameters = taskParameters.filter(p => p.key && (p.value || p.file));
       if (editingTask) {
-        await axios.put(`/api/scheduled-tasks/${editingTask.id}`, values);
+        await scheduledTaskApi.updateTask(editingTask.id, values);
         message.success('定时任务已更新');
       } else {
-        await axios.post('/api/scheduled-tasks', values);
+        await scheduledTaskApi.createTask(values);
         message.success('定时任务已创建');
       }
       setIsFormVisible(false);
