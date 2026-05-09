@@ -14,13 +14,11 @@ router = APIRouter(prefix="/scheduled-tasks", tags=["scheduled-tasks"])
 
 @router.get("", response_model=Response[List[ScheduledTask]])
 def get_scheduled_tasks(session: SessionDep, user: CurrentUser):
-    """获取当前用户的所有定时任务"""
+    """获取所有定时任务"""
     tasks = session.exec(
         select(ScheduledTask)
-        .where(ScheduledTask.user_id == user.user_id)
         .order_by(ScheduledTask.created_at.desc())
     ).all()
-    # 附加每个任务的请求名称信息
     result = []
     for task in tasks:
         task_dict = task.model_dump()
@@ -41,7 +39,6 @@ def create_scheduled_task(session: SessionDep, user: CurrentUser, task: Schedule
     session.commit()
     session.refresh(task)
 
-    # 注册到调度器
     from app.scheduler import add_job
     add_job(task)
 
@@ -54,19 +51,16 @@ def update_scheduled_task(session: SessionDep, user: CurrentUser, task_id: int, 
     db_task = session.get(ScheduledTask, task_id)
     if not db_task:
         return Response(code=404, message="定时任务不存在")
-    if db_task.user_id != user.user_id:
-        return Response(code=403, message="无权操作此定时任务")
 
     task_data = task.model_dump(exclude_unset=True)
     task_data.pop("created_at", None)
     task_data.pop("updated_at", None)
-    task_data.pop("last_run_at", None)  # 避免前端传递的字符串格式导致错误
+    task_data.pop("last_run_at", None)
     db_task.sqlmodel_update(task_data)
     session.add(db_task)
     session.commit()
     session.refresh(db_task)
 
-    # 更新调度器
     from app.scheduler import add_job, remove_job
     if db_task.enabled:
         add_job(db_task)
@@ -82,13 +76,10 @@ def delete_scheduled_task(session: SessionDep, user: CurrentUser, task_id: int):
     db_task = session.get(ScheduledTask, task_id)
     if not db_task:
         return Response(code=404, message="定时任务不存在")
-    if db_task.user_id != user.user_id:
-        return Response(code=403, message="无权操作此定时任务")
 
     session.delete(db_task)
     session.commit()
 
-    # 从调度器移除
     from app.scheduler import remove_job
     remove_job(task_id)
 
@@ -101,8 +92,6 @@ async def run_task_now(session: SessionDep, user: CurrentUser, task_id: int):
     db_task = session.get(ScheduledTask, task_id)
     if not db_task:
         return Response(code=404, message="定时任务不存在")
-    if db_task.user_id != user.user_id:
-        return Response(code=403, message="无权操作此定时任务")
 
     from app.scheduler import execute_scheduled_task
     import asyncio

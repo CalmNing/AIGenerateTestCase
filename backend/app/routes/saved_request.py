@@ -17,7 +17,6 @@ def get_saved_requests(session: SessionDep, user: CurrentUser):
     """获取当前用户的所有保存的请求配置"""
     saved_requests = session.exec(
         select(SavedRequest)
-        .where(SavedRequest.user_id == user.user_id)
         .order_by(SavedRequest.updated_at.desc())
     ).all()
     return Response(data=saved_requests)
@@ -41,8 +40,6 @@ def update_saved_request(session: SessionDep, user: CurrentUser, saved_request_i
     saved_request_db = session.get(SavedRequest, saved_request_id)
     if not saved_request_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="请求配置不存在")
-    if saved_request_db.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此请求配置")
 
     saved_request_data = saved_request.model_dump(exclude_unset=True)
     saved_request_data.pop("created_at", None)
@@ -61,11 +58,9 @@ def delete_saved_request(session: SessionDep, user: CurrentUser, saved_request_i
     saved_request_db = session.get(SavedRequest, saved_request_id)
     if not saved_request_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="请求配置不存在")
-    if saved_request_db.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此请求配置")
 
     # 检查该请求是否被定时任务引用
-    scheduled_tasks = session.exec(select(ScheduledTask).where(ScheduledTask.user_id == user.user_id)).all()
+    scheduled_tasks = session.exec(select(ScheduledTask)).all()
     referenced_tasks = []
     for task in scheduled_tasks:
         if saved_request_id in task.request_ids:

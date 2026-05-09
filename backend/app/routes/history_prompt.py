@@ -28,7 +28,7 @@ def get_history_prompts(
     """获取指定模块下的历史提示词列表"""
     prompts = session.exec(
         select(HistoryPrompt)
-        .where(HistoryPrompt.module_id == module_id, HistoryPrompt.user_id == user.user_id)
+        .where(HistoryPrompt.module_id == module_id)
         .order_by(desc(HistoryPrompt.created_at))
     ).all()
     return Response(data=prompts)
@@ -44,7 +44,7 @@ def get_session_history_prompts(
     """获取指定会话下的所有历史提示词"""
     prompts = session.exec(
         select(HistoryPrompt)
-        .where(HistoryPrompt.session_id == session_id, HistoryPrompt.user_id == user.user_id)
+        .where(HistoryPrompt.session_id == session_id)
         .order_by(desc(HistoryPrompt.created_at))
     ).all()
     return Response(data=prompts)
@@ -81,8 +81,6 @@ def delete_history_prompt(
     prompt = session.get(HistoryPrompt, prompt_id)
     if not prompt:
         return Response(code=status.HTTP_404_NOT_FOUND, message="历史提示词不存在")
-    if prompt.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此历史提示词")
 
     session.delete(prompt)
     session.commit()

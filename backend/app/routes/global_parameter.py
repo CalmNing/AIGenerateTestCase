@@ -12,10 +12,10 @@ router = APIRouter(prefix="/global-parameters", tags=["global-parameters"])
 
 @router.get("", response_model=BaseResponse)
 def get_global_parameters(session: SessionDep, user: CurrentUser):
-    """获取当前用户的所有全局参数配置"""
+    """获取所有全局参数配置"""
     try:
         global_parameters = session.exec(
-            select(GlobalParameter).where(GlobalParameter.user_id == user.user_id)
+            select(GlobalParameter)
         ).all()
         return BaseResponse(code=200, msg="Success", success=True, data=global_parameters)
     except Exception as e:
@@ -30,7 +30,7 @@ def create_global_parameter(global_parameter: GlobalParameter, session: SessionD
         global_parameter.user_id = user.user_id
         # 如果设置为默认环境，将其他环境的默认状态设为False
         if global_parameter.is_default:
-            for param in session.exec(select(GlobalParameter).where(GlobalParameter.user_id == user.user_id)).all():
+            for param in session.exec(select(GlobalParameter)).all():
                 param.is_default = False
                 session.add(param)
         
@@ -50,12 +50,10 @@ def update_global_parameter(parameter_id: int, global_parameter: GlobalParameter
         db_global_parameter = session.get(GlobalParameter, parameter_id)
         if not db_global_parameter:
             raise HTTPException(status_code=404, detail="全局参数配置不存在")
-        if db_global_parameter.user_id != user.user_id:
-            raise HTTPException(status_code=403, detail="无权操作此全局参数配置")
         
         # 如果设置为默认环境，将其他环境的默认状态设为False
         if global_parameter.is_default:
-            for param in session.exec(select(GlobalParameter).where(GlobalParameter.user_id == user.user_id)).all():
+            for param in session.exec(select(GlobalParameter)).all():
                 param.is_default = False
                 session.add(param)
         
@@ -81,8 +79,6 @@ def delete_global_parameter(parameter_id: int, session: SessionDep, user: Curren
         db_global_parameter = session.get(GlobalParameter, parameter_id)
         if not db_global_parameter:
             raise HTTPException(status_code=404, detail="全局参数配置不存在")
-        if db_global_parameter.user_id != user.user_id:
-            raise HTTPException(status_code=403, detail="无权操作此全局参数配置")
         
         session.delete(db_global_parameter)
         session.commit()
@@ -96,18 +92,17 @@ def delete_global_parameter(parameter_id: int, session: SessionDep, user: Curren
 
 @router.get("/default", response_model=BaseResponse)
 def get_default_global_parameter(session: SessionDep, user: CurrentUser):
-    """获取当前用户的默认全局参数配置"""
+    """获取默认全局参数配置"""
     try:
         default_parameter = session.exec(
             select(GlobalParameter).where(
-                GlobalParameter.is_default == True,
-                GlobalParameter.user_id == user.user_id
+                GlobalParameter.is_default == True
             )
         ).first()
         if not default_parameter:
-            # 如果没有默认环境，返回该用户的第一个环境
+            # 如果没有默认环境，返回第一个环境
             default_parameter = session.exec(
-                select(GlobalParameter).where(GlobalParameter.user_id == user.user_id)
+                select(GlobalParameter)
             ).first()
         return BaseResponse(code=200, msg="Success", success=True, data=default_parameter)
     except Exception as e:
@@ -136,8 +131,6 @@ def extract_and_save(request: ExtractAndSaveRequest, session: SessionDep, user: 
         env = session.get(GlobalParameter, request.environment_id)
         if not env:
             raise HTTPException(status_code=404, detail="环境配置不存在")
-        if env.user_id != user.user_id:
-            raise HTTPException(status_code=403, detail="无权操作此环境配置")
 
         # 构建现有参数的 key->index 映射
         params = list(env.parameters)

@@ -40,7 +40,7 @@ def get_testcases(
         exist_bug: bool = False
 ):
     """获取会话的测试用例"""
-    query = select(TestCase).where(TestCase.session_id == session_id, TestCase.user_id == user.user_id).order_by(TestCase.case_level,
+    query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
                                                                                desc(TestCase.created_at))
     if module_id:
         query = query.where(TestCase.module_id == module_id)
@@ -55,41 +55,34 @@ def get_testcases(
         query = query.where(TestCase.bug_id != None)
 
     testcases_db = session.exec(query.offset(offset).limit(limit)).all()
-    # 确保 session_id 被转换为 int 类型
     for testcase in testcases_db:
         testcase.session_id = int(testcase.session_id) if testcase.session_id else None
 
     # 构建基础查询条件
-    count_query_base = [TestCase.session_id == session_id, TestCase.user_id == user.user_id]
+    count_query_base = [TestCase.session_id == session_id]
     if module_id is not None:
         count_query_base.append(TestCase.module_id == module_id)
-        # 统计总数
     totalNumber = session.scalar(select(func.count()).where(*count_query_base))
 
-    # 统计已通过的用例数
-    passed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.PASSED, TestCase.user_id == user.user_id]
+    passed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.PASSED]
     if module_id is not None:
         passed_query.append(TestCase.module_id == module_id)
     passed = session.scalar(select(func.count()).where(*passed_query))
 
-    # 统计未通过的用例数
-    failed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.FAILED, TestCase.user_id == user.user_id]
+    failed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.FAILED]
     if module_id is not None:
         failed_query.append(TestCase.module_id == module_id)
     failed = session.scalar(select(func.count()).where(*failed_query))
 
-    # 统计未执行的用例数
-    not_run_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.NOT_RUN, TestCase.user_id == user.user_id]
+    not_run_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.NOT_RUN]
     if module_id is not None:
         not_run_query.append(TestCase.module_id == module_id)
     not_run = session.scalar(select(func.count()).where(*not_run_query))
 
-    # 统计 Bug 数
-    total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None, TestCase.user_id == user.user_id]
+    total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None]
     if module_id is not None:
         total_bugs_query.append(TestCase.module_id == module_id)
     totalBugs = session.scalar(select(func.count()).where(*total_bugs_query))
-
 
     testcases = TestCasePage(
         items=testcases_db,
@@ -104,10 +97,10 @@ def get_testcases(
 
 # 请求模型
 class GenerateTestcasesRequest(BaseModel):
-    model_type: str = "api"  # "api" 或 "ollama"
-    api_key: str = ""  # API 密钥（当 model_type 为 "api" 时使用）
-    ollama_url: str = ""  # Ollama URL（当 model_type 为 "ollama" 时使用）
-    ollama_model: str = ""  # Ollama 模型名称（当 model_type 为 "ollama" 时使用")
+    model_type: str = "api"
+    api_key: str = ""
+    ollama_url: str = ""
+    ollama_model: str = ""
     requirement: Optional[str]
 
 
@@ -116,19 +109,16 @@ async def generate_testcases(
         session: SessionDep,
         user: CurrentUser,
         session_id: int,
-        # 调整参数顺序，与前端发送的FormData顺序一致
         requirement: Optional[str] = Form(None),
         model_type: str = Form("api"),
         api_key: str = Form(""),
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
         module_id: Optional[int|str] = Form(""),
-
 ):
     """生成测试用例"""
     from utils.model_utils import generate_testcases
 
-    # 添加详细的调试日志
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"接收到生成测试用例请求")
@@ -138,26 +128,18 @@ async def generate_testcases(
     logger.info(f"  model_type: {model_type}")
     logger.info(f"  api_key: {'有值' if api_key else 'None'}")
 
-
-
-    # 基本输入校验 - 修复
-    # 检查是否至少有一个有效输入
     has_valid_input = False
 
-
-    # 检查是否有有效的requirement
     if requirement and requirement.strip():
         has_valid_input = True
         logger.info(f"  有有效的requirement")
 
     logger.info(f"  验证结果: has_valid_input={has_valid_input}")
 
-    # 如果没有有效输入，返回错误
     if not has_valid_input:
         logger.error(f"  验证失败: 请输入requirement")
         return Response(code=status.HTTP_400_BAD_REQUEST, data="请输入requirement")
 
-    # 模型参数校验
     if model_type == "api" and not api_key:
         return Response(code=status.HTTP_400_BAD_REQUEST, data="api_key 未提供!")
     if model_type == "ollama" and (not ollama_url or not ollama_model):
@@ -172,7 +154,6 @@ async def generate_testcases(
         api_key=api_key,
         ollama_url=ollama_url,
         ollama_model=ollama_model,
-
     )
     # 自动填充 user_id
     for tc in testcases:
@@ -191,12 +172,9 @@ def update_testcase(
         testcase: TestCase
 ):
     """更新测试用例"""
-
     testcase_db = session.get(TestCase, testcase_id)
     if not testcase_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
-    if testcase_db.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此测试用例")
 
     testcase_data = testcase.model_dump(exclude_unset=True)
     testcase_data.pop("created_at")
@@ -215,15 +193,14 @@ def delete_testcase(
         session_id: int,
         testcases: List[int]
 ):
-    # 检查是否有不属于当前用户的用例
+    # 检查测试用例是否存在
     user_testcases = session.exec(
         select(TestCase).where(
-            TestCase.id.in_(testcases),
-            TestCase.user_id == user.user_id
+            TestCase.id.in_(testcases)
         )
     ).all()
     if len(user_testcases) != len(testcases):
-        return Response(code=status.HTTP_403_FORBIDDEN, message="存在无权删除的测试用例")
+        return Response(code=status.HTTP_404_NOT_FOUND, message="部分测试用例不存在")
 
     testcase_status = session.exec(
         select(TestCase.status)
@@ -234,13 +211,11 @@ def delete_testcase(
     ).first()
     if testcase_status:
         return Response(code=status.HTTP_400_BAD_REQUEST, message="存在已执行的用例，删除失败！")
-    """删除测试用例"""
 
     # 批量删除测试用例
     statement = delete(TestCase).where(
         TestCase.id.in_(testcases),
-        TestCase.session_id == session_id,
-        TestCase.user_id == user.user_id
+        TestCase.session_id == session_id
     )
     session.exec(statement)
     session.commit()
@@ -261,14 +236,10 @@ def move_testcase(
         request: MoveTestcaseRequest
 ):
     """移动测试用例到指定会话和模块"""
-    # 查找测试用例
     testcase_db = session.get(TestCase, testcase_id)
     if not testcase_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
-    if testcase_db.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此测试用例")
     
-    # 更新会话和模块
     testcase_db.session_id = request.session_id
     testcase_db.module_id = request.module_id
     
@@ -292,11 +263,9 @@ def batch_move_testcase(
         request: BatchMoveTestcaseRequest
 ):
     """批量移动测试用例到指定会话和模块"""
-    # 查找测试用例
     testcases_db = session.exec(
         select(TestCase).where(
-            TestCase.id.in_(request.testcase_ids),
-            TestCase.user_id == user.user_id
+            TestCase.id.in_(request.testcase_ids)
         )
     ).all()
     
@@ -304,9 +273,8 @@ def batch_move_testcase(
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     if len(testcases_db) != len(request.testcase_ids):
-        return Response(code=status.HTTP_403_FORBIDDEN, message="存在无权操作的测试用例")
+        return Response(code=status.HTTP_404_NOT_FOUND, message="部分测试用例不存在")
     
-    # 批量更新会话和模块
     for testcase_db in testcases_db:
         testcase_db.session_id = request.session_id
         testcase_db.module_id = request.module_id
@@ -324,7 +292,6 @@ def create_testcase(
         testcase: TestCase
 ):
     """创建测试用例"""
-    # 创建测试用例对象
     testcase_db = TestCase(
         case_name=testcase.case_name,
         case_level=testcase.case_level,

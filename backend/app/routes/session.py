@@ -26,7 +26,7 @@ router = APIRouter(prefix="/sessions", tags=["session"])
 @router.get("/", response_model=Response[List[Session]])
 def get_sessions(session: SessionDep, user: CurrentUser):
     """获取当前用户的所有会话"""
-    sessions = session.exec(select(Session).where(Session.user_id == user.user_id)).all()
+    sessions = session.exec(select(Session)).all()
     return Response(data=sessions)
 
 
@@ -46,8 +46,6 @@ def update_session(session_id: int, update: UpdateSessionRequest, session: Sessi
     session_db = session.get(Session, session_id)
     if not session_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message='会话不存在！')
-    if session_db.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message='无权操作此会话')
     session_data = update.model_dump(exclude_unset=True)
     session_db.sqlmodel_update(session_data)
     session.add(session_db)
@@ -62,8 +60,6 @@ def delete_session(session_id: int, session: SessionDep, user: CurrentUser):
     session_db = session.get(Session, session_id)
     if not session_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="会话不存在！")
-    if session_db.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message='无权操作此会话')
     session_status = session.exec(
         select(TestCase.status).where(
         TestCase.session_id == session_id,

@@ -12,10 +12,9 @@ router = APIRouter(prefix="/mock-configs", tags=["mock-configs"])
 
 @router.get("", response_model=Response[List[MockConfig]])
 def get_mock_configs(session: SessionDep, user: CurrentUser):
-    """获取当前用户的所有Mock配置"""
+    """获取所有Mock配置"""
     configs = session.exec(
         select(MockConfig)
-        .where(MockConfig.user_id == user.user_id)
         .order_by(MockConfig.created_at.desc())
     ).all()
     return Response(data=configs)
@@ -37,8 +36,6 @@ def update_mock_config(session: SessionDep, user: CurrentUser, config_id: int, c
     db_config = session.get(MockConfig, config_id)
     if not db_config:
         return Response(code=status.HTTP_404_NOT_FOUND, message="Mock配置不存在")
-    if db_config.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此Mock配置")
     config_data = config.model_dump(exclude_unset=True)
     config_data.pop("created_at", None)
     config_data.pop("updated_at", None)
@@ -55,8 +52,6 @@ def delete_mock_config(session: SessionDep, user: CurrentUser, config_id: int):
     db_config = session.get(MockConfig, config_id)
     if not db_config:
         return Response(code=status.HTTP_404_NOT_FOUND, message="Mock配置不存在")
-    if db_config.user_id != user.user_id:
-        return Response(code=status.HTTP_403_FORBIDDEN, message="无权操作此Mock配置")
     session.delete(db_config)
     session.commit()
     return Response(message="Mock配置已删除")
