@@ -57,7 +57,19 @@ def create_history_prompt(
     user: CurrentUser,
     request: CreateHistoryPromptRequest
 ):
-    """创建新的历史提示词"""
+    """创建新的历史提示词，已存在完全一致的提示词时跳过"""
+    existing = session.exec(
+        select(HistoryPrompt)
+        .where(
+            HistoryPrompt.content == request.content,
+            HistoryPrompt.module_id == request.module_id if request.module_id is not None else HistoryPrompt.module_id.is_(None),
+            HistoryPrompt.session_id == request.session_id if request.session_id is not None else HistoryPrompt.session_id.is_(None),
+            HistoryPrompt.user_id == user.user_id
+        )
+    ).first()
+    if existing:
+        return Response(data=existing, message="历史提示词已存在，跳过创建")
+
     prompt = HistoryPrompt(
         content=request.content,
         module_id=request.module_id,

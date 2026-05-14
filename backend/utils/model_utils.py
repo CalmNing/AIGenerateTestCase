@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from typing import List, Optional, Literal
 
@@ -9,8 +10,16 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, Field, SecretStr
 from starlette import status
 
-from db.models import TestCase as DBTestCase
+from sqlmodel import select, desc
+
+from db.models import TestCase as DBTestCase, HistoryPrompt
 from utils.base_response import Response
+
+# 飞书文档链接正则：匹配 /docx/ 和 /wiki/ 两种链接格式
+_FEISHU_URL_RE = re.compile(
+    r'https?://[a-zA-Z0-9-]+\.feishu\.cn/(?:docx|wiki)/([A-Za-z0-9_-]+)',
+    re.IGNORECASE
+)
 
 # 简单的 agent 缓存，key -> agent
 _AGENT_CACHE: dict = {}
@@ -131,6 +140,69 @@ def create_testcase_agent(
         return agent
 
 
+_HISTORY_PROMPT_LIMIT = 20
+
+
+def _build_history_context(db_session, module_id: int) -> str:
+    """获取当前模块下最近 N 条历史需求描述，作为上下文供 agent 理解功能背景。
+
+    历史需求仅用于辅助理解，不参与用例生成。
+    无历史记录或 db_session 不可用时返回空字符串。
+    """
+    if db_session is None or module_id is None:
+        return ""
+
+    try:
+        prompts = db_session.exec(
+            select(HistoryPrompt.content)
+            .where(HistoryPrompt.module_id == module_id)
+            .order_by(desc(HistoryPrompt.created_at))
+            .limit(_HISTORY_PROMPT_LIMIT)
+        ).all()
+    except Exception:
+        logger.warning("查询历史提示词失败", exc_info=True)
+        return ""
+
+    if not prompts:
+        return ""
+
+    lines = ["## 历史需求上下文（仅供参考，不作为本次用例生成的需求）"]
+    for i, content in enumerate(reversed(prompts), 1):
+        lines.append(f"{i}. {content}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _fetch_feishu_requirement(requirement: str) -> str:
+    """检测需求文本中的飞书链接，读取文档内容并合并到需求中。
+
+    如果文本中包含飞书 /docx/ 或 /wiki/ 链接，
+    则通过飞书 Open API 读取文档全文，并将内容拼接到原需求后。
+    无飞书链接时原样返回。
+    """
+    from utils.feishu_tool import _extract_doc_token, _read_doc
+
+    matches = _FEISHU_URL_RE.findall(requirement)
+    if not matches:
+        return requirement
+
+    logger.info(f"检测到 {len(matches)} 个飞书链接，开始读取文档内容")
+    doc_contents = []
+    for url_or_token in matches:
+        try:
+            doc_token = _extract_doc_token(url_or_token)
+            content = _read_doc(doc_token)
+            doc_contents.append(content)
+            logger.info(f"飞书文档读取成功: doc_token={doc_token}")
+        except Exception as e:
+            logger.error(f"飞书文档读取失败: {e}")
+            doc_contents.append(f"[飞书文档读取失败: {url_or_token}, 错误: {e}]")
+
+    # 拼接：原始需求 + 文档内容
+    parts = [requirement, "---\n## 飞书文档内容\n"]
+    parts.extend(doc_contents)
+    return "\n\n".join(parts)
+
+
 # 生成测试用例
 async def generate_testcases(
         session_id: int,
@@ -139,11 +211,27 @@ async def generate_testcases(
         model_type: str = "api",
         api_key: str = "",
         ollama_url: str = "",
-        ollama_model: str = ""
+        ollama_model: str = "",
+        **kwargs
 ) -> List[DBTestCase]:
     """根据需求生成测试用例"""
     # 调用模型并记录耗时与错误（不要在日志中记录 api_key）
     start = time.time()
+
+    if requirement is None:
+        return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        data="模型需求入参不能为空")
+
+    db_session = kwargs.get("db_session")
+    history_context = _build_history_context(db_session, module_id)
+
+    # 检测飞书链接，自动读取文档内容作为需求
+    requirement = _fetch_feishu_requirement(requirement)
+
+    # 将历史上下文拼到需求前面，帮助 agent 理解功能背景
+    if history_context:
+        requirement = history_context + "---\n## 本次需求\n" + requirement
+        logger.info(f"已拼接历史上下文，共 {_HISTORY_PROMPT_LIMIT} 条历史需求作为参考")
 
     if model_type == "api":
         try:
@@ -153,10 +241,7 @@ async def generate_testcases(
                 api_key=api_key,
             )
             # 调用agent，使用规定的响应格式
-            logger.info(f"调用agent: requirement={requirement}")
-            if requirement is None:
-                return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                data="模型需求入参不能为空")
+            logger.info(f"调用agent: requirement={requirement[:200]}...")
             # 修复：直接传入HumanMessage对象，而不是列表
             response = await agent.ainvoke(
                 {"messages": [{"role": "user", "content": requirement}]},

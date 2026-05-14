@@ -147,6 +147,7 @@ async def generate_testcases(
                         data="Ollama 配置不完整（ollama_url/ollama_model）")
 
     testcases = await generate_testcases(
+        db_session=session,
         requirement=requirement,
         session_id=session_id,
         module_id=module_id,
