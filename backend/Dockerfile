@@ -3,7 +3,9 @@ FROM python:3.11-slim
 
 # deb.debian.org CDN 返回 404, 改用 direct mirror
 RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
-      -exec sed -i 's|deb\.debian\.org|ftp.debian.org|g' {} +
+      -exec sed -i \
+        -e 's|deb\.debian\.org|ftp.debian.org|g' \
+        -e 's|ftp\.debian\.org/debian-security|security.debian.org/debian-security|g' {} +
 
 WORKDIR /app
 
