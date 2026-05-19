@@ -106,7 +106,12 @@ async def _check_lanhu_document_size(requirement: str):
                     continue
 
         if pages is None:
-            logger.warning(f"无法从 MCP 响应中解析页面列表，预览: {raw[:300]}")
+            if "418" in raw:
+                logger.warning("蓝湖 MCP 工具返回 418（Cookie 无效或已过期），跳过蓝湖文档分析")
+            elif "401" in raw or "403" in raw:
+                logger.warning("蓝湖 MCP 工具返回权限错误（401/403），跳过蓝湖文档分析")
+            else:
+                logger.warning(f"无法从 MCP 响应中解析页面列表，预览: {raw[:200]}")
             return None
 
         total = len(pages)
@@ -482,6 +487,13 @@ async def generate_testcases(
 
     # 1) 先检查蓝湖链接
     lanhu_info = await _check_lanhu_document_size(requirement)
+    # 如果输入中有蓝湖 URL 但预检返回 None，说明 MCP 工具访问蓝湖失败（如 Cookie 过期）
+    has_lanhu_url = bool(_LANHU_URL_RE.search(requirement))
+    if has_lanhu_url and not lanhu_info:
+        raise ValueError(
+            "蓝湖 Cookie 已过期或无效，无法访问蓝湖文档。"
+            "请先在设置页面配置有效的蓝湖 Cookie 后重试。"
+        )
     if lanhu_info:
         url, all_pages, doc_name, target_page_names = lanhu_info
         lanhu_content = await _fetch_lanhu_page_content(url, target_page_names)

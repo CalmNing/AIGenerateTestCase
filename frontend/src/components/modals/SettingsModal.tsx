@@ -1,5 +1,5 @@
 import React, {useEffect} from 'react';
-import { Modal, Form, Input, Radio } from 'antd';
+import { Modal, Form, Input, Radio, Divider } from 'antd';
 
 interface SettingsModalProps {
   visible: boolean;
@@ -85,6 +85,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             </Form.Item>
           </>
         )}
+
+        <Divider />
+
+        {/* 蓝湖配置 */}
+        <Form.Item
+          name="lanhu_cookie"
+          label="蓝湖 Cookie"
+          tooltip="登录蓝湖网页版后，从浏览器开发者工具中复制 Cookie 值。留空则使用服务器原有配置。"
+        >
+          <Input.Password placeholder="粘贴完整的蓝湖 Cookie" />
+        </Form.Item>
       </Form>
     </Modal>
   );

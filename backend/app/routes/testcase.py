@@ -171,18 +171,22 @@ async def generate_testcases(
         except json.JSONDecodeError:
             logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
 
-    testcases, effective_req = await generate_testcases(
-        db_session=session,
-        requirement=requirement,
-        session_id=session_id,
-        module_id=module_id,
-        model_type=model_type,
-        api_key=api_key,
-        ollama_url=ollama_url,
-        ollama_model=ollama_model,
-        mcp_configs=mcp_configs,
-        selected_skill_names=selected_skill_names,
-    )
+    try:
+        testcases, effective_req = await generate_testcases(
+            db_session=session,
+            requirement=requirement,
+            session_id=session_id,
+            module_id=module_id,
+            model_type=model_type,
+            api_key=api_key,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+            mcp_configs=mcp_configs,
+            selected_skill_names=selected_skill_names,
+        )
+    except ValueError as e:
+        logger.error(f"生成测试用例失败: {e}")
+        return Response(code=status.HTTP_400_BAD_REQUEST, message=str(e))
     # 自动填充 user_id
     for tc in testcases:
         tc.user_id = user.user_id

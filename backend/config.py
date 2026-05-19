@@ -21,6 +21,7 @@ default_config = {
     "mcp_enabled": True,
     "mcp_server_url": "http://lanhu-mcp:8000/mcp",
     "mcp_server_url_fallback": "http://localhost:8002/mcp",
+    "lanhu_cookie": "",
 }
 
 class ConfigManager:

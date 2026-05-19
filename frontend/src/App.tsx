@@ -5,7 +5,7 @@ import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, 
 import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
-import { sessionApi, testcaseApi, moduleApi, globalParameterApi } from './services/api';
+import { sessionApi, testcaseApi, moduleApi, globalParameterApi, configApi } from './services/api';
 
 // 环境类型定义
 interface Environment {
@@ -782,8 +782,31 @@ const App: React.FC = () => {
     try {
       setLoading(true);
 
-      // 保存到localStorage
-      localStorage.setItem('appSettings', JSON.stringify(values));
+      // 保存到localStorage（排除后端配置项）
+      const { lanhu_cookie, ...localValues } = values;
+      localStorage.setItem('appSettings', JSON.stringify(localValues));
+
+      // 如果填写了蓝湖 Cookie，发送到后端
+      if (lanhu_cookie && lanhu_cookie.trim()) {
+        try {
+          const cookieRes = await configApi.setLanhuCookie(lanhu_cookie.trim());
+          const cookieMsg = (cookieRes as any)?.message;
+          if (cookieMsg) {
+            notification.info({
+              message: '蓝湖 Cookie',
+              description: cookieMsg,
+              placement: 'topRight'
+            });
+          }
+        } catch (err: any) {
+          console.error('保存蓝湖 Cookie 到后端失败:', err);
+          notification.warning({
+            message: '蓝湖 Cookie 保存失败',
+            description: err?.response?.data?.message || '后端接口调用失败，请检查网络或稍后重试',
+            placement: 'topRight'
+          });
+        }
+      }
 
       // 关闭模态框
       setIsSettingModalVisible(false);
@@ -791,7 +814,7 @@ const App: React.FC = () => {
       // 显示成功通知
       notification.success({
         message: '保存成功',
-        description: '配置已成功保存到本地',
+        description: '配置已保存',
         placement: 'topRight'
       });
     } catch (error) {

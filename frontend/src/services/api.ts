@@ -321,6 +321,12 @@ export const skillsApi = {
   delete: (name: string): Promise<ApiResponse> => api.delete(`/skills/${name}`),
 };
 
+// 系统配置 API
+export const configApi = {
+  getLanhuCookie: (): Promise<ApiResponse<{ cookie: string; has_cookie: boolean }>> => api.get('/config/lanhu-cookie'),
+  setLanhuCookie: (cookie: string): Promise<ApiResponse> => api.post('/config/lanhu-cookie', { cookie }),
+};
+
 // Mock配置API
 export const mockConfigApi = {
   // 获取所有Mock配置

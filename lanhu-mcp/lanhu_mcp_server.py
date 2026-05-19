@@ -6417,6 +6417,31 @@ async def health_check(request):
     return JSONResponse({"status": "ok"})
 
 
+@mcp.custom_route("/config/cookie", methods=["POST"])
+async def update_cookie(request):
+    """Update LANHU_COOKIE at runtime without restarting the server."""
+    from starlette.responses import JSONResponse
+    global COOKIE, DDS_COOKIE
+    try:
+        body = await request.json()
+        cookie = body.get("cookie", "")
+        if not cookie:
+            return JSONResponse({"status": "error", "message": "Missing cookie"}, status_code=400)
+        COOKIE = cookie
+        DDS_COOKIE = cookie
+        return JSONResponse({"status": "ok", "message": "Cookie updated"})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
+
+
+@mcp.custom_route("/config/cookie", methods=["GET"])
+async def get_cookie(request):
+    """Get current LANHU_COOKIE status (masked)."""
+    from starlette.responses import JSONResponse
+    masked = COOKIE[:20] + "..." if len(COOKIE) > 20 else ("***" if COOKIE else "")
+    return JSONResponse({"status": "ok", "has_cookie": bool(COOKIE), "cookie": masked})
+
+
 if __name__ == "__main__":
     # 运行MCP服务器
     # 使用HTTP传输方式，支持环境变量配置

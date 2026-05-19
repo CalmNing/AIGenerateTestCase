@@ -35,7 +35,7 @@ docker compose up                                     # 启动全部服务
 docker compose up backend --build -d                  # 单独重建后端
 docker compose up frontend --build -d                 # 单独重建前端
 ```
-后端 Dockerfile 基于 `python:3.11-slim-bookworm`，使用 `uv` 安装 Python 依赖，并内嵌 Node.js 20.19.1（供 STDIO MCP 子进程使用）。前端 Dockerfile 多阶段构建：Node 18 编译后用 nginx:alpine 提供静态文件。
+后端 Dockerfile 基于 `python:3.11-slim-bookworm`，使用 `uv` 安装 Python 依赖，并内嵌 Node.js 20.19.1（供 STDIO MCP 子进程使用）。Docker Compose 配置了 `npm_cache` 和 `uv_cache` 两个命名卷，分别挂载到 `/root/.npm` 和 `/root/.cache/uv`，避免容器重建后重复下载 npx/uv 包（`npx feishu-mcp` 首次下载约 19s）。前端 Dockerfile 多阶段构建：Node 18 编译后用 nginx:alpine 提供静态文件。
 
 ### 数据库迁移
 ```bash
@@ -84,9 +84,15 @@ backend/
 
 **AI 测试用例生成:** 前端发送需求文本 → `POST /api/testcases/generate` → LangChain agent 调用 LLM → 结构化输出 TestCase 列表。agent 可挂载 MCP 工具（蓝湖原型/飞书文档）获取上下文。
 
+   **关键逻辑 - 蓝湖内容预取时跳过 agent：** 当需求文本中检测到蓝湖 URL 且成功预取页面内容时，不走 LangChain ReAct agent（避免 40+ 次无用迭代），而是直接调用 `model.with_structured_output()` 一次返回结构化结果。判断逻辑在 `model_utils._check_lanhu_document_size()` 中：先匹配页面名称（已排除 URL 自身文本避免误匹配），再检查文档大小是否超过阈值。
+
+   **LangGraph config 注意事项：** `recursion_limit` 必须放在 config 顶层，不能放在 `configurable` 内。LangGraph 只从 `config["recursion_limit"]` 读取该值。
+
 **MCP 集成:** 支持两种传输方式：
 - HTTP (Streamable HTTP): MCPClient 通过 POST + SSE 通信
 - STDIO: 启动子进程通过 stdin/stdout JSON-RPC 通信，自动检测 HTTP 端口宣告
+
+**Per-tool 启用/禁用：** `McpServer` 模型和 `McpServerConfig` 类均有 `enabled_tools: Optional[list[str]]` 字段。前端 McpConfigModal 中可获取方法列表后通过 Switch 开关控制。`lanhu_mcp_adapter.build_tools_from_configs()` 中根据此列表过滤，禁用的工具不会注入到模型中。
 
 **定时任务:** APScheduler AsyncIOScheduler，支持 cron 和间隔调度。任务执行时按顺序调用保存的 HTTP 请求，支持变量替换和后置提取。
 
@@ -141,7 +147,7 @@ docker-compose.yml
 - TestCase 状态枚举：NOT_RUN, PASSED, FAILED
 - 用例等级：1-4 (功能、边界、异常、场景)
 - 前端 Vite 代理：`/api` → `http://127.0.0.1:8000`
-- 所有 API 响应格式：`{code: number, message: string, data: T}`
+- 所有 API 响应格式：`{code: number, message: string, data: T}` — 错误描述文字放在 `message` 字段，`data` 不放人类可读的错误信息
 
 ### MCP 配置存储与执行
 

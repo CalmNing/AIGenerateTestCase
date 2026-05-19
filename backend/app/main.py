@@ -12,6 +12,7 @@ from app.routes.mock_log import router as mock_log_router
 from app.routes.mock_server import router as mock_server_router
 from app.routes.mcp import router as mcp_router
 from app.routes.skills import router as skills_router
+from app.routes.config import router as config_router
 from app.auth import get_current_user
 
 api_router = APIRouter()
@@ -28,6 +29,9 @@ api_router.include_router(scheduled_task_router, dependencies=[Depends(get_curre
 api_router.include_router(mock_config_router, dependencies=[Depends(get_current_user)])
 api_router.include_router(mock_log_router, dependencies=[Depends(get_current_user)])
 api_router.include_router(mcp_router, dependencies=[Depends(get_current_user)])
+
+# Config — 需要认证
+api_router.include_router(config_router, dependencies=[Depends(get_current_user)])
 
 # Skills Hub — 需要认证
 api_router.include_router(skills_router, dependencies=[Depends(get_current_user)])
