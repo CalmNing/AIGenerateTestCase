@@ -89,7 +89,9 @@
       "PowerShell(uvicorn main:app *)",
       "Bash(.venv\\\\Scripts\\\\activate)",
       "Bash(where npx *)",
-      "Read(//c/Program Files/nodejs/**)"
+      "Read(//c/Program Files/nodejs/**)",
+      "Bash(ls -la \"/root\")",
+      "Read(//f/VSCode/ai-generate-testcase\" | findstr lanhu 2>/dev/null; find / -name lanhu-mcp -type d 2>/dev/**)"
     ]
   },
   "enableAllProjectMcpServers": true,
