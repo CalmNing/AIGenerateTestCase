@@ -163,6 +163,32 @@ export interface ScheduledTask {
   request_names?: Array<{ id: number; name: string }>;
 }
 
+// MCP 服务器配置类型（服务端持久化）
+export interface McpServer {
+  id: number;
+  name: string;
+  type: string;         // http | stdio
+  enabled: boolean;
+  url?: string;
+  command?: string;
+  args?: string[];
+  timeout?: number;
+  env?: Array<{ key: string; value: string }>;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Skill 类型
+export interface Skill {
+  name: string;
+  display_name: string;
+  description: string;
+  license: string;
+  body: string;
+  body_preview: string;
+}
+
 // Mock 配置类型
 export interface MockConfig {
   id: number;

@@ -9,8 +9,12 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         sqlite3 \
-        nodejs \
-    && rm -rf /var/lib/apt/lists/*
+        curl \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://nodejs.org/dist/v20.19.1/node-v20.19.1-linux-x64.tar.xz -o /tmp/node.tar.xz && \
+    tar -xf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
+    rm /tmp/node.tar.xz
 
 # ------------------------------------------------------------------
 # Layer 2: 安装 uv（极少变化，独立层，避免每次重装）

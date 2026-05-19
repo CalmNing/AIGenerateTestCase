@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe demo.py)",
+      "WebFetch(domain:api-docs.deepseek.com)",
+      "WebSearch",
+      "Bash(python *)",
+      "WebFetch(domain:docs.langchain.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(pip install *)",
+      "PowerShell(pip install *)",
+      "PowerShell(python -c \"import mcp; print\\(mcp.__version__\\)\" 2>&1)",
+      "PowerShell(pip *)",
+      "PowerShell(python -m pip install mcp langchain-mcp 2>&1)",
+      "Bash(alembic revision *)",
+      "Bash(sqlite3 data/testcases.db \".tables\")"
+    ]
+  }
+}

@@ -115,6 +115,8 @@ async def generate_testcases(
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
         module_id: Optional[int|str] = Form(""),
+        mcp_servers: Optional[str] = Form(""),
+        selected_skills: Optional[str] = Form(""),
 ):
     """生成测试用例"""
     from utils.model_utils import generate_testcases
@@ -146,7 +148,30 @@ async def generate_testcases(
         return Response(code=status.HTTP_400_BAD_REQUEST,
                         data="Ollama 配置不完整（ollama_url/ollama_model）")
 
-    testcases = await generate_testcases(
+    # 解析 MCP 服务器配置
+    import json
+    mcp_configs = []
+    if mcp_servers and mcp_servers.strip():
+        try:
+            parsed = json.loads(mcp_servers)
+            if isinstance(parsed, list):
+                mcp_configs = parsed
+                logger.info(f"接收到 {len(mcp_configs)} 个 MCP 服务器配置")
+        except json.JSONDecodeError:
+            logger.warning(f"MCP 服务器配置解析失败: {mcp_servers[:200]}")
+
+    # 解析选中的技能名称
+    selected_skill_names = []
+    if selected_skills and selected_skills.strip():
+        try:
+            parsed_skills = json.loads(selected_skills)
+            if isinstance(parsed_skills, list):
+                selected_skill_names = parsed_skills
+                logger.info(f"接收到 {len(selected_skill_names)} 个选中技能: {selected_skill_names}")
+        except json.JSONDecodeError:
+            logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
+
+    testcases, effective_req = await generate_testcases(
         db_session=session,
         requirement=requirement,
         session_id=session_id,
@@ -155,6 +180,8 @@ async def generate_testcases(
         api_key=api_key,
         ollama_url=ollama_url,
         ollama_model=ollama_model,
+        mcp_configs=mcp_configs,
+        selected_skill_names=selected_skill_names,
     )
     # 自动填充 user_id
     for tc in testcases:

@@ -207,26 +207,24 @@ const HistoryPromptSidebar: React.FC<HistoryPromptSidebarProps> = ({
                 onClick={() => handleSelect(prompt)}
               >
                 {/* 内容区域 */}
-                <Tooltip title={prompt.content} placement="left">
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontSize: '13px',
-                      color: '#333',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      marginBottom: '4px'
-                    }}>
-                      {getPreview(prompt.content, 30)}
-                    </div>
-                    <div style={{
-                      fontSize: '11px',
-                      color: '#999'
-                    }}>
-                      {formatDate(prompt.created_at)}
-                    </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: '13px',
+                    color: '#333',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    marginBottom: '4px'
+                  }}>
+                    {getPreview(prompt.content, 30)}
                   </div>
-                </Tooltip>
+                  <div style={{
+                    fontSize: '11px',
+                    color: '#999'
+                  }}>
+                    {formatDate(prompt.created_at)}
+                  </div>
+                </div>
                 
                 {/* 删除按钮 */}
                 <Tooltip title="删除">

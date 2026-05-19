@@ -174,3 +174,32 @@ class MockConfig(BaseModel, table=True):
     page_size: Optional[int] = Field(default=None, ge=1, description="分页大小（可选，默认为1）")
     json_path: Optional[str] = Field(default=None, description="JSON路径，指定响应体中返回批量数据的字段，如 $.data.items")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+class McpServer(BaseModel, table=True):
+    """MCP 服务器配置数据模型（服务端持久化）"""
+    name: str = Field(default="", description="服务器名称")
+    type: str = Field(default="http", description="传输类型: http | stdio")
+    enabled: bool = Field(default=True, description="是否启用")
+    url: Optional[str] = Field(default=None, description="HTTP 模式的 URL")
+    command: Optional[str] = Field(default=None, description="STDIO 模式的命令")
+    args: List[str] = Field(default_factory=list, sa_type=JSON, description="命令行参数")
+    timeout: int = Field(default=60, description="超时时间（秒）")
+    env: List[dict] = Field(default_factory=list, sa_type=JSON, description="环境变量")
+    enabled_tools: Optional[List[str]] = Field(default=None, sa_type=JSON, description="启用的工具名称列表，null表示全部启用")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class MockLog(BaseModel, table=True):
+    """Mock 日志数据模型，记录每次Mock请求/响应的完整信息"""
+    config_id: Optional[int] = Field(default=None, foreign_key="mockconfig.id", description="关联的Mock配置ID")
+    config_name: str = Field(default="", description="Mock配置名称（快照，即使配置被删除也可追溯）")
+    request_method: str = Field(default="", description="HTTP请求方法")
+    request_path: str = Field(default="", description="请求URL路径")
+    request_headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="请求头列表")
+    request_query_params: Optional[str] = Field(default=None, description="请求查询参数（JSON字符串）")
+    request_body: Optional[str] = Field(default=None, description="请求体内容")
+    response_status_code: int = Field(default=200, description="响应状态码")
+    response_headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="响应头列表")
+    response_body: Optional[str] = Field(default=None, description="响应体内容")
+    matched: bool = Field(default=True, description="是否匹配到Mock配置")
+    user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")

@@ -18,6 +18,9 @@ default_config = {
     "ollama_url": "http://localhost:11434",
     "feishu_app_id": "cli_a92ce63baaf8dcd5",
     "feishu_app_secret": "I3FdXtkVhneIyxi7KwXC2cuXnRjwEtb3",
+    "mcp_enabled": True,
+    "mcp_server_url": "http://lanhu-mcp:8000/mcp",
+    "mcp_server_url_fallback": "http://localhost:8002/mcp",
 }
 
 class ConfigManager:
@@ -86,6 +89,18 @@ class ConfigManager:
     def get_feishu_app_secret(self) -> str:
         """获取飞书 App Secret"""
         return self.config.get("feishu_app_secret", "")
+
+    def is_mcp_enabled(self) -> bool:
+        """是否启用 MCP 工具"""
+        return self.config.get("mcp_enabled", True)
+
+    def get_mcp_server_url(self) -> str:
+        """获取 MCP 服务器地址"""
+        return self.config.get("mcp_server_url", "http://lanhu-mcp:8000/mcp")
+
+    def get_mcp_server_url_fallback(self) -> str:
+        """获取 MCP 服务器备用地址"""
+        return self.config.get("mcp_server_url_fallback", "http://localhost:8002/mcp")
 
 # 创建全局配置管理器实例
 config_manager = ConfigManager()

@@ -1,7 +1,4 @@
 version: '3.8'
-volumes:
-  backend_data:
-  postgres_data:
 services:
   backend:
     build: ./backend
@@ -10,17 +7,21 @@ services:
       - "8000:8000"
     volumes:
       - backend_data:/app/data
+      - npm_cache:/root/.npm
+      - uv_cache:/root/.cache/uv
     networks:
       - app-network
     environment:
       - TZ=Asia/Shanghai
       - KEYCLOAK_SERVER_URL=http://keycloak:8080
-      # - KEYCLOAK_EXTERNAL_URL=http://localhost:8080
-      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
+      - KEYCLOAK_EXTERNAL_URL=http://localhost:8090
+#      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
       - KEYCLOAK_REALM=ai-testcase
       - KEYCLOAK_CLIENT_ID=backend
-      # - CORS_ORIGINS=http://localhost:5173,http://localhost:8001
-      - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:8001
+      - npm_config_cache=/root/.npm
+      - NO_UPDATE_NOTIFIER=1
+#      - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
 
   frontend:
     build: ./frontend
@@ -60,8 +61,10 @@ services:
       KC_DB_PASSWORD: keycloak_password
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
-      # KC_HOSTNAME: localhost
-      KC_HOSTNAME: 192.168.13.110
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8090
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
       KC_HTTP_PORT: 8080
       KC_HEALTH_ENABLED: "true"
     volumes:
@@ -79,6 +82,34 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  lanhu-mcp:
+    build:
+      context: ./lanhu-mcp
+      dockerfile: Dockerfile
+    container_name: lanhu-mcp
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    volumes:
+      - lanhu_mcp_data:/app/data
+      - lanhu_mcp_logs:/app/logs
+    env_file:
+      - ./lanhu-mcp/.env
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+      - TZ=Asia/Shanghai
+    networks:
+      - app-network
+
+volumes:
+  backend_data:
+  npm_cache:
+  uv_cache:
+  postgres_data:
+  lanhu_mcp_data:
+  lanhu_mcp_logs:
 
 networks:
   app-network:

@@ -5,7 +5,7 @@ import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, 
 import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
-import { sessionApi, testcaseApi, moduleApi, historyPromptApi, globalParameterApi } from './services/api';
+import { sessionApi, testcaseApi, moduleApi, globalParameterApi } from './services/api';
 
 // 环境类型定义
 interface Environment {
@@ -28,6 +28,8 @@ import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
 import ViewTestcaseModal from './components/modals/ViewTestcaseModal';
 import EditTestcaseModal from './components/modals/EditTestcaseModal';
 import SettingsModal from './components/modals/SettingsModal';
+import McpConfigModal from './components/modals/McpConfigModal';
+import SkillsHubModal from './components/modals/SkillsHubModal';
 import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
 import AddTestcaseModal from './components/modals/AddTestcaseModal';
 import ModuleSidebar from './components/ModuleSidebar';
@@ -731,6 +733,12 @@ const App: React.FC = () => {
   // 设置功能
   const [isSettingModalVisible, setIsSettingModalVisible] = useState(false);
   const [settingButtonStatus, setSettingButtonStatus] = useState(false);
+  const [isMcpConfigVisible, setIsMcpConfigVisible] = useState(false);
+  const [isSkillsHubVisible, setIsSkillsHubVisible] = useState(false);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>(() => {
+    const saved = localStorage.getItem('selectedSkills');
+    return saved ? JSON.parse(saved) : [];
+  });
 
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
@@ -837,42 +845,24 @@ const App: React.FC = () => {
           imageBase64Length: imageBase64?.length || 0
         });
 
-        // 【第一步】先保存历史提示词 - 只要有需求描述就保存
-        if (requirement.trim()) {
-          console.log('=== 开始保存历史提示词 ===');
-          try {
-            const promptData: { content: string; session_id: number; module_id?: number } = {
-              content: requirement.trim(),
-              session_id: selectedSession.id
-            };
-            // 只有选择了具体模块时才关联模块
-            if (selectedModule && selectedModule !== 0 && selectedModule !== 'all') {
-              promptData.module_id = Number(selectedModule);
-            }
-            console.log('准备保存提示词数据:', promptData);
-
-            // 调用创建历史提示词接口
-            const promptResponse = await historyPromptApi.createPrompt(promptData);
-            console.log('历史提示词API响应:', promptResponse);
-
-            if (promptResponse.code === 200) {
-              console.log('✓ 历史提示词已成功保存到数据库');
-            } else {
-              console.error('历史提示词保存失败，响应码:', promptResponse.code);
-            }
-          } catch (error: any) {
-            console.error('保存历史提示词失败:', error);
-            // 不阻断流程，继续生成测试用例
+        // 调用生成测试用例API（后端会在生成成功后自动保存历史提示词）
+        // 读取启用的 MCP 服务器配置
+        let mcpServers: any[] = [];
+        try {
+          const saved = localStorage.getItem('mcpServers');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            mcpServers = Array.isArray(parsed) ? parsed.filter((s: any) => s.enabled) : [];
           }
-        }
-
-        // 【第二步】调用生成测试用例API
+        } catch {}
         const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
           selectedSession.id,
           requirement.trim(),
           modelConfig,
           imageBase64, // 传递图片base64数据
-          selectedModule === 0 ? undefined : Number(selectedModule) // 传递模块ID
+          selectedModule === 0 ? undefined : Number(selectedModule), // 传递模块ID
+          mcpServers.length > 0 ? mcpServers : undefined,
+          selectedSkills.length > 0 ? selectedSkills : undefined
         );
         console.log('生成测试用例API响应:', response);
 
@@ -1193,10 +1183,12 @@ const App: React.FC = () => {
         </div>
       ) : (
         <Layout style={{ minHeight: '100vh' }}>
-          <HeaderComponent 
-            onSettingsOpen={handleOpenSettingModal} 
-            settingButtonStatus={settingButtonStatus} 
+          <HeaderComponent
+            onSettingsOpen={handleOpenSettingModal}
+            settingButtonStatus={settingButtonStatus}
             onBackToHome={navigateToHome}
+            onMcpConfigOpen={() => setIsMcpConfigVisible(true)}
+            onSkillsHubOpen={() => setIsSkillsHubVisible(true)}
           />
           <Layout>
             <SessionSidebar
@@ -1471,6 +1463,21 @@ const App: React.FC = () => {
             onCancel={() => setIsSettingModalVisible(false)}
             onFinish={handleSaveSetting}
             onSettingTypeChange={handleSettingTypeChange}
+          />
+
+          <McpConfigModal
+            visible={isMcpConfigVisible}
+            onCancel={() => setIsMcpConfigVisible(false)}
+            onSave={() => setIsMcpConfigVisible(false)}
+          />
+
+          <SkillsHubModal
+            visible={isSkillsHubVisible}
+            onCancel={() => setIsSkillsHubVisible(false)}
+            onSave={(names) => {
+              setSelectedSkills(names);
+              setIsSkillsHubVisible(false);
+            }}
           />
 
           <MoveTestcaseModal

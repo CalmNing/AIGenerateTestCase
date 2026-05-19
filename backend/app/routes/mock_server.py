@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request, Response as HttpResponse
 from sqlmodel import Session, select
 
 from db.db import engine
-from db.models import MockConfig, GlobalParameter
+from db.models import MockConfig, GlobalParameter, MockLog
 
 logger = logging.getLogger(__name__)
 
@@ -319,55 +319,49 @@ def _substitute_variables(text: str, env_id: Optional[int], path_params: dict = 
 
 def _match_url_path(config: MockConfig, request_path: str) -> tuple[bool, dict]:
     """将配置的 url_path 与请求路径进行匹配，支持 {param} 通配符
-    
+
     支持两种配置方式：
     1. 用户配置 /users/{id}，匹配 /api/mock/users/123（自动去掉 /api/mock 前缀）
     2. 用户配置 /api/mock/users/{id}，匹配 /api/mock/users/123（完整路径匹配）
-    
+
     返回: (是否匹配, 路径参数字典)
     """
     config_path = config.url_path
-    
+
     # 如果配置路径不包含 /api/mock 前缀，则从请求路径中去掉该前缀
     if not config_path.startswith('/api/mock'):
         if request_path.startswith('/api/mock'):
             request_path = request_path[len('/api/mock'):]
             if not request_path.startswith('/'):
                 request_path = '/' + request_path
-    
+
     # 将路径参数 {param} 转换为正则表达式
-    # 先将 {param} 替换为占位符，然后转义其他字符，最后再替换回正则表达式
     parts = []
     i = 0
     while i < len(config_path):
         if config_path[i] == '{':
-            # 找到对应的 }
             j = config_path.find('}', i)
             if j != -1:
-                # 提取参数名并转换为正则表达式
                 param_name = config_path[i+1:j]
                 parts.append(r'(?P<param_' + re.escape(param_name) + r'>[^/]+)')
                 i = j + 1
             else:
-                # 没有找到对应的 }，转义 {
                 parts.append(re.escape(config_path[i]))
                 i += 1
         else:
-            # 普通字符，转义
             parts.append(re.escape(config_path[i]))
             i += 1
-    
+
     pattern = ''.join(parts)
     logger.debug("Path matching: config_path=%s, request_path=%s, pattern=%s", config_path, request_path, pattern)
-    
+
     try:
         match = re.fullmatch(pattern, request_path)
         if match:
-            # 提取路径参数，去掉 param_ 前缀
             path_params = {}
             for key, value in match.groupdict().items():
                 if key.startswith('param_'):
-                    param_name = key[6:]  # 去掉 'param_' 前缀
+                    param_name = key[6:]
                     path_params[param_name] = value
             logger.debug("Path match result: True, params=%s", path_params)
             return True, path_params
@@ -377,6 +371,33 @@ def _match_url_path(config: MockConfig, request_path: str) -> tuple[bool, dict]:
     except re.error as e:
         logger.warning("Regex error: %s, falling back to exact match", e)
         return config_path == request_path, {}
+
+
+def _save_mock_log(config_id, config_name, request_method, request_path,
+                   request_headers, request_query_params, request_body,
+                   response_status_code, response_headers, response_body,
+                   matched, user_id):
+    """保存Mock请求日志到数据库"""
+    try:
+        with Session(engine) as session:
+            log = MockLog(
+                config_id=config_id,
+                config_name=config_name,
+                request_method=request_method,
+                request_path=request_path,
+                request_headers=request_headers,
+                request_query_params=request_query_params,
+                request_body=request_body,
+                response_status_code=response_status_code,
+                response_headers=response_headers,
+                response_body=response_body,
+                matched=matched,
+                user_id=user_id,
+            )
+            session.add(log)
+            session.commit()
+    except Exception as e:
+        logger.warning("Failed to save mock log: %s", e)
 
 
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
@@ -393,11 +414,11 @@ async def mock_handler(request: Request, path: str):
     matched_config = None
     path_params = {}
     logger.info("Mock matching: method=%s, path=%s, configs_count=%d", request_method, request_path, len(configs))
-    
+
     for config in configs:
         is_match, params = _match_url_path(config, request_path)
         logger.info("Checking config: %s %s -> match=%s, params=%s", config.method, config.url_path, is_match, params)
-        
+
         if config.method.upper() == request_method.upper() and is_match:
             matched_config = config
             path_params = params
@@ -405,6 +426,18 @@ async def mock_handler(request: Request, path: str):
             break
 
     if not matched_config:
+        req_body_raw = await request.body()
+        req_body_str = req_body_raw.decode() if req_body_raw else None
+        _save_mock_log(
+            config_id=None, config_name="",
+            request_method=request_method, request_path=request_path,
+            request_headers=dict(request.headers),
+            request_query_params=json.dumps(dict(request.query_params), ensure_ascii=False),
+            request_body=req_body_str,
+            response_status_code=404, response_headers=[],
+            response_body=json.dumps({"error": "No matching mock configuration"}),
+            matched=False, user_id=None,
+        )
         return HttpResponse(
             content=json.dumps({"error": "No matching mock configuration", "path": request_path, "method": request_method}, ensure_ascii=False),
             status_code=404,
@@ -539,6 +572,24 @@ async def mock_handler(request: Request, path: str):
                     pass
 
     logger.info("Mock matched: %s %s -> %d", request_method, request_path, matched_config.status_code)
+
+    # 记录匹配的请求日志
+    req_body_raw = await request.body()
+    req_body_str = req_body_raw.decode() if req_body_raw else None
+    _save_mock_log(
+        config_id=matched_config.id,
+        config_name=matched_config.name,
+        request_method=request_method,
+        request_path=request_path,
+        request_headers=dict(request.headers),
+        request_query_params=json.dumps(dict(request.query_params), ensure_ascii=False),
+        request_body=req_body_str,
+        response_status_code=matched_config.status_code,
+        response_headers=[{"key": k, "value": v} for k, v in resp_headers.items()],
+        response_body=body,
+        matched=True,
+        user_id=None,
+    )
 
     return HttpResponse(
         content=body,

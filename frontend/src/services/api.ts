@@ -1,6 +1,6 @@
 import axios from 'axios';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -91,7 +91,9 @@ export const testcaseApi = {
     ollama_url?: string;
     ollama_model?: string;
   }, imageBase64?: string | null,
-    moduleId?: number | null): Promise<ApiResponse<TestCase[]>> => {
+    moduleId?: number | null,
+    mcpServers?: any[],
+    selectedSkills?: string[]): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -101,6 +103,16 @@ export const testcaseApi = {
     // 添加模块ID
     if (moduleId !== null) {
       formData.append('module_id', moduleId?.toString() ?? '');
+    }
+
+    // 添加MCP服务器配置
+    if (mcpServers && mcpServers.length > 0) {
+      formData.append('mcp_servers', JSON.stringify(mcpServers));
+    }
+
+    // 添加选中的技能
+    if (selectedSkills && selectedSkills.length > 0) {
+      formData.append('selected_skills', JSON.stringify(selectedSkills));
     }
 
     // 添加模型配置
@@ -279,6 +291,34 @@ export const scheduledTaskApi = {
 
   // 手动触发定时任务
   runTask: (taskId: number): Promise<ApiResponse> => api.post(`/scheduled-tasks/${taskId}/run`)
+};
+
+// MCP 工具 API
+export const mcpApi = {
+  listTools: (servers: any[]): Promise<ApiResponse<any[]>> => api.post('/mcp/list-tools', servers),
+};
+
+// MCP 服务器配置持久化 API
+export const mcpServerApi = {
+  // 获取当前用户的所有 MCP 服务器配置
+  list: (): Promise<ApiResponse<McpServer[]>> => api.get('/mcp/servers'),
+
+  // 创建 MCP 服务器配置
+  create: (server: Omit<McpServer, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<McpServer>> => api.post('/mcp/servers', server),
+
+  // 更新 MCP 服务器配置
+  update: (serverId: number, server: Partial<McpServer>): Promise<ApiResponse<McpServer>> => api.put(`/mcp/servers/${serverId}`, server),
+
+  // 删除 MCP 服务器配置
+  delete: (serverId: number): Promise<ApiResponse> => api.delete(`/mcp/servers/${serverId}`),
+};
+
+// Skills Hub API
+export const skillsApi = {
+  list: (): Promise<ApiResponse<Skill[]>> => api.get('/skills'),
+  get: (name: string): Promise<ApiResponse<Skill>> => api.get(`/skills/${name}`),
+  install: (url: string): Promise<ApiResponse<Skill>> => api.post('/skills/install', { url }),
+  delete: (name: string): Promise<ApiResponse> => api.delete(`/skills/${name}`),
 };
 
 // Mock配置API
