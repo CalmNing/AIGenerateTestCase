@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
+
+# bookworm is oldstable — use archive.debian.org
+RUN sed -i 's|deb.debian.org|archive.debian.org|g' /etc/apt/sources.list
 
 WORKDIR /app
 
