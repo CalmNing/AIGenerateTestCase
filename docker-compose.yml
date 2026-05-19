@@ -14,14 +14,14 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - KEYCLOAK_SERVER_URL=http://keycloak:8080
-      - KEYCLOAK_EXTERNAL_URL=http://localhost:8090
-#      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
+#      - KEYCLOAK_EXTERNAL_URL=http://localhost:8090
+      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
       - KEYCLOAK_REALM=ai-testcase
       - KEYCLOAK_CLIENT_ID=backend
-      - CORS_ORIGINS=http://localhost:5173,http://localhost:8001
+#      - CORS_ORIGINS=http://localhost:5173,http://localhost:8001
       - npm_config_cache=/root/.npm
       - NO_UPDATE_NOTIFIER=1
-#      - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
+      - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
 
   frontend:
     build: ./frontend
