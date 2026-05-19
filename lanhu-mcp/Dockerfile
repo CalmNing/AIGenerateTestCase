@@ -1,5 +1,9 @@
 FROM python:3.10-slim
 
+# deb.debian.org CDN 返回 404, 改用 direct mirror
+RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+      -exec sed -i 's|deb\.debian\.org|ftp.debian.org|g' {} +
+
 # 设置工作目录
 WORKDIR /app
 
