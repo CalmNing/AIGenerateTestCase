@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim
 
-# bookworm is oldstable — use archive.debian.org
-RUN sed -i 's|deb.debian.org|archive.debian.org|g' /etc/apt/sources.list
+# deb.debian.org CDN 返回 404, 改用 direct mirror
+RUN sed -i 's|deb\.debian\.org|ftp.debian.org|g' /etc/apt/sources.list
 
 WORKDIR /app
 
