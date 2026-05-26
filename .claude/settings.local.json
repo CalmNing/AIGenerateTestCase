@@ -91,7 +91,12 @@
       "Bash(where npx *)",
       "Read(//c/Program Files/nodejs/**)",
       "Bash(ls -la \"/root\")",
-      "Read(//f/VSCode/ai-generate-testcase\" | findstr lanhu 2>/dev/null; find / -name lanhu-mcp -type d 2>/dev/**)"
+      "Read(//f/VSCode/ai-generate-testcase\" | findstr lanhu 2>/dev/null; find / -name lanhu-mcp -type d 2>/dev/**)",
+      "mcp__feishu-mcp__get_feishu_document_info",
+      "mcp__lark-mcp__wiki_v2_space_getNode",
+      "mcp__lark-mcp__docx_v1_document_rawContent",
+      "PowerShell(Start-Process -NoNewWindow -FilePath \"python\" -ArgumentList \"-m\", \"uvicorn\", \"main:app\", \"--reload\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\" -WorkingDirectory \"F:\\\\VSCode\\\\ai-generate-testcase\\\\backend\")",
+      "PowerShell(Stop-Process *)"
     ]
   },
   "enableAllProjectMcpServers": true,

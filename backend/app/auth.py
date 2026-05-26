@@ -136,12 +136,12 @@ def verify_token(token: str) -> UserInfo:
 
         # 提取用户信息
         realm_access = payload.get("realm_access", {})
-        roles = realm_access.get("roles", [])
+        roles = list(realm_access.get("roles", []))
 
         # 也检查 resource_access 中的客户端角色
         resource_access = payload.get("resource_access", {})
         client_roles = resource_access.get(KEYCLOAK_CLIENT_ID, {}).get("roles", [])
-        roles.extend(client_roles)
+        roles = list(dict.fromkeys(roles + client_roles))
 
         return UserInfo(
             user_id=payload.get("sub", ""),

@@ -8,6 +8,7 @@ interface SubPlatformHeaderProps {
   onBackToHome: () => void;
   environmentName?: string;
   onGlobalParamsOpen?: () => void;
+  canManageGlobalParams?: boolean;
 }
 
 const SubPlatformHeader: React.FC<SubPlatformHeaderProps> = ({
@@ -15,6 +16,7 @@ const SubPlatformHeader: React.FC<SubPlatformHeaderProps> = ({
   onBackToHome,
   environmentName,
   onGlobalParamsOpen,
+  canManageGlobalParams = false,
 }) => {
   const username = keycloak.tokenParsed?.preferred_username || keycloak.tokenParsed?.sub || '用户';
 
@@ -49,7 +51,7 @@ const SubPlatformHeader: React.FC<SubPlatformHeaderProps> = ({
             当前环境: <strong>{environmentName}</strong>
           </span>
         )}
-        {onGlobalParamsOpen && (
+        {onGlobalParamsOpen && canManageGlobalParams && (
           <Button
             icon={<EnvironmentOutlined />}
             onClick={onGlobalParamsOpen}

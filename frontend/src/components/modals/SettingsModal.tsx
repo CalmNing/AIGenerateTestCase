@@ -22,6 +22,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   useEffect(() => {
     settingForm.setFieldsValue({
+      api_base_url: settingForm.getFieldValue('api_base_url') || 'https://api.deepseek.com',
       ollama_url: settingForm.getFieldValue('ollama_url') || 'http://localhost:11434',
       ollama_model: settingForm.getFieldValue('ollama_model') || 'gpt-oss:120b-cloud'
     });
@@ -56,13 +57,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* API密钥设置 */}
         {settingType === 'api' && (
-          <Form.Item
-            name="api_key"
-            label="DeepSeek API密钥"
-            rules={[{ required: true, message: '请输入 DeepSeek API密钥' }]}
-          >
-            <Input.Password placeholder="请输入 DeepSeek API密钥" />
-          </Form.Item>
+          <>
+            <Form.Item
+              name="api_key"
+              label="DeepSeek API密钥"
+              rules={[{ required: true, message: '请输入 DeepSeek API密钥' }]}
+            >
+              <Input.Password placeholder="请输入 DeepSeek API密钥" />
+            </Form.Item>
+
+            <Form.Item
+              name="api_base_url"
+              label="API Base URL"
+              tooltip="OpenAI-compatible API 地址。默认直连 DeepSeek；也可填写 OneAPI/New API/LiteLLM 等兼容网关地址。"
+            >
+              <Input placeholder="https://api.deepseek.com" />
+            </Form.Item>
+
+            <Form.Item
+              name="api_proxy_url"
+              label="API Proxy URL"
+              tooltip="HTTP/HTTPS 代理地址。Docker 容器访问宿主机代理通常使用 host.docker.internal，例如 http://host.docker.internal:7890。"
+            >
+              <Input placeholder="http://host.docker.internal:7890" />
+            </Form.Item>
+          </>
         )}
 
         {/* Ollama设置 */}

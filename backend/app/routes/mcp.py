@@ -275,8 +275,7 @@ async def _send_stdio_request(
 async def _list_tools_stdio(server: McpServerConfig) -> dict:
     """通过 STDIO 协议连接 MCP 服务器并获取工具列表。
 
-    如果进程 stdout 输出了 HTTP 端口/URL（如 feishu-mcp --port 0），
-    则自动切换到 HTTP 传输。
+    如果进程 stdout 输出了 HTTP 端口/URL，则自动切换到 HTTP 传输。
     """
     t0 = time.monotonic()
     logger.info("[耗时] _list_tools_stdio 开始: %s %s %s", server.name, server.command, server.args)

@@ -71,11 +71,10 @@ backend/
 ├── db/
 │   ├── models.py          # 10 个 SQLModel (Session, TestCase, Module, SavedRequest, GlobalParameter, HistoryPrompt, ScheduledTask, MockConfig, McpServer, MockLog)
 │   └── db.py              # SQLite 引擎 + 自动迁移
-├── skills/                # Skills Hub 技能文件（6 个 SKILL.md，YAML frontmatter + markdown）
+├── skills/                # Skills Hub 技能文件（5 个 SKILL.md，YAML frontmatter + markdown）
 ├── utils/
 │   ├── model_utils.py     # LangChain agent (DeepSeek/Ollama) + 结构化输出
 │   ├── lanhu_mcp_adapter.py # MCP 客户端 (HTTP Streamable & STDIO)
-│   ├── feishu_tool.py     # 飞书文档抓取
 │   └── base_response.py   # Response[T] 统一响应包装
 └── config.py              # JSON 文件配置 (LLM API key, Ollama, MCP URL)
 ```
@@ -137,7 +136,7 @@ docker-compose.yml
 - `KEYCLOAK_EXTERNAL_URL` — Keycloak 外部地址（浏览器访问，如 `http://localhost:8090`），用于 JWT issuer 验证
 - `CORS_ORIGINS` — 允许的跨域来源，逗号分隔
 
-**后端配置管理：** `backend/config.py` 中的 `ConfigManager` 类读取 `data/config.json`，合并默认值后提供全局 `config` 对象。配置项包括模型类型（`api`/`ollama`）、API key、Ollama 地址、飞书凭证、MCP 开关等。
+**后端配置管理：** `backend/config.py` 中的 `ConfigManager` 类读取 `data/config.json`，合并默认值后提供全局 `config` 对象。配置项包括模型类型（`api`/`ollama`）、API key、Ollama 地址、MCP 开关等。
 
 ### 关键约定
 
@@ -156,8 +155,8 @@ MCP 配置同时支持**服务端持久化**和**浏览器 localStorage** 两层
 - **持久化模型:** `db.models.McpServer` — 存储在 SQLite `mcpserver` 表中，按 `user_id` 隔离
 - **API 路由:** `backend/app/routes/mcp.py` 中 `GET/POST/PUT/DELETE /mcp/servers` CRUD 端点
 - **前端加载顺序:** 打开 McpConfigModal 时，优先从服务端加载；服务端不可用或为空时回退到 localStorage
-- **保存逻辑:** McpConfigModal 保存时同时写入服务端和 localStorage（兼容现有生成流程）
-- **生成流程:** App.tsx 仍从 localStorage 读取启用的 MCP 服务器，通过 FormData `mcp_servers` 字段发送到后端（无需改动）
+- **保存逻辑:** McpConfigModal 保存时同时写入服务端和 localStorage（localStorage 仅作为界面回退）
+- **生成流程:** 后端只读取当前用户服务端已保存且启用的 MCP 配置；客户端传入的 `mcp_servers` 字段会被忽略，避免绕过 `/api/mcp` 权限控制
 - **执行方式:**
   - HTTP 类型: 后端短连接到外部 URL，用完即断
   - STDIO 类型: 后端用 `asyncio.create_subprocess_exec` 在服务器上**临时启动**子进程（如 `npx ...`），测试用例生成完成后通过 `_safe_kill()` 杀死进程
@@ -165,7 +164,7 @@ MCP 配置同时支持**服务端持久化**和**浏览器 localStorage** 两层
 
 ### Skills Hub
 
-6 个测试方法论技能以 `SKILL.md` 文件形式存储在 `backend/skills/` 目录下，采用 YAML frontmatter + markdown body 格式：
+5 个测试方法论技能以 `SKILL.md` 文件形式存储在 `backend/skills/` 目录下，采用 YAML frontmatter + markdown body 格式：
 
 | 技能 | 说明 |
 |------|------|
@@ -174,7 +173,6 @@ MCP 配置同时支持**服务端持久化**和**浏览器 localStorage** 两层
 | `exception-testing` | 异常测试（错误推测法：输入/环境/状态异常） |
 | `scenario-testing` | 端到端场景和工作流测试 |
 | `coverage-analysis` | 覆盖度分析，识别缺口避免重复用例 |
-| `feishu-doc` | 飞书文档只读工具 |
 
 **Skills ≠ MCP Tools**：MCP Tools 给 agent 函数调用能力，Skills 给 agent **方法论指导**——选中的 SKILL.md body 在生成时注入到提示词中。
 
@@ -188,9 +186,9 @@ MCP 配置同时支持**服务端持久化**和**浏览器 localStorage** 两层
 
 | 文件 | 用途 |
 |------|------|
-| `backend/data/config.json` | LLM 配置（模型类型、API key、Ollama URL、飞书凭证、MCP URL） |
+| `backend/data/config.json` | LLM 配置（模型类型、API key、Ollama URL、MCP URL） |
 | `backend/data/testcases.db` | SQLite 数据库文件 |
-| `backend/skills/*/SKILL.md` | 测试方法论技能文件（6 个） |
+| `backend/skills/*/SKILL.md` | 测试方法论技能文件（5 个） |
 | `backend/.dockerignore` | 后端 Docker 构建忽略规则 |
 | `frontend/.env` | Keycloak 地址和 realm（Vite 编译时注入） |
 | `.mcp.json` | 本地 MCP 服务器配置（Claude Code IDE 集成用），目前指向蓝湖 MCP |

@@ -79,7 +79,8 @@ def _strip_mcp_ai_meta(text: str) -> str:
 
 
 # 单次 MCP 工具响应的最大字符数（预取内容直接入 prompt，不再经 ReAct 循环）
-_MAX_TOOL_RESPONSE = 200000
+_MAX_TOOL_RESPONSE = 80000
+_STDIO_STREAM_LIMIT = 20 * 1024 * 1024
 
 
 class MCPClient:
@@ -135,7 +136,7 @@ class MCPClient:
         return False
 
     async def _connect_sse(self, target: str) -> bool:
-        """使用标准 MCP SSE 传输连接（feishu-mcp 等使用此协议）。
+        """使用标准 MCP SSE 传输连接。
 
         MCP SSE 协议流程：
         1. GET /sse → 服务端推送 SSE 事件流（首个事件包含消息端点）
@@ -520,6 +521,7 @@ class MCPClient:
                 stderr=_asyncio.subprocess.PIPE,
                 env=env,
                 start_new_session=True,
+                limit=_STDIO_STREAM_LIMIT,
             )
         except _asyncio.CancelledError:
             raise
@@ -638,13 +640,57 @@ def _make_tool_function(name: str):
     """为一个 MCP 工具名生成对应的异步调用函数。"""
     async def _call(**kwargs) -> str:
         client = await get_mcp_client()
-        return await client.call_tool(name, kwargs)
+        return await client.call_tool(name, _clean_mcp_arguments(kwargs))
     _call.__name__ = name
     _call.__qualname__ = name
     return _call
 
 
+def _clean_mcp_arguments(value):
+    """Drop null arguments before forwarding them to MCP servers."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            if item is None:
+                if key == "params":
+                    cleaned[key] = {}
+                continue
+            cleaned[key] = _clean_mcp_arguments(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_clean_mcp_arguments(item) for item in value if item is not None]
+    return value
+
+
 _MAX_DESC_LENGTH = 200
+
+
+def _sanitize_mcp_tool_description(name: str, description: str | None) -> str:
+    """Keep public MCP tool descriptions short so agent instructions stay authoritative."""
+    desc = (description or "").strip()
+    if not desc:
+        return f"MCP tool: {name}"
+
+    noise_markers = [
+        "workflow",
+        "ai_instruction",
+        "__ai_instruction__",
+        "next_step",
+        "four-stage",
+        "directive",
+        "必须",
+        "工作流",
+        "下一步",
+    ]
+    lower = desc.lower()
+    if any(marker in lower for marker in noise_markers):
+        first_line = next((line.strip() for line in desc.splitlines() if line.strip()), "")
+        desc = first_line or f"MCP tool: {name}"
+
+    desc = re.sub(r"\s+", " ", desc)
+    if len(desc) > _MAX_DESC_LENGTH:
+        desc = desc[:_MAX_DESC_LENGTH].rstrip()
+    return desc
 
 
 # 只暴露给 agent 的蓝湖工具（与测试用例生成相关的工具）
@@ -742,7 +788,7 @@ def _json_type_to_python(js_type: str):
 def _make_tool_function_for_client(client, name: str):
     """为指定 MCPClient 实例生成工具调用函数。"""
     async def _call(**kwargs) -> str:
-        return await client.call_tool(name, kwargs)
+        return await client.call_tool(name, _clean_mcp_arguments(kwargs))
     _call.__name__ = name
     _call.__qualname__ = name
     return _call
@@ -828,14 +874,14 @@ async def build_tools_from_configs(mcp_configs: list[dict]) -> list:
                     logger.info(f"MCP 服务器 {server_name}: 跳过已禁用的工具 {tool_name}")
                     continue
 
-            desc = t.get("description", f"MCP tool: {tool_name}")
+            desc = _sanitize_mcp_tool_description(tool_name, t.get("description"))
             func = _make_tool_function_for_client(client, tool_name)
             input_schema = t.get("inputSchema", {})
             args_schema = _build_schema(input_schema) if input_schema and "properties" in input_schema else None
 
             tools.append(StructuredTool(
                 name=tool_name,
-                description=desc[:200],
+                description=desc,
                 coroutine=func,
                 args_schema=args_schema,
             ))

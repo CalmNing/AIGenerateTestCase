@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { message } from 'antd';
 import keycloak from './keycloak';
 import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill } from '../types';
 
@@ -30,6 +31,12 @@ api.interceptors.response.use(
   },
   async (error) => {
     const originalRequest = error.config;
+
+    if (error.response?.status === 403) {
+      console.error('Permission denied for this feature.');
+      message.error('无权限访问该功能');
+      return Promise.reject(error);
+    }
 
     // 如果是 401 且未重试过，尝试刷新 Token
     if (error.response?.status === 401 && !originalRequest._retry) {
@@ -88,11 +95,12 @@ export const testcaseApi = {
   generateTestcases: (sessionId: number, requirement: string, modelConfig?: {
     model_type: 'api' | 'ollama';
     api_key?: string;
+    api_base_url?: string;
+    api_proxy_url?: string;
     ollama_url?: string;
     ollama_model?: string;
   }, imageBase64?: string | null,
     moduleId?: number | null,
-    mcpServers?: any[],
     selectedSkills?: string[]): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
@@ -105,11 +113,6 @@ export const testcaseApi = {
       formData.append('module_id', moduleId?.toString() ?? '');
     }
 
-    // 添加MCP服务器配置
-    if (mcpServers && mcpServers.length > 0) {
-      formData.append('mcp_servers', JSON.stringify(mcpServers));
-    }
-
     // 添加选中的技能
     if (selectedSkills && selectedSkills.length > 0) {
       formData.append('selected_skills', JSON.stringify(selectedSkills));
@@ -120,6 +123,12 @@ export const testcaseApi = {
       formData.append('model_type', modelConfig.model_type);
       if (modelConfig.api_key) {
         formData.append('api_key', modelConfig.api_key);
+      }
+      if (modelConfig.api_base_url) {
+        formData.append('api_base_url', modelConfig.api_base_url);
+      }
+      if (modelConfig.api_proxy_url) {
+        formData.append('api_proxy_url', modelConfig.api_proxy_url);
       }
       if (modelConfig.ollama_url) {
         formData.append('ollama_url', modelConfig.ollama_url);

@@ -199,9 +199,13 @@ interface Tab {
 
 interface IoTDataPushPlatformProps {
   currentEnvironmentId?: string;
+  canManageGlobalParams?: boolean;
 }
 
-const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnvironmentId: propEnvironmentId }) => {
+const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
+  currentEnvironmentId: propEnvironmentId,
+  canManageGlobalParams = false,
+}) => {
   const [form] = Form.useForm();
   const [activeTabId, setActiveTabId] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -299,8 +303,10 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
 
   // 从后端API获取全局参数配置
   useEffect(() => {
-    fetchGlobalParameters();
-  }, []);
+    if (canManageGlobalParams) {
+      fetchGlobalParameters();
+    }
+  }, [canManageGlobalParams]);
 
   // 同步 App.tsx 传入的环境切换
   useEffect(() => {
@@ -557,6 +563,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
 
   // 保存环境配置到后端
   const saveEnvironmentToBackend = async (environment: any) => {
+    if (!canManageGlobalParams) return null;
     try {
       // 检查环境是否已存在（通过id判断）
       if (parseInt(environment.id)) {
@@ -585,6 +592,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
 
   // 删除环境配置
   const deleteEnvironmentFromBackend = async (environmentId: string) => {
+    if (!canManageGlobalParams) return false;
     try {
       if (parseInt(environmentId)) {
         await globalParameterApi.deleteEnvironment(parseInt(environmentId));
@@ -831,7 +839,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
       }
 
       // 发送到后端代理（变量替换在后端执行）
-      const envId = parseInt(currentEnvironmentId) || null;
+      const envId = canManageGlobalParams ? parseInt(currentEnvironmentId) || null : null;
       const proxyResponse = await proxyApi.forwardRequest({
         url,
         method,
@@ -867,7 +875,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
       message.success('请求成功');
 
       // 后置提取：从响应中提取变量并保存到环境
-      if (postExtractions.length > 0 && axiosResponse.data && envId) {
+      if (canManageGlobalParams && postExtractions.length > 0 && axiosResponse.data && envId) {
         try {
           const extractResponse = await globalParameterApi.extractAndSaveVariables({
             environment_id: envId,
@@ -1361,6 +1369,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
                       </div>
                     </Form.Item>
 
+                    {canManageGlobalParams && (
                     <Form.Item
                       label={
                         <Space size={4}>
@@ -1427,6 +1436,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
                         </div>
                       )}
                     </Form.Item>
+                    )}
                   </Form>
                 </div>
               )
@@ -1779,7 +1789,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
       {/* 全局参数配置模态框 */}
       <Modal
         title="全局参数配置"
-        open={isGlobalParamsModalVisible}
+        open={isGlobalParamsModalVisible && canManageGlobalParams}
         onOk={() => setIsGlobalParamsModalVisible(false)}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
         width={600}
@@ -1949,7 +1959,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
       {/* 添加环境模态框 */}
       <Modal
         title="创建新环境"
-        open={isAddEnvModalVisible}
+        open={isAddEnvModalVisible && canManageGlobalParams}
         onOk={handleConfirmAddEnvironment}
         onCancel={() => setIsAddEnvModalVisible(false)}
         width={400}
@@ -1971,4 +1981,3 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({ currentEnviro
 };
 
 export default IoTDataPushPlatform;
-

@@ -13,6 +13,8 @@ import httpx
 
 from db.db import get_db
 from db.models import GlobalParameter, MockConfig
+from app.deps import CurrentUser
+from app.permissions import Permission, get_user_permissions
 
 router = APIRouter(prefix="/proxy", tags=["proxy"])
 logging.basicConfig(level=logging.INFO)
@@ -329,11 +331,15 @@ def try_mock_response(db: Session, method: str, url: str, param_map: dict, unres
 @router.post("/forward")
 async def forward_request(
     request: ProxyRequest,
+    user: CurrentUser,
     db: Session = Depends(get_db),
 ):
     """转发请求到目标URL，支持参数变量替换"""
     # 构建参数映射表
-    param_map = build_param_map(db, request.environment_id, [])
+    environment_id = request.environment_id
+    if environment_id and Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user):
+        environment_id = None
+    param_map = build_param_map(db, environment_id, [])
     logger.info("param_map: %s", param_map)
 
     # 收集未解析的用户变量

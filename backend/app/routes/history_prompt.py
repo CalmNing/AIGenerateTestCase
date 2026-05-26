@@ -7,6 +7,7 @@ from sqlmodel import select, desc
 from app.deps import SessionDep, CurrentUser
 from db.models import HistoryPrompt
 from utils.base_response import Response
+from utils.history_prompt_cleaner import clean_history_prompt_content
 
 router = APIRouter(prefix="/history_prompt", tags=["history_prompt"])
 
@@ -31,6 +32,8 @@ def get_history_prompts(
         .where(HistoryPrompt.module_id == module_id)
         .order_by(desc(HistoryPrompt.created_at))
     ).all()
+    for prompt in prompts:
+        prompt.content = clean_history_prompt_content(prompt.content)
     return Response(data=prompts)
 
 
@@ -47,6 +50,8 @@ def get_session_history_prompts(
         .where(HistoryPrompt.session_id == session_id)
         .order_by(desc(HistoryPrompt.created_at))
     ).all()
+    for prompt in prompts:
+        prompt.content = clean_history_prompt_content(prompt.content)
     return Response(data=prompts)
 
 
@@ -58,20 +63,29 @@ def create_history_prompt(
     request: CreateHistoryPromptRequest
 ):
     """创建新的历史提示词，已存在完全一致的提示词时跳过"""
-    existing = session.exec(
-        select(HistoryPrompt)
-        .where(
-            HistoryPrompt.content == request.content,
-            HistoryPrompt.module_id == request.module_id if request.module_id is not None else HistoryPrompt.module_id.is_(None),
-            HistoryPrompt.session_id == request.session_id if request.session_id is not None else HistoryPrompt.session_id.is_(None),
-            HistoryPrompt.user_id == user.user_id
-        )
-    ).first()
+    cleaned_content = clean_history_prompt_content(request.content)
+    if not cleaned_content:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="历史需求描述内容为空")
+
+    filters = [
+        HistoryPrompt.content == cleaned_content,
+        HistoryPrompt.user_id == user.user_id,
+    ]
+    if request.module_id is None:
+        filters.append(HistoryPrompt.module_id.is_(None))
+    else:
+        filters.append(HistoryPrompt.module_id == request.module_id)
+    if request.session_id is None:
+        filters.append(HistoryPrompt.session_id.is_(None))
+    else:
+        filters.append(HistoryPrompt.session_id == request.session_id)
+
+    existing = session.exec(select(HistoryPrompt).where(*filters)).first()
     if existing:
         return Response(data=existing, message="历史提示词已存在，跳过创建")
 
     prompt = HistoryPrompt(
-        content=request.content,
+        content=cleaned_content,
         module_id=request.module_id,
         session_id=request.session_id,
         user_id=user.user_id

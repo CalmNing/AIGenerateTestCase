@@ -405,7 +405,7 @@ const McpConfigModal: React.FC<McpConfigModalProps> = ({ visible, onCancel, onSa
                             onChange={(e) => updateEnv(si, ei, 'key', e.target.value)}
                             style={{ width: 180 }}
                           />
-                          <Input.Password
+                          <Input
                             placeholder="变量值"
                             value={env.value}
                             onChange={(e) => updateEnv(si, ei, 'value', e.target.value)}

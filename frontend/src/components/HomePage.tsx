@@ -9,9 +9,18 @@ interface HomePageProps {
   onNavigateToIoT: () => void;
   onNavigateToScheduledTask: () => void;
   onNavigateToMock: () => void;
+  canAccessScheduledTask?: boolean;
+  canAccessMock?: boolean;
 }
 
-const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, onNavigateToScheduledTask, onNavigateToMock }) => {
+const HomePage: React.FC<HomePageProps> = ({
+  onNavigateToAI,
+  onNavigateToIoT,
+  onNavigateToScheduledTask,
+  onNavigateToMock,
+  canAccessScheduledTask = false,
+  canAccessMock = false,
+}) => {
   return (
     <div style={{ 
       padding: '40px', 
@@ -92,7 +101,7 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
             </Space>
           </Card>
         </Col>
-        
+
         <Col xs={24} sm={12} md={6}>
           <Card
             hoverable
@@ -144,7 +153,7 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
             </Space>
           </Card>
         </Col>
-        
+        {canAccessScheduledTask && (
         <Col xs={24} sm={12} md={6}>
           <Card
             hoverable
@@ -196,7 +205,9 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
             </Space>
           </Card>
         </Col>
+        )}
 
+        {canAccessMock && (
         <Col xs={24} sm={12} md={6}>
           <Card
             hoverable
@@ -248,6 +259,7 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigateToAI, onNavigateToIoT, on
             </Space>
           </Card>
         </Col>
+        )}
       </Row>
       
       <div style={{ 

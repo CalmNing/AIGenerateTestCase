@@ -16,8 +16,6 @@ default_config = {
     "ollama_model": "llama3",
     "ollama_base_url": "http://localhost:11434",
     "ollama_url": "http://localhost:11434",
-    "feishu_app_id": "cli_a92ce63baaf8dcd5",
-    "feishu_app_secret": "I3FdXtkVhneIyxi7KwXC2cuXnRjwEtb3",
     "mcp_enabled": True,
     "mcp_server_url": "http://lanhu-mcp:8000/mcp",
     "mcp_server_url_fallback": "http://localhost:8002/mcp",
@@ -82,14 +80,6 @@ class ConfigManager:
     def get_ollama_url(self) -> str:
         """兼容方法：优先返回 'ollama_url'，否则返回 'ollama_base_url'。"""
         return self.config.get("ollama_url") or self.config.get("ollama_base_url", "http://localhost:11434")
-
-    def get_feishu_app_id(self) -> str:
-        """获取飞书 App ID"""
-        return self.config.get("feishu_app_id", "")
-
-    def get_feishu_app_secret(self) -> str:
-        """获取飞书 App Secret"""
-        return self.config.get("feishu_app_secret", "")
 
     def is_mcp_enabled(self) -> bool:
         """是否启用 MCP 工具"""

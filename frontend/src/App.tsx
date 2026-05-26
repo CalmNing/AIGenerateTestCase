@@ -33,6 +33,7 @@ import SkillsHubModal from './components/modals/SkillsHubModal';
 import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
 import AddTestcaseModal from './components/modals/AddTestcaseModal';
 import ModuleSidebar from './components/ModuleSidebar';
+import { Permission, hasPermission } from './services/permissions';
 
 const { Content } = Layout;
 
@@ -44,6 +45,12 @@ const App: React.FC = () => {
     const savedPlatform = localStorage.getItem('currentPlatform');
     return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task' | 'mock-api') || 'home';
   });
+  const canManageSettings = hasPermission(Permission.CONFIG_MANAGE);
+  const canManageMcp = hasPermission(Permission.MCP_MANAGE);
+  const canManageSkills = hasPermission(Permission.SKILLS_MANAGE);
+  const canManageGlobalParams = hasPermission(Permission.GLOBAL_PARAMETER_MANAGE);
+  const canAccessScheduledTask = hasPermission(Permission.SCHEDULED_TASK_MANAGE);
+  const canAccessMock = hasPermission(Permission.MOCK_MANAGE);
 
   // 状态管理
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -105,6 +112,17 @@ const App: React.FC = () => {
       setSettingType(settings.setting_type || 'api');
     }
   }, []);
+
+  useEffect(() => {
+    const blocked =
+      (currentPlatform === 'scheduled-task' && !canAccessScheduledTask) ||
+      (currentPlatform === 'mock-api' && !canAccessMock);
+
+    if (blocked) {
+      setCurrentPlatform('home');
+      localStorage.setItem('currentPlatform', 'home');
+    }
+  }, [currentPlatform, canAccessScheduledTask, canAccessMock]);
 
   // 当选择"全部"节点时，如果当前在"生成测试用例"页签，自动切换到"管理测试用例"
   useEffect(() => {
@@ -746,6 +764,7 @@ const App: React.FC = () => {
 
   // 打开设置模态框
   const handleOpenSettingModal = () => {
+    if (!canManageSettings) return;
     setIsSettingModalVisible(true);
     // 如果没有保存的设置，设置默认值
     const savedSettings = localStorage.getItem('appSettings');
@@ -753,6 +772,8 @@ const App: React.FC = () => {
       settingForm.setFieldsValue({
         setting_type: 'api',
         api_key: '',
+        api_base_url: 'https://api.deepseek.com',
+        api_proxy_url: '',
         ollama_url: 'http://localhost:11434',
         ollama_model: 'gpt-oss:120b-cloud'
       });
@@ -767,6 +788,7 @@ const App: React.FC = () => {
     // 重置表单对应的字段
     if (value === 'api') {
       settingForm.setFieldsValue({
+        api_base_url: settingForm.getFieldValue('api_base_url') || 'https://api.deepseek.com',
         ollama_url: '',
         ollama_model: ''
       });
@@ -784,6 +806,21 @@ const App: React.FC = () => {
 
       // 保存到localStorage（排除后端配置项）
       const { lanhu_cookie, ...localValues } = values;
+      if (typeof localValues.api_key === 'string') {
+        localValues.api_key = localValues.api_key.trim();
+      }
+      if (typeof localValues.api_base_url === 'string') {
+        localValues.api_base_url = localValues.api_base_url.trim();
+      }
+      if (typeof localValues.api_proxy_url === 'string') {
+        localValues.api_proxy_url = localValues.api_proxy_url.trim();
+      }
+      if (typeof localValues.ollama_url === 'string') {
+        localValues.ollama_url = localValues.ollama_url.trim();
+      }
+      if (typeof localValues.ollama_model === 'string') {
+        localValues.ollama_model = localValues.ollama_model.trim();
+      }
       localStorage.setItem('appSettings', JSON.stringify(localValues));
 
       // 如果填写了蓝湖 Cookie，发送到后端
@@ -851,9 +888,11 @@ const App: React.FC = () => {
       const settings = JSON.parse(savedSettings);
       const modelConfig = {
         model_type: settings.setting_type,
-        api_key: settings.api_key || '',
-        ollama_url: settings.ollama_url || '',
-        ollama_model: settings.ollama_model || ''
+        api_key: (settings.api_key || '').trim(),
+        api_base_url: (settings.api_base_url || '').trim(),
+        api_proxy_url: (settings.api_proxy_url || '').trim(),
+        ollama_url: (settings.ollama_url || '').trim(),
+        ollama_model: (settings.ollama_model || '').trim()
       };
 
       setSettingButtonStatus(true); // 点击生成按钮设置按钮置灰
@@ -869,22 +908,12 @@ const App: React.FC = () => {
         });
 
         // 调用生成测试用例API（后端会在生成成功后自动保存历史提示词）
-        // 读取启用的 MCP 服务器配置
-        let mcpServers: any[] = [];
-        try {
-          const saved = localStorage.getItem('mcpServers');
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            mcpServers = Array.isArray(parsed) ? parsed.filter((s: any) => s.enabled) : [];
-          }
-        } catch {}
         const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
           selectedSession.id,
           requirement.trim(),
           modelConfig,
           imageBase64, // 传递图片base64数据
           selectedModule === 0 ? undefined : Number(selectedModule), // 传递模块ID
-          mcpServers.length > 0 ? mcpServers : undefined,
           selectedSkills.length > 0 ? selectedSkills : undefined
         );
         console.log('生成测试用例API响应:', response);
@@ -919,7 +948,7 @@ const App: React.FC = () => {
       console.error('生成测试用例失败:', error);
       notification.error({
         message: '生成失败',
-        description: `${error.response?.data?.detail || '生成测试用例时发生错误，请重试'}`,
+        description: `${error.response?.data?.detail || error.response?.data?.message || error.response?.data?.data || '生成测试用例时发生错误，请重试'}`,
         placement: 'topRight'
       });
     } finally {
@@ -973,11 +1002,13 @@ const App: React.FC = () => {
   };
 
   const navigateToScheduledTask = () => {
+    if (!canAccessScheduledTask) return;
     setCurrentPlatform('scheduled-task');
     localStorage.setItem('currentPlatform', 'scheduled-task');
   };
 
   const navigateToMock = () => {
+    if (!canAccessMock) return;
     setCurrentPlatform('mock-api');
     localStorage.setItem('currentPlatform', 'mock-api');
   };
@@ -1158,8 +1189,10 @@ const App: React.FC = () => {
   
   // 加载全局参数
   useEffect(() => {
-    fetchGlobalParameters();
-  }, []);
+    if (canManageGlobalParams) {
+      fetchGlobalParameters();
+    }
+  }, [canManageGlobalParams]);
 
   return (
     <ConfigProvider locale={zhCN}>
@@ -1169,6 +1202,8 @@ const App: React.FC = () => {
           onNavigateToIoT={navigateToIoTMock}
           onNavigateToScheduledTask={navigateToScheduledTask}
           onNavigateToMock={navigateToMock}
+          canAccessScheduledTask={canAccessScheduledTask}
+          canAccessMock={canAccessMock}
         />
       ) : currentPlatform === 'iot-mock' ? (
         <div>
@@ -1176,10 +1211,12 @@ const App: React.FC = () => {
             title="测试工具平台"
             onBackToHome={navigateToHome}
             environmentName={getCurrentEnvironment()?.name}
-            onGlobalParamsOpen={() => setIsGlobalParamsModalVisible(true)}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
+            canManageGlobalParams={canManageGlobalParams}
           />
           <IoTDataPushPlatform
             currentEnvironmentId={currentEnvironmentId}
+            canManageGlobalParams={canManageGlobalParams}
           />
         </div>
       ) : currentPlatform === 'scheduled-task' ? (
@@ -1188,7 +1225,8 @@ const App: React.FC = () => {
             title="测试工具平台"
             onBackToHome={navigateToHome}
             environmentName={getCurrentEnvironment()?.name}
-            onGlobalParamsOpen={() => setIsGlobalParamsModalVisible(true)}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
+            canManageGlobalParams={canManageGlobalParams}
           />
           <div style={{ padding: '16px' }}>
             <ScheduledTaskManager />
@@ -1200,7 +1238,8 @@ const App: React.FC = () => {
             title="测试工具平台"
             onBackToHome={navigateToHome}
             environmentName={getCurrentEnvironment()?.name}
-            onGlobalParamsOpen={() => setIsGlobalParamsModalVisible(true)}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
+            canManageGlobalParams={canManageGlobalParams}
           />
           <IoTMockPlatform />
         </div>
@@ -1210,8 +1249,11 @@ const App: React.FC = () => {
             onSettingsOpen={handleOpenSettingModal}
             settingButtonStatus={settingButtonStatus}
             onBackToHome={navigateToHome}
-            onMcpConfigOpen={() => setIsMcpConfigVisible(true)}
-            onSkillsHubOpen={() => setIsSkillsHubVisible(true)}
+            onMcpConfigOpen={() => canManageMcp && setIsMcpConfigVisible(true)}
+            onSkillsHubOpen={() => canManageSkills && setIsSkillsHubVisible(true)}
+            canManageSettings={canManageSettings}
+            canManageMcp={canManageMcp}
+            canManageSkills={canManageSkills}
           />
           <Layout>
             <SessionSidebar
@@ -1478,30 +1520,36 @@ const App: React.FC = () => {
             />
           </Modal>
 
-          <SettingsModal
-            visible={isSettingModalVisible}
-            settingForm={settingForm}
-            settingType={settingType}
-            loading={loading}
-            onCancel={() => setIsSettingModalVisible(false)}
-            onFinish={handleSaveSetting}
-            onSettingTypeChange={handleSettingTypeChange}
-          />
+          {canManageSettings && (
+            <SettingsModal
+              visible={isSettingModalVisible}
+              settingForm={settingForm}
+              settingType={settingType}
+              loading={loading}
+              onCancel={() => setIsSettingModalVisible(false)}
+              onFinish={handleSaveSetting}
+              onSettingTypeChange={handleSettingTypeChange}
+            />
+          )}
 
-          <McpConfigModal
-            visible={isMcpConfigVisible}
-            onCancel={() => setIsMcpConfigVisible(false)}
-            onSave={() => setIsMcpConfigVisible(false)}
-          />
+          {canManageMcp && (
+            <McpConfigModal
+              visible={isMcpConfigVisible}
+              onCancel={() => setIsMcpConfigVisible(false)}
+              onSave={() => setIsMcpConfigVisible(false)}
+            />
+          )}
 
-          <SkillsHubModal
-            visible={isSkillsHubVisible}
-            onCancel={() => setIsSkillsHubVisible(false)}
-            onSave={(names) => {
-              setSelectedSkills(names);
-              setIsSkillsHubVisible(false);
-            }}
-          />
+          {canManageSkills && (
+            <SkillsHubModal
+              visible={isSkillsHubVisible}
+              onCancel={() => setIsSkillsHubVisible(false)}
+              onSave={(names) => {
+                setSelectedSkills(names);
+                setIsSkillsHubVisible(false);
+              }}
+            />
+          )}
 
           <MoveTestcaseModal
             visible={isMoveModalVisible}
@@ -1524,7 +1572,7 @@ const App: React.FC = () => {
       {/* 全局参数模态框 - 全局渲染 */}
       <Modal
         title="全局参数管理"
-        open={isGlobalParamsModalVisible}
+        open={isGlobalParamsModalVisible && canManageGlobalParams}
         onOk={() => setIsGlobalParamsModalVisible(false)}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
         width={600}
@@ -1647,7 +1695,7 @@ const App: React.FC = () => {
       {/* 添加环境模态框 - 全局渲染 */}
       <Modal
         title="创建新环境"
-        open={isAddEnvModalVisible}
+        open={isAddEnvModalVisible && canManageGlobalParams}
         onOk={handleConfirmAddEnvironment}
         onCancel={() => setIsAddEnvModalVisible(false)}
         width={400}
@@ -1666,7 +1714,7 @@ const App: React.FC = () => {
       {/* 编辑环境模态框 - 全局渲染 */}
       <Modal
         title="编辑环境"
-        open={isEditEnvModalVisible}
+        open={isEditEnvModalVisible && canManageGlobalParams}
         onOk={handleConfirmEditEnvironment}
         onCancel={() => setIsEditEnvModalVisible(false)}
         width={400}

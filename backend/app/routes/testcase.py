@@ -2,12 +2,14 @@ import base64
 from typing import List, Annotated, Optional
 
 from fastapi import APIRouter, Query, status, File, Form, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete
 from sqlmodel import select, desc, func
 
 from app.deps import SessionDep, CurrentUser
-from db.models import TestCase, StatusValue
+from app.permissions import Permission, get_user_permissions
+from db.models import TestCase, StatusValue, McpServer
 from utils.base_response import Response
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
@@ -99,6 +101,8 @@ def get_testcases(
 class GenerateTestcasesRequest(BaseModel):
     model_type: str = "api"
     api_key: str = ""
+    api_base_url: str = ""
+    api_proxy_url: str = ""
     ollama_url: str = ""
     ollama_model: str = ""
     requirement: Optional[str]
@@ -112,6 +116,8 @@ async def generate_testcases(
         requirement: Optional[str] = Form(None),
         model_type: str = Form("api"),
         api_key: str = Form(""),
+        api_base_url: str = Form(""),
+        api_proxy_url: str = Form(""),
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
         module_id: Optional[int|str] = Form(""),
@@ -119,7 +125,7 @@ async def generate_testcases(
         selected_skills: Optional[str] = Form(""),
 ):
     """生成测试用例"""
-    from utils.model_utils import generate_testcases
+    from utils.model_utils import ModelServiceUnavailableError, generate_testcases
 
     import logging
     logger = logging.getLogger(__name__)
@@ -142,23 +148,38 @@ async def generate_testcases(
         logger.error(f"  验证失败: 请输入requirement")
         return Response(code=status.HTTP_400_BAD_REQUEST, data="请输入requirement")
 
+    api_key = api_key.strip() if api_key else ""
+    api_base_url = api_base_url.strip() if api_base_url else ""
+    api_proxy_url = api_proxy_url.strip() if api_proxy_url else ""
+    ollama_url = ollama_url.strip() if ollama_url else ""
+    ollama_model = ollama_model.strip() if ollama_model else ""
+
     if model_type == "api" and not api_key:
         return Response(code=status.HTTP_400_BAD_REQUEST, data="api_key 未提供!")
     if model_type == "ollama" and (not ollama_url or not ollama_model):
         return Response(code=status.HTTP_400_BAD_REQUEST,
                         data="Ollama 配置不完整（ollama_url/ollama_model）")
 
-    # 解析 MCP 服务器配置
+    # MCP 服务器配置只允许从服务端持久化配置读取，避免生成接口绕过 /api/mcp 的权限控制。
     import json
     mcp_configs = []
     if mcp_servers and mcp_servers.strip():
-        try:
-            parsed = json.loads(mcp_servers)
-            if isinstance(parsed, list):
-                mcp_configs = parsed
-                logger.info(f"接收到 {len(mcp_configs)} 个 MCP 服务器配置")
-        except json.JSONDecodeError:
-            logger.warning(f"MCP 服务器配置解析失败: {mcp_servers[:200]}")
+        logger.info("忽略客户端传入的 MCP 服务器配置，改用服务端已保存配置")
+
+    if Permission.MCP_MANAGE in get_user_permissions(user):
+        mcp_servers_db = session.exec(
+            select(McpServer).where(
+                McpServer.user_id == user.user_id,
+                McpServer.enabled == True,
+            )
+        ).all()
+        mcp_configs = [
+            server.model_dump(exclude={"id", "created_at", "updated_at", "user_id"})
+            for server in mcp_servers_db
+        ]
+        logger.info(f"已加载 {len(mcp_configs)} 个服务端 MCP 服务器配置")
+    else:
+        logger.info("当前用户无 mcp:manage 权限，生成用例时不加载自定义 MCP 工具")
 
     # 解析选中的技能名称
     selected_skill_names = []
@@ -179,14 +200,26 @@ async def generate_testcases(
             module_id=module_id,
             model_type=model_type,
             api_key=api_key,
+            api_base_url=api_base_url,
+            api_proxy_url=api_proxy_url,
             ollama_url=ollama_url,
             ollama_model=ollama_model,
             mcp_configs=mcp_configs,
             selected_skill_names=selected_skill_names,
+            user_id=user.user_id,
+        )
+    except ModelServiceUnavailableError as e:
+        logger.error(f"生成测试用例失败: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=Response(code=status.HTTP_503_SERVICE_UNAVAILABLE, message=str(e)).model_dump(),
         )
     except ValueError as e:
         logger.error(f"生成测试用例失败: {e}")
-        return Response(code=status.HTTP_400_BAD_REQUEST, message=str(e))
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=Response(code=status.HTTP_400_BAD_REQUEST, message=str(e)).model_dump(),
+        )
     # 自动填充 user_id
     for tc in testcases:
         tc.user_id = user.user_id

@@ -49,7 +49,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --timeout 300 --retries 5 --no-cache-dir -r requirements.txt
 
 # 安装Playwright浏览器
 RUN playwright install chromium
@@ -70,4 +70,3 @@ EXPOSE 8000
 
 # 运行MCP服务器（使用HTTP传输）
 CMD ["python", "lanhu_mcp_server.py"]
-
