@@ -19,7 +19,19 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 
 # 导入所有模型
-from db.models import Session, TestCase, SavedRequest, GlobalParameter, ScheduledTask, MockConfig, McpServer
+from db.models import (
+    ApiEndpoint,
+    ApiProject,
+    ApiScenario,
+    ApiScenarioResult,
+    GlobalParameter,
+    McpServer,
+    MockConfig,
+    SavedRequest,
+    ScheduledTask,
+    Session,
+    TestCase,
+)
 
 # 创建所有表
 def create_db_and_tables():
@@ -54,15 +66,17 @@ def _migrate_missing_columns(engine):
                     # 列已存在，检查 JSON 列中是否有非法空字符串值并修复
                     from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
                     if isinstance(column.type, SQLiteJSON):
+                        json_default = "{}" if col_name in {"request_schema", "response_schema"} else "[]"
                         try:
                             result = conn.execute(
-                                text(f"SELECT id FROM {table_cls.name} WHERE {col_name} = '' LIMIT 1")
+                                text(f"SELECT id FROM {table_cls.name} WHERE {col_name} = '' OR {col_name} IS NULL LIMIT 1")
                             )
                             if result.fetchone():
                                 conn.execute(
-                                    text(f"UPDATE {table_cls.name} SET {col_name} = '[]' WHERE {col_name} = '' OR {col_name} IS NULL")
+                                    text(f"UPDATE {table_cls.name} SET {col_name} = :json_default WHERE {col_name} = '' OR {col_name} IS NULL"),
+                                    {"json_default": json_default},
                                 )
-                                logger.info(f"自动修复: 表 {table_cls.name} 列 {col_name} 中的空字符串/NULL已修正为'[]'")
+                                logger.info(f"自动修复: 表 {table_cls.name} 列 {col_name} 中的空字符串/NULL已修正为'{json_default}'")
                         except Exception as e:
                             logger.warning(f"检查表 {table_cls.name} 列 {col_name} 失败: {e}")
                     continue
@@ -70,6 +84,7 @@ def _migrate_missing_columns(engine):
                 # 构建 SQLite 的列定义
                 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
                 is_json_col = isinstance(column.type, SQLiteJSON)
+                json_default = "'{}'" if col_name in {"request_schema", "response_schema"} else "'[]'"
                 col_type = column.type.compile(dialect=engine.dialect)
                 ddl = f"{col_name} {col_type}"
                 if not column.nullable:
@@ -79,7 +94,7 @@ def _migrate_missing_columns(engine):
                     else:
                         # SQLite ALTER TABLE ADD COLUMN 要求有默认值（非空列）
                         # JSON 类型列需要有效的 JSON 默认值，不能用空字符串
-                        ddl += " DEFAULT '[]'" if is_json_col else " DEFAULT ''"
+                        ddl += f" DEFAULT {json_default}" if is_json_col else " DEFAULT ''"
                 try:
                     conn.execute(text(f"ALTER TABLE {table_cls.name} ADD COLUMN {ddl}"))
                     logger.info(f"自动迁移: 为表 {table_cls.name} 添加列 {col_name} ({col_type})")

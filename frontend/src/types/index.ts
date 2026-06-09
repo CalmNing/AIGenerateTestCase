@@ -207,3 +207,100 @@ export interface MockConfig {
   created_at: string;
   updated_at: string;
 }
+
+export interface ApiProject {
+  id: number;
+  name: string;
+  base_url: string;
+  headers: Array<{ key: string; value: string }>;
+  source_type: string;
+  source_url?: string | null;
+  raw_spec?: string;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiEndpoint {
+  id: number;
+  project_id: number;
+  name: string;
+  method: string;
+  path: string;
+  url?: string | null;
+  tags: string[];
+  headers: Array<{ key: string; value: string; required?: boolean; schema?: Record<string, any> }>;
+  parameters: Array<{ key: string; value: string; in?: 'query' | 'path' | 'header'; required?: boolean; schema?: Record<string, any> }>;
+  body?: string;
+  request_schema?: Record<string, any>;
+  response_schema?: Record<string, any>;
+  environment_id?: number | null;
+  pre_actions: Array<{ type?: string; key?: string; variable?: string; value?: string }>;
+  post_actions: Array<{ type?: string; key?: string; variable?: string; jsonpath?: string }>;
+  assertions: Array<{ type: string; value?: string | number; min?: number; max?: number; jsonpath?: string }>;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiEndpointRunPayload extends Partial<ApiEndpoint> {
+  base_url?: string | null;
+  project_headers?: ApiProject['headers'];
+  environment_id?: number | null;
+  variables?: Array<{ key: string; value: string }>;
+}
+
+export interface ApiScenarioStep {
+  endpoint_id: number;
+  name?: string;
+  enabled?: boolean;
+  continue_on_failure?: boolean;
+  method?: string;
+  path?: string;
+  url?: string;
+  headers?: ApiEndpoint['headers'];
+  parameters?: ApiEndpoint['parameters'];
+  body?: string;
+  pre_actions?: ApiEndpoint['pre_actions'];
+  post_actions?: ApiEndpoint['post_actions'];
+  assertions?: ApiEndpoint['assertions'];
+}
+
+export interface ApiScenario {
+  id: number;
+  project_id: number;
+  name: string;
+  description: string;
+  base_url?: string | null;
+  environment_id?: number | null;
+  variables: Array<{ key: string; value: string }>;
+  steps: ApiScenarioStep[];
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiScenarioResult {
+  id: number;
+  scenario_id: number;
+  project_id: number;
+  scenario_name: string;
+  passed: boolean;
+  result: Record<string, any>;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiImportResult {
+  project: ApiProject;
+  endpoints: ApiEndpoint[];
+}
+
+export interface ApiSyncResult {
+  project: ApiProject;
+  endpoints: ApiEndpoint[];
+  created: number;
+  updated: number;
+  marked_removed: number;
+}

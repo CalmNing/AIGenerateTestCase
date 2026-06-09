@@ -189,6 +189,59 @@ class McpServer(BaseModel, table=True):
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
 
+class ApiProject(BaseModel, table=True):
+    """导入的接口测试项目"""
+    name: str = Field(default="", description="项目名称")
+    base_url: str = Field(default="", description="默认 Base URL")
+    headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="项目级请求头")
+    source_type: str = Field(default="manual", description="来源: upload | url | manual")
+    source_url: Optional[str] = Field(default=None, description="OpenAPI/Swagger 来源 URL")
+    raw_spec: Optional[str] = Field(default=None, description="原始 OpenAPI/Swagger 文档")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class ApiEndpoint(BaseModel, table=True):
+    """接口测试工具中的单个接口定义"""
+    project_id: int = Field(foreign_key="apiproject.id", description="接口项目ID")
+    name: str = Field(default="", description="接口名称")
+    method: str = Field(default="GET", description="HTTP 方法")
+    path: str = Field(default="", description="接口路径")
+    url: Optional[str] = Field(default=None, description="覆盖完整 URL")
+    tags: List[str] = Field(default_factory=list, sa_type=JSON)
+    headers: List[dict] = Field(default_factory=list, sa_type=JSON)
+    parameters: List[dict] = Field(default_factory=list, sa_type=JSON)
+    body: Optional[str] = Field(default=None, description="请求体")
+    request_schema: dict = Field(default_factory=dict, sa_type=JSON, description="OpenAPI 请求体 Schema")
+    response_schema: dict = Field(default_factory=dict, sa_type=JSON, description="OpenAPI 主要响应 Schema")
+    environment_id: Optional[int] = Field(default=None, description="默认执行环境ID")
+    pre_actions: List[dict] = Field(default_factory=list, sa_type=JSON)
+    post_actions: List[dict] = Field(default_factory=list, sa_type=JSON)
+    assertions: List[dict] = Field(default_factory=list, sa_type=JSON)
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class ApiScenario(BaseModel, table=True):
+    """接口场景"""
+    project_id: int = Field(foreign_key="apiproject.id", description="接口项目ID")
+    name: str = Field(default="", description="场景名称")
+    description: str = Field(default="", description="场景描述")
+    base_url: Optional[str] = Field(default=None, description="场景级 Base URL 覆盖")
+    environment_id: Optional[int] = Field(default=None, description="执行环境ID")
+    variables: List[dict] = Field(default_factory=list, sa_type=JSON)
+    steps: List[dict] = Field(default_factory=list, sa_type=JSON)
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class ApiScenarioResult(BaseModel, table=True):
+    """接口场景执行结果"""
+    scenario_id: int = Field(foreign_key="apiscenario.id", index=True, description="接口场景ID")
+    project_id: int = Field(foreign_key="apiproject.id", index=True, description="接口项目ID")
+    scenario_name: str = Field(default="", description="执行时的场景名称快照")
+    passed: bool = Field(default=False, description="是否执行通过")
+    result: dict = Field(default_factory=dict, sa_type=JSON, description="执行结果详情")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
 class MockLog(BaseModel, table=True):
     """Mock 日志数据模型，记录每次Mock请求/响应的完整信息"""
     config_id: Optional[int] = Field(default=None, foreign_key="mockconfig.id", description="关联的Mock配置ID")

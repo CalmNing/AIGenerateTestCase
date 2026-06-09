@@ -22,6 +22,7 @@ import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/TestCaseGenerator';
 import TestCaseManager from './components/TestCaseManager';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
+import ApiScenarioTestTool from './components/ApiScenarioTestTool';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
 import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
@@ -40,10 +41,10 @@ const { Content } = Layout;
 const App: React.FC = () => {
 
   // 导航状态管理
-  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task' | 'mock-api'>(() => {
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api'>(() => {
     // 从localStorage加载上次的平台状态
     const savedPlatform = localStorage.getItem('currentPlatform');
-    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'scheduled-task' | 'mock-api') || 'home';
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api') || 'home';
   });
   const canManageSettings = hasPermission(Permission.CONFIG_MANAGE);
   const canManageMcp = hasPermission(Permission.MCP_MANAGE);
@@ -1001,6 +1002,11 @@ const App: React.FC = () => {
     localStorage.setItem('currentPlatform', 'iot-mock');
   };
 
+  const navigateToApiTest = () => {
+    setCurrentPlatform('api-test');
+    localStorage.setItem('currentPlatform', 'api-test');
+  };
+
   const navigateToScheduledTask = () => {
     if (!canAccessScheduledTask) return;
     setCurrentPlatform('scheduled-task');
@@ -1200,6 +1206,7 @@ const App: React.FC = () => {
         <HomePage
           onNavigateToAI={navigateToAITestcase}
           onNavigateToIoT={navigateToIoTMock}
+          onNavigateToApiTest={navigateToApiTest}
           onNavigateToScheduledTask={navigateToScheduledTask}
           onNavigateToMock={navigateToMock}
           canAccessScheduledTask={canAccessScheduledTask}
@@ -1218,6 +1225,16 @@ const App: React.FC = () => {
             currentEnvironmentId={currentEnvironmentId}
             canManageGlobalParams={canManageGlobalParams}
           />
+        </div>
+      ) : currentPlatform === 'api-test' ? (
+        <div>
+          <SubPlatformHeader
+            title="接口场景测试工具"
+            onBackToHome={navigateToHome}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
+            canManageGlobalParams={canManageGlobalParams}
+          />
+          <ApiScenarioTestTool />
         </div>
       ) : currentPlatform === 'scheduled-task' ? (
         <div>

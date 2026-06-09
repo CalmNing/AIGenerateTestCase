@@ -34,6 +34,10 @@ _LANHU_URL_RE = re.compile(
     r'https?://lanhuapp\.com/web/#/item/project/[a-z]+[^"\s]*',
     re.IGNORECASE,
 )
+_FEISHU_URL_RE = re.compile(
+    r'https?://[a-zA-Z0-9-]+\.feishu\.cn/(?:wiki|docx)/([A-Za-z0-9_-]+)',
+    re.IGNORECASE,
+)
 _MAX_PREANALYZE_PAGES = 5
 
 
@@ -178,6 +182,73 @@ async def _fetch_lanhu_page_content(url: str, page_names: list[str]) -> str:
     except Exception as e:
         logger.warning(f"蓝湖页面内容预取失败: {e}")
         return ""
+
+
+def _load_json_object(text: str) -> dict | None:
+    import json as _json
+
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    try:
+        data = _json.loads(stripped)
+        return data if isinstance(data, dict) else None
+    except _json.JSONDecodeError:
+        match = re.search(r"\{.*\}", stripped, re.DOTALL)
+        if not match:
+            return None
+        try:
+            data = _json.loads(match.group(0))
+            return data if isinstance(data, dict) else None
+        except _json.JSONDecodeError:
+            return None
+
+
+async def _fetch_feishu_document_content(requirement: str, mcp_configs: list | None) -> str | None:
+    """Read Feishu wiki/docx links directly via MCP and skip agent tool loops."""
+    match = _FEISHU_URL_RE.search(requirement or "")
+    if not match or not mcp_configs:
+        return None
+
+    token = match.group(1)
+    try:
+        from utils.lanhu_mcp_adapter import connect_single_server
+    except Exception:
+        logger.warning("Feishu MCP prefetch unavailable: adapter import failed", exc_info=True)
+        return None
+
+    enabled_configs = [c for c in mcp_configs if c.get("enabled", True)]
+    for config in enabled_configs:
+        server_name, client, error = await connect_single_server(config)
+        if error or client is None:
+            logger.info("Feishu MCP prefetch skipped unavailable server %s: %s", server_name, error)
+            continue
+        try:
+            tool_names = {t.get("name") for t in client.tools}
+            document_id = token
+            if "wiki_v2_space_getNode" in tool_names and "/wiki/" in match.group(0).lower():
+                node_raw = await client.call_tool("wiki_v2_space_getNode", {"params": {"token": token}})
+                node_data = _load_json_object(node_raw) or {}
+                node = node_data.get("node") if isinstance(node_data.get("node"), dict) else {}
+                document_id = node.get("obj_token") or document_id
+
+            if "docx_v1_document_rawContent" not in tool_names:
+                continue
+            raw = await client.call_tool("docx_v1_document_rawContent", {"path": {"document_id": document_id}})
+            data = _load_json_object(raw) or {}
+            content = data.get("content")
+            if isinstance(content, str) and content.strip():
+                logger.info("已预取飞书文档正文: server=%s document_id=%s size=%s", server_name, document_id, len(content))
+                return content
+        except Exception as e:
+            logger.warning("Feishu MCP prefetch failed on server %s: %s", server_name, e)
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+    return None
 
 
 class _McpPermissionError(ValueError):
@@ -739,6 +810,8 @@ async def generate_testcases(
     # 如果无链接，prompt = 历史上下文 + 原始输入
     parsed_content = None
     is_lanhu = False
+    is_feishu = False
+    has_feishu_url = bool(_FEISHU_URL_RE.search(requirement))
 
     # 1) 先检查蓝湖链接
     lanhu_info = await _check_lanhu_document_size(requirement)
@@ -758,30 +831,26 @@ async def generate_testcases(
             logger.info(f"已解析蓝湖文档内容，共 {len(lanhu_content)} 字")
 
     # 历史提示词只保存解析出的内容（不含历史上下文等前缀）
+    if parsed_content is None:
+        feishu_content = await _fetch_feishu_document_content(requirement, mcp_configs)
+        if feishu_content:
+            parsed_content = feishu_content
+            is_feishu = True
+            logger.info(f"已解析飞书文档内容，共 {len(feishu_content)} 字")
+        elif has_feishu_url:
+            raise ValueError(
+                "飞书文档读取失败：已检测到飞书链接，但未能通过 MCP 获取文档正文。"
+                "请检查 MCP 服务器配置、飞书应用权限或 access token 是否有效后重试。"
+            )
+
     if parsed_content:
         _history_save_content = _clean_history_prompt_content(parsed_content)
-
-    saved_history_prompt = None
-
-    # 在模型调用前保存历史提示词
-    try:
-        db_session_local = kwargs.get("db_session")
-        if db_session_local is not None:
-            saved_history_prompt = _upsert_history_prompt(
-                db_session_local,
-                content=_history_save_content,
-                module_id=module_id,
-                session_id=session_id,
-                user_id=user_id,
-            )
-    except Exception as e:
-        logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
 
     # 3) 构造最终 prompt
     if parsed_content:
         # 有解析内容：历史上下文作为补充参考，实际需求是解析内容
         if history_context:
-            label = "蓝湖需求文档" if is_lanhu else "解析内容"
+            label = "蓝湖需求文档" if is_lanhu else ("飞书文档" if is_feishu else "解析内容")
             requirement = (
                 history_context
                 + f"---\n## 本次需求（基于{label}，以此为准）\n"
@@ -949,19 +1018,7 @@ async def generate_testcases(
             try:
                 db_session_local = kwargs.get("db_session")
                 if db_session_local is not None:
-                    if saved_history_prompt is not None:
-                        saved_history_prompt.content = _clean_history_prompt_content(extracted)
-                        db_session_local.add(saved_history_prompt)
-                        db_session_local.commit()
-                    else:
-                        _upsert_history_prompt(
-                            db_session_local,
-                            content=extracted,
-                            module_id=module_id,
-                            session_id=session_id,
-                            user_id=user_id,
-                        )
-                        logger.info(f"已将 MCP 工具返回的文档内容更新到历史提示词")
+                    logger.info("已提取 MCP 工具返回的文档内容，等待用例解析成功后保存历史提示词")
             except Exception as e:
                 logger.warning(f"更新历史提示词失败（不影响主流程）: {e}")
 
@@ -1040,6 +1097,19 @@ async def generate_testcases(
             db_testcases.append(db_tc)
 
         # 返回转换后的测试用例
+        try:
+            db_session_local = kwargs.get("db_session")
+            if db_session_local is not None:
+                _upsert_history_prompt(
+                    db_session_local,
+                    content=_history_save_content,
+                    module_id=module_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                )
+        except Exception as e:
+            logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
+
         return db_testcases, requirement
     except Exception as e:
         logger.error(f"解析测试用例失败: {str(e)}, 响应格式: {type(response).__name__}")

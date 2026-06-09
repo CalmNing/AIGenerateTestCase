@@ -833,6 +833,11 @@ async def _connect_single_server(config: dict) -> tuple[str, MCPClient | None, E
     return server_name, client, None
 
 
+async def connect_single_server(config: dict) -> tuple[str, MCPClient | None, Exception | None]:
+    """Public wrapper for callers that need a direct MCP connection."""
+    return await _connect_single_server(config)
+
+
 async def build_tools_from_configs(mcp_configs: list[dict]) -> list:
     """从 MCP 服务器配置列表构建 LangChain 工具。
 

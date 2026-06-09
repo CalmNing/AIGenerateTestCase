@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiImportResult, ApiSyncResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -349,4 +349,42 @@ export const mockConfigApi = {
 
   // 删除Mock配置
   deleteConfig: (configId: number): Promise<ApiResponse> => api.delete(`/mock-configs/${configId}`)
+};
+
+export const apiTestApi = {
+  getProjects: (): Promise<ApiResponse<ApiProject[]>> => api.get('/api-test/projects'),
+  updateProject: (projectId: number, project: Partial<ApiProject>): Promise<ApiResponse<ApiProject>> =>
+    api.put(`/api-test/projects/${projectId}`, project),
+  deleteProject: (projectId: number): Promise<ApiResponse> => api.delete(`/api-test/projects/${projectId}`),
+  syncProject: (projectId: number): Promise<ApiResponse<ApiSyncResult>> => api.post(`/api-test/projects/${projectId}/sync`),
+  importOpenApi: (data: { name?: string; url?: string; file?: File | null }): Promise<ApiResponse<ApiImportResult>> => {
+    const formData = new FormData();
+    if (data.name) formData.append('name', data.name);
+    if (data.url) formData.append('url', data.url);
+    if (data.file) formData.append('file', data.file);
+    return api.post('/api-test/import', formData);
+  },
+  getEndpoints: (projectId: number): Promise<ApiResponse<ApiEndpoint[]>> =>
+    api.get(`/api-test/projects/${projectId}/endpoints`),
+  createEndpoint: (projectId: number, endpoint: Partial<ApiEndpoint>): Promise<ApiResponse<ApiEndpoint>> =>
+    api.post(`/api-test/projects/${projectId}/endpoints`, endpoint),
+  updateEndpoint: (endpointId: number, endpoint: Partial<ApiEndpoint>): Promise<ApiResponse<ApiEndpoint>> =>
+    api.put(`/api-test/endpoints/${endpointId}`, endpoint),
+  deleteEndpoint: (endpointId: number): Promise<ApiResponse> => api.delete(`/api-test/endpoints/${endpointId}`),
+  runEndpoint: (endpointId: number, payload: ApiEndpointRunPayload): Promise<ApiResponse<any>> =>
+    api.post(`/api-test/endpoints/${endpointId}/run`, payload),
+  generateEndpointBody: (endpointId: number, payload: Record<string, any>): Promise<ApiResponse<{ body: string; used_ai: boolean; message: string }>> =>
+    api.post(`/api-test/endpoints/${endpointId}/generate-body`, payload),
+  generateEndpointScenarioTests: (endpointId: number): Promise<ApiResponse<ApiScenario>> =>
+    api.post(`/api-test/endpoints/${endpointId}/generate-scenario-tests`),
+  getScenarios: (projectId: number): Promise<ApiResponse<ApiScenario[]>> =>
+    api.get(`/api-test/projects/${projectId}/scenarios`),
+  createScenario: (projectId: number, scenario: Partial<ApiScenario>): Promise<ApiResponse<ApiScenario>> =>
+    api.post(`/api-test/projects/${projectId}/scenarios`, scenario),
+  updateScenario: (scenarioId: number, scenario: Partial<ApiScenario>): Promise<ApiResponse<ApiScenario>> =>
+    api.put(`/api-test/scenarios/${scenarioId}`, scenario),
+  deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
+  getScenarioResults: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
+    api.get(`/api-test/scenarios/${scenarioId}/results`),
+  runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`)
 };

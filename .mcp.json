@@ -1,8 +1,4 @@
 {
   "mcpServers": {
-    "lanhu": {
-      "type": "http",
-      "url": "http://localhost:8000/mcp?role=Tester&name=anning"
-    }
   }
 }

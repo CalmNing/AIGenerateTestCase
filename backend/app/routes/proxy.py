@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-import subprocess
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -15,6 +14,7 @@ from db.db import get_db
 from db.models import GlobalParameter, MockConfig
 from app.deps import CurrentUser
 from app.permissions import Permission, get_user_permissions
+from utils.js_expression import eval_js_expression
 
 router = APIRouter(prefix="/proxy", tags=["proxy"])
 logging.basicConfig(level=logging.INFO)
@@ -105,51 +105,7 @@ def _substitute_builtins(text: str) -> str:
 
 def _eval_js(expression: str) -> str | None:
     """通过 Node.js 执行 JS 表达式，返回字符串结果；失败返回 None"""
-    # 先尝试 Python 原生降级处理常见的 new Date() 表达式
-    py_result = _try_python_date_fallback(expression)
-    if py_result is not None:
-        return py_result
-
-    try:
-        proc = subprocess.run(
-            ["node", "-e", f"console.log(({expression}))"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-        else:
-            logger.warning("JS eval returned non-zero or empty: expr=%s, rc=%s, stderr=%s",
-                           expression, proc.returncode, proc.stderr.strip())
-    except FileNotFoundError:
-        logger.warning("Node.js not found, cannot evaluate JS expression: %s", expression)
-    except Exception as e:
-        logger.warning("JS expression eval failed: %s, error: %s", expression, e)
-    return None
-
-
-# 匹配 new Date().xxx() 或 new Date().xxx 的正则
-_DATE_METHOD_RE = re.compile(r"^new\s+Date\(\)\.(getFullYear|getMonth|getDate|getDay|getHours|getMinutes|getSeconds|getMilliseconds|getTime)(\s*\(\))?$", re.IGNORECASE)
-
-
-def _try_python_date_fallback(expr: str) -> str | None:
-    """用 Python 原生实现常见 Date 方法，避免依赖 Node.js"""
-    m = _DATE_METHOD_RE.match(expr.strip())
-    if not m:
-        return None
-    method = m.group(1).lower()
-    now = datetime.now()
-    mapping = {
-        "getfullyear":   str(now.year),
-        "getmonth":      str(now.month - 1),  # JS month is 0-indexed
-        "getdate":       str(now.day),
-        "getday":        str(now.weekday()),   # JS Sun=0, Python Mon=0;语义不同但保持简单映射
-        "gethours":      str(now.hour),
-        "getminutes":    str(now.minute),
-        "getseconds":    str(now.second),
-        "getmilliseconds": str(int(now.microsecond / 1000)),
-        "gettime":       str(int(now.timestamp() * 1000)),
-    }
-    return mapping.get(method)
+    return eval_js_expression(expression)
 
 
 def substitute_variables(text: str, param_map: dict, unresolved: set) -> str:

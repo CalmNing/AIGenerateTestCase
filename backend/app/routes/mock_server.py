@@ -3,7 +3,6 @@ import copy
 import json
 import logging
 import re
-import subprocess
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -13,6 +12,7 @@ from sqlmodel import Session, select
 
 from db.db import engine
 from db.models import MockConfig, GlobalParameter, MockLog
+from utils.js_expression import eval_js_expression
 
 logger = logging.getLogger(__name__)
 
@@ -246,16 +246,7 @@ def _substitute_builtins(text: str) -> str:
 
 def _eval_js(expression: str) -> str | None:
     """通过 Node.js。执行 JS 表达式，返回字符串结果；失败返回 None"""
-    try:
-        proc = subprocess.run(
-            ["node", "-e", f"console.log(({expression}))"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-    except Exception as e:
-        logger.warning("JS expression eval failed: %s, error: %s", expression, e)
-    return None
+    return eval_js_expression(expression)
 
 
 def _substitute_variables(text: str, env_id: Optional[int], path_params: dict = None) -> str:

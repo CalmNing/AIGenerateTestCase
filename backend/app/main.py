@@ -4,6 +4,7 @@ from app.permissions import Permission, require_http_method_permissions, require
 from app.routes.config import router as config_router
 from app.routes.global_parameter import router as global_parameter_router
 from app.routes.history_prompt import router as history_prompt_router
+from app.routes.api_test_tool import router as api_test_tool_router
 from app.routes.mcp import router as mcp_router
 from app.routes.mock_config import router as mock_config_router
 from app.routes.mock_log import router as mock_log_router
@@ -59,6 +60,19 @@ api_router.include_router(
     ],
 )
 api_router.include_router(proxy_router, dependencies=[Depends(require_permissions(Permission.IOT_EXECUTE))])
+api_router.include_router(
+    api_test_tool_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[Permission.IOT_READ],
+                post=[Permission.IOT_CREATE, Permission.IOT_EXECUTE],
+                put=[Permission.IOT_UPDATE],
+                delete=[Permission.IOT_DELETE],
+            )
+        )
+    ],
+)
 api_router.include_router(
     testcase_router,
     dependencies=[
