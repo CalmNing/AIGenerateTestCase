@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ConfigProvider, Spin, Result, Button } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import type { KeycloakPkceMethod } from 'keycloak-js';
 import keycloak from './services/keycloak';
 
 // Keycloak 认证状态
@@ -8,6 +9,21 @@ interface AuthState {
   initialized: boolean;
   authenticated: boolean;
 }
+
+const getPkceMethod = (): KeycloakPkceMethod => {
+  const configured = (import.meta.env.VITE_KEYCLOAK_PKCE_METHOD || 'S256').toLowerCase();
+  if (['false', 'none', 'disabled', 'off'].includes(configured)) {
+    return false;
+  }
+
+  const hasWebCrypto = typeof window !== 'undefined' && window.isSecureContext && Boolean(window.crypto?.subtle);
+  if (!hasWebCrypto) {
+    console.warn('Web Crypto API is unavailable in the current context; Keycloak PKCE has been disabled.');
+    return false;
+  }
+
+  return 'S256';
+};
 
 const AppWithAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [authState, setAuthState] = useState<AuthState>({
@@ -20,7 +36,7 @@ const AppWithAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       const authenticated = await keycloak.init({
         onLoad: 'login-required',
         checkLoginIframe: false,
-        pkceMethod: 'S256',
+        pkceMethod: getPkceMethod(),
       });
 
       setAuthState({ initialized: true, authenticated });
