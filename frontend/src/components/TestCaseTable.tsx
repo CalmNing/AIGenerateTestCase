@@ -10,6 +10,7 @@ interface TestCaseTableProps {
   onDelete: (id: number) => void;
   onBatchDelete: (ids: number[]) => void;
   onMove: (testcase: TestCase) => void;
+  onApiExecute?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
 }
 
@@ -25,9 +26,11 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onDelete,
   onBatchDelete,
   onMove,
+  onApiExecute,
   onBatchMove
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [executingId, setExecutingId] = useState<number | null>(null);
   const [isBatchDeleteModalVisible, setIsBatchDeleteModalVisible] = useState(false);
 
   const testcaseColumns = [
@@ -146,8 +149,9 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             >
               执行
             </Button>
+            {onApiExecute && record.api_endpoint_id && (
+              <Button size="small" type="link" style={{ color: "#722ed1" }} onClick={() => onApiExecute(record)}>API ??</Button>)}
             <Button size='small' type="link" onClick={() => onMove(record)}>移动</Button>
-            <Button size='small' type="link" disabled={record.status !== TestCaseStatus.NOT_RUN} danger onClick={() => onDelete(record.id)}>删除</Button>
           </Space>
         </div>
       ),

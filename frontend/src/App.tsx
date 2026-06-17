@@ -718,6 +718,30 @@ const App: React.FC = () => {
   };
 
   // 打开批量移动测试用例对话框
+
+  // ??????? API ??
+  const handleApiExecuteTestcase = async (testcase: TestCase) => {
+    if (!selectedSession) return;
+    // Set executing state in the table through a callback approach
+    notification.info({ message: '????...', description: `????????: ${testcase.case_name}`, placement: 'topRight' });
+    try {
+      const res = await testcaseApi.executeTestcase(selectedSession.id, testcase.id);
+      if (res.code === 200 && res.data) {
+        const result = res.data;
+        if (result.passed) {
+          notification.success({ message: '????', description: `???? ${testcase.case_name} ????`, placement: 'topRight' });
+        } else {
+          notification.error({ message: '?????', description: `???? ${testcase.case_name} ???????????????`, placement: 'topRight' });
+        }
+        // ????????
+        loadTestcases(selectedSession.id, filters);
+      } else {
+        notification.error({ message: '????', description: res.message || '????', placement: 'topRight' });
+      }
+    } catch (error: any) {
+      notification.error({ message: '????', description: error?.response?.data?.message || error.message || '????', placement: 'topRight' });
+    }
+  };
   const handleBatchMoveTestcase = (ids: number[]) => {
     if (ids.length === 0) return;
     setSelectedTestcaseIds(ids);
@@ -754,11 +778,13 @@ const App: React.FC = () => {
   const [settingButtonStatus, setSettingButtonStatus] = useState(false);
   const [isMcpConfigVisible, setIsMcpConfigVisible] = useState(false);
   const [isSkillsHubVisible, setIsSkillsHubVisible] = useState(false);
-  const [selectedSkills, setSelectedSkills] = useState<string[]>(() => {
     const saved = localStorage.getItem('selectedSkills');
+  const [selectedSkills, setSelectedSkills] = useState<string[]>(() => {
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [selectedApiEndpointId, setSelectedApiEndpointId] = useState<number | null>(null);
+  const [selectedApiProjectId, setSelectedApiProjectId] = useState<number | null>(null);
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
   const [settingType, setSettingType] = useState<'api' | 'ollama'>('api');
@@ -915,7 +941,9 @@ const App: React.FC = () => {
           modelConfig,
           imageBase64, // 传递图片base64数据
           selectedModule === 0 ? undefined : Number(selectedModule), // 传递模块ID
-          selectedSkills.length > 0 ? selectedSkills : undefined
+          selectedSkills.length > 0 ? selectedSkills : undefined,
+          selectedApiEndpointId,
+          selectedApiProjectId
         );
         console.log('生成测试用例API响应:', response);
 
@@ -1360,6 +1388,10 @@ const App: React.FC = () => {
                                 // imageBase64={imageBase64}
                                 // onImageChange={setImageBase64}
                                 historyPromptRefreshKey={historyPromptRefreshKey}
+                                selectedApiEndpointId={selectedApiEndpointId}
+                                onApiEndpointChange={setSelectedApiEndpointId}
+                                selectedApiProjectId={selectedApiProjectId}
+                                onApiProjectChange={setSelectedApiProjectId}
                               />
                             ),
                           },
@@ -1393,6 +1425,7 @@ const App: React.FC = () => {
                                 onBatchMove={handleBatchMoveTestcase}
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
+                                onApiExecute={handleApiExecuteTestcase}
                               />
                             ),
                           },

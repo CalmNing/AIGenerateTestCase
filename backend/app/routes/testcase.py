@@ -11,6 +11,9 @@ from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
 from db.models import TestCase, StatusValue, McpServer
 from utils.base_response import Response
+import traceback
+from app.services.api_test_tool import run_endpoint
+from db.models import ApiEndpoint, ApiProject
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
@@ -123,6 +126,8 @@ async def generate_testcases(
         module_id: Optional[int|str] = Form(""),
         mcp_servers: Optional[str] = Form(""),
         selected_skills: Optional[str] = Form(""),
+        api_endpoint_id: Optional[str] = Form(""),
+        api_project_id: Optional[str] = Form(""),
 ):
     """生成测试用例"""
     from utils.model_utils import ModelServiceUnavailableError, generate_testcases
@@ -192,10 +197,54 @@ async def generate_testcases(
         except json.JSONDecodeError:
             logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
 
+    # ????? API ?????? Schema ??????????
+    api_context = ""
+    if api_endpoint_id:
+        try:
+            endpoint_id_int = int(api_endpoint_id)
+            endpoint_db = session.get(ApiEndpoint, endpoint_id_int)
+            if endpoint_db:
+                project_db = session.get(ApiProject, api_project_id and int(api_project_id) or endpoint_db.project_id)
+                api_context_lines = [
+                    f"\n\n===== ??? API ???? =====",
+                    f"????: {endpoint_db.name}",
+                    f"????: {project_db.name if project_db else '??'}",
+                    f"????: {endpoint_db.method}",
+                    f"????: {endpoint_db.path}",
+                    f"???: {json.dumps(endpoint_db.headers, ensure_ascii=False, indent=2)}",
+                    f"????: {json.dumps(endpoint_db.parameters, ensure_ascii=False, indent=2)}",
+                ]
+                if endpoint_db.request_schema:
+                    api_context_lines.append(f"??? Schema:\n{json.dumps(endpoint_db.request_schema, ensure_ascii=False, indent=2)}")
+                if endpoint_db.response_schema:
+                    api_context_lines.append(f"?? Schema:\n{json.dumps(endpoint_db.response_schema, ensure_ascii=False, indent=2)}")
+                api_context_lines.append("""\n\n????? API ???????????
+???????????(step)?????????? API ???????????
+{
+  "type": "api_call",
+  "endpoint_id": <??ID>,
+  "method": "<HTTP??>",
+  "path": "<????>",
+  "headers": [...],
+  "parameters": [...],
+  "body": "<???JSON>",
+  "environment_id": null
+}
+???? API ????????????????????
+????( expected_results)???????????????????""")
+                api_context = "\n".join(api_context_lines)
+                logger.info(f"???????: {endpoint_db.name} ({endpoint_db.method} {endpoint_db.path})")
+        except (ValueError, TypeError) as e:
+            logger.warning(f"?? api_endpoint_id ??: {e}")
+
+    effective_requirement = requirement
+    if api_context:
+        effective_requirement = requirement + api_context
+
     try:
         testcases, effective_req = await generate_testcases(
             db_session=session,
-            requirement=requirement,
+            requirement=effective_requirement,
             session_id=session_id,
             module_id=module_id,
             model_type=model_type,
@@ -223,6 +272,16 @@ async def generate_testcases(
     # 自动填充 user_id
     for tc in testcases:
         tc.user_id = user.user_id
+        if api_endpoint_id:
+            try:
+                tc.api_endpoint_id = int(api_endpoint_id)
+            except (ValueError, TypeError):
+                pass
+        if api_project_id:
+            try:
+                tc.api_project_id = int(api_project_id)
+            except (ValueError, TypeError):
+                pass
     session.add_all(testcases)
     session.commit()
     return Response(message="生成测试用例成功")
@@ -373,3 +432,67 @@ def create_testcase(
     session.commit()
     session.refresh(testcase_db)
     return Response(data=testcase_db, message="创建测试用例成功")
+
+
+@router.post("/{session_id}/testcases/{testcase_id}/execute", response_model=Response)
+async def execute_testcase(
+    session: SessionDep,
+    user: CurrentUser,
+    session_id: int,
+    testcase_id: int,
+):
+    """?????????? API ?????????"""
+    testcase = session.get(TestCase, testcase_id)
+    if not testcase or testcase.session_id != session_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="???????")
+
+    if not testcase.api_endpoint_id:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="???????? API ??")
+
+    endpoint = session.get(ApiEndpoint, testcase.api_endpoint_id)
+    if not endpoint:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="??? API ?????")
+
+    project = session.get(ApiProject, testcase.api_project_id or endpoint.project_id)
+    if not project:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="??? API ?????")
+
+    # ??? steps ??? api_call ??? overrides
+    # ?? steps ?? api_call ????? overrides
+    overrides = {}
+    for step in testcase.steps:
+        if isinstance(step, dict) and step.get("type") == "api_call":
+            overrides = {
+                "headers": step.get("headers"),
+                "parameters": step.get("parameters"),
+                "body": step.get("body"),
+                "variables": step.get("variables", []),
+                "environment_id": step.get("environment_id"),
+                "base_url": step.get("base_url"),
+            }
+            # ????? api_call ??
+            break
+
+    try:
+        result = await run_endpoint(session, project, endpoint, overrides)
+    except Exception as e:
+        logger = __import__("logging").getLogger(__name__)
+        logger.error(f"?????? {testcase_id} ??: {e}\n{traceback.format_exc()}")
+        return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"????: {str(e)}")
+
+    # ??????????????
+    passed = result.get("passed", False)
+    testcase.status = "PASSED" if passed else "FAILED"
+    session.add(testcase)
+    session.commit()
+    session.refresh(testcase)
+
+    return Response(
+        data={
+            "passed": passed,
+            "status": testcase.status,
+            "result": result,
+        },
+        message="????" if passed else "?????",
+    )
+

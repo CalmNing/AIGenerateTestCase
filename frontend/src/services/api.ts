@@ -101,7 +101,9 @@ export const testcaseApi = {
     ollama_model?: string;
   }, imageBase64?: string | null,
     moduleId?: number | null,
-    selectedSkills?: string[]): Promise<ApiResponse<TestCase[]>> => {
+    selectedSkills?: string[],
+    apiEndpointId?: number | null,
+    apiProjectId?: number | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -198,7 +200,11 @@ export const testcaseApi = {
 
   // 批量移动测试用例
   batchMoveTestcase: (testcaseIds: number[], sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
-    api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId })
+    api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId }),
+
+  /** ?????????? API ?? */
+  executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any }>> =>
+    api.post(`/testcases/${sessionId}/testcases/${testcaseId}/execute`),
 };
 
 // 模块管理API

@@ -112,7 +112,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
             <h3>测试步骤:</h3>
             <ul style={{ marginLeft: 20 }}>
               {selectedTestcase.steps.map((item, index) => (
-                <li key={index}>{index + 1}. {item}</li>
+                <li key={index}>{index + 1}. {typeof item === "string" ? item : JSON.stringify(item, null, 2)}</li>
               ))}
             </ul>
           </div>
@@ -120,7 +120,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
             <h3>预期结果:</h3>
             <ul style={{ marginLeft: 20 , fontSize: '16px' }}>
               {selectedTestcase.expected_results.map((item, index) => (
-                <li key={index}>{index + 1}. {item}</li>
+                <li key={index}>{index + 1}. {typeof item === "string" ? item : JSON.stringify(item, null, 2)}</li>
               ))}
             </ul>
           </div>

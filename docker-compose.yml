@@ -1,4 +1,4 @@
-version: '3.8'
+﻿version: '3.8'
 services:
   backend:
     build: ./backend
@@ -17,8 +17,8 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - KEYCLOAK_SERVER_URL=http://keycloak:8080
-#      - KEYCLOAK_EXTERNAL_URL=http://localhost:8090
-      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
+      # - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
+      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.111:8090
       - KEYCLOAK_REALM=ai-testcase
       - KEYCLOAK_CLIENT_ID=backend
       - KEYCLOAK_ADMIN_URL=http://keycloak:8080
@@ -29,10 +29,10 @@ services:
       - KEYCLOAK_SYNC_STRICT=false
       - KEYCLOAK_SYNC_RETRIES=6
       - KEYCLOAK_SYNC_RETRY_DELAY=5
-#      - CORS_ORIGINS=http://localhost:5173,http://localhost:8001
+      # - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
+      - CORS_ORIGINS=http://192.168.13.111:5173,http://192.168.13.111:8001
       - npm_config_cache=/root/.npm
       - NO_UPDATE_NOTIFIER=1
-      - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
 
   frontend:
     build: ./frontend
@@ -72,8 +72,8 @@ services:
       KC_DB_PASSWORD: keycloak_password
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
-      KC_HOSTNAME: 192.168.13.110
-#      KC_HOSTNAME: localhost
+      # KC_HOSTNAME: 192.168.13.110
+      KC_HOSTNAME: 192.168.13.111
 #      KC_HOSTNAME_PORT: 8090
 #      KC_HOSTNAME_STRICT: "false"
 #      KC_HOSTNAME_STRICT_HTTPS: "false"

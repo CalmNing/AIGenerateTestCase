@@ -76,13 +76,15 @@ class TestCase(BaseModel, table=True):
     case_name: str = Field(default="")
     case_level: Optional[int] = Field(default=4, ge=1, le=4)  # 使用整数类型，添加范围约束
     preset_conditions: List[str] = Field(default_factory=list, sa_type=JSON)
-    steps: List[str] = Field(default_factory=list, sa_type=JSON)
-    expected_results: List[str] = Field(default_factory=list, sa_type=JSON)
+    steps: List = Field(default_factory=list, sa_type=JSON)
+    expected_results: List = Field(default_factory=list, sa_type=JSON)
     session_id: Optional[int] = Field(default=None, foreign_key="session.id")
     status: str = Field(default="NOT_RUN")  # 使用字符串类型，直接设置默认值created_at
     bug_id: Optional[int] = Field(default=None)
     module_id: Optional[int] = Field(default=None)
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+    api_endpoint_id: Optional[int] = Field(default=None, description="??? API Endpoint ID???????")
+    api_project_id: Optional[int] = Field(default=None, description="??? API Project ID")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")

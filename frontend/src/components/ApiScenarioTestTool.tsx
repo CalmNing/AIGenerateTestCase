@@ -21,6 +21,7 @@ import {
   Upload,
 } from 'antd';
 import {
+  CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
   ExperimentOutlined,
@@ -450,6 +451,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [bodyGenerating, setBodyGenerating] = useState(false);
   const [scenarioStepBodyGenerating, setScenarioStepBodyGenerating] = useState<number | null>(null);
   const [scenarioGenerating, setScenarioGenerating] = useState(false);
+  const [copyingScenarioId, setCopyingScenarioId] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
   const [scenarioResultHistory, setScenarioResultHistory] = useState<Record<number, ApiScenarioResult[]>>({});
   const [selectedScenarioResultRecordId, setSelectedScenarioResultRecordId] = useState<number | null>(null);
@@ -955,6 +957,43 @@ const ApiScenarioTestTool: React.FC = () => {
       setScenarios([res.data, ...scenarios]);
       selectScenario(res.data);
       setActiveTab('scenarios');
+    }
+  };
+
+  const handleCopyScenario = async (scenario: ApiScenario) => {
+    if (!selectedProjectId) return;
+    setCopyingScenarioId(scenario.id);
+    try {
+      const res = await apiTestApi.createScenario(selectedProjectId, {
+        name: `${scenario.name} (复制)`,
+        description: scenario.description || '',
+        base_url: scenario.base_url,
+        environment_id: scenario.environment_id ?? undefined,
+        variables: cloneRows(scenario.variables),
+        steps: cloneRows(scenario.steps),
+      });
+      if (res.code === 200 && res.data) {
+        setScenarios([res.data, ...scenarios]);
+        selectScenario(res.data);
+        setActiveTab('scenarios');
+        message.success('场景已复制');
+      } else {
+        message.error(res.message || '复制场景失败');
+      }
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '复制场景失败');
+    } finally {
+      setCopyingScenarioId(null);
+    }
+  };
+
+  const handleCopyScenarioResult = async () => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
+      message.success('执行结果已复制');
+    } catch {
+      message.error('复制执行结果失败');
     }
   };
 
@@ -1723,6 +1762,21 @@ const ApiScenarioTestTool: React.FC = () => {
                         dataSource={scenarios}
                         renderItem={(scenario) => (
                           <List.Item
+                            actions={[
+                              <Button
+                                key="copy"
+                                type="text"
+                                size="small"
+                                icon={<CopyOutlined />}
+                                loading={copyingScenarioId === scenario.id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleCopyScenario(scenario);
+                                }}
+                              >
+                                复制
+                              </Button>,
+                            ]}
                             style={{ cursor: 'pointer', background: scenario.id === selectedScenario?.id ? '#f0f5ff' : undefined, padding: '8px', borderRadius: 6 }}
                             onClick={() => selectScenario(scenario)}
                           >
@@ -1923,6 +1977,13 @@ const ApiScenarioTestTool: React.FC = () => {
                             }}
                           />
                           <Tag>{selectedScenarioResultRecords.length}/{MAX_SCENARIO_RESULT_RECORDS}</Tag>
+                          <Button
+                            size="small"
+                            icon={<CopyOutlined />}
+                            onClick={handleCopyScenarioResult}
+                          >
+                            复制结果
+                          </Button>
                         </Space>
                       )}
                     <Table<any>

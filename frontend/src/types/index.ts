@@ -20,14 +20,16 @@ export interface TestCase {
   case_name: string;
   case_level: number;
   preset_conditions: string[];
-  steps: string[];
-  expected_results: string[];
   created_at: string;
   status?: TestCaseStatus; // 测试用例状态：NOT_RUN（未运行）、PASSED（通过）、FAILED（未通过）
   bug_id?: number;
   session_id: number;
   module_id?: number | null;
   user_id?: string;
+  api_endpoint_id?: number | null;
+  api_project_id?: number | null;
+  steps: (string | Record<string, any>)[];
+  expected_results: (string | Record<string, any>)[];
 }
 
 // 测试用例类型
