@@ -6,17 +6,11 @@ import { Session, TestCase, TestCaseStatus } from '../types';
 const { Sider } = Layout;
 const { Title } = Typography;
 
-// 覆盖 Menu 样式，让会话名称可以完整显示
-const sessionMenuStyles = `
-  .session-menu .ant-menu-item {
-    height: auto !important;
-    line-height: normal !important;
-    padding-inline: 16px !important;
-  }
-  .session-menu .ant-menu-title-content {
-    flex: 1 !important;
+// 让会话名称可以完整显示
+const sessionMenuStyle = `
+  .session-sidebar .ant-menu-title-content {
+    flex: 1 1 0% !important;
     min-width: 0 !important;
-    width: 0 !important;
   }
 `;
 
@@ -50,11 +44,12 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const menuItems = sessions.map(session => ({
     key: session.id,
     label: (
-      <div style={{ display: 'flex', alignItems: 'center', width: '100%', minHeight: '40px' }}>
+      <Space size={4}>
         <span style={{
           fontSize: "var(--font-size-base)",
-          flex: 1,
-          minWidth: 0,
+          lineHeight: "40px",
+          maxWidth: "140px",
+          height: "40px",
           display: "block",
           whiteSpace: "nowrap",
           overflow: "hidden",
@@ -108,18 +103,17 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             icon={<EllipsisOutlined />}
             size="small"
             onClick={(e) => e.stopPropagation()}
-            style={{ marginLeft: 'auto' }}
           />
         </Popover>
-      </div>
+      </Space>
     ),
     icon: <MessageTwoTone />,
     onClick: () => onSelectSession(session)
   }));
 
   return (
-    <Sider width={240} style={{ background: 'var(--color-bg-elevated)', borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column' }}>
-      <style>{sessionMenuStyles}</style>
+    <Sider width={240} className="session-sidebar" style={{ background: 'var(--color-bg-elevated)', borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column' }}>
+      <style>{sessionMenuStyle}</style>
       <div style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
         <Title level={5} style={{ margin: 0, fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-semibold)' }}>会话管理</Title>
         <div style={{ marginTop: 'var(--space-2)' }}>
@@ -136,14 +130,12 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
         </div>
       </div>
       <Menu
-        className="session-menu"
         mode="vertical"
         style={{
           margin: '0',
           maxHeight: 'calc(100vh - 210px)',
           overflow: 'auto',
           borderRight: 'none',
-          flex: 1,
         }}
         selectedKeys={selectedSession ? [String(selectedSession.id)] : []}
         items={menuItems}
