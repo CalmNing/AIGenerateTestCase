@@ -630,11 +630,13 @@ async def create_testcase_agent(
             temperature=0,
             api_key=SecretStr(api_key),
             base_url=api_base_url,
-            openai_proxy=api_proxy_url,
             max_tokens=None,
             timeout=None,
             max_retries=2,
         )
+        # DeepSeek API 不支持 response_format=json_object，强制使用 ToolStrategy（工具调用）
+        if model.profile:
+            model.profile = {**model.profile, "structured_output": False}
 
         # 尝试加载蓝湖 MCP 工具
         mcp_tools = []
@@ -899,12 +901,12 @@ async def generate_testcases(
                     temperature=0,
                     api_key=SecretStr(api_key),
                     base_url=api_base_url or None,
-                    openai_proxy=api_proxy_url or None,
                     max_tokens=None,
                     timeout=None,
                     max_retries=2,
                 )
-                structured_model = model.with_structured_output(ResponseFormat)
+                # DeepSeek API 不支持 response_format=json_object，使用 function_calling
+                structured_model = model.with_structured_output(ResponseFormat, method="function_calling")
                 _diagnostic_cb = _TokenUsageCallback()
                 response = await structured_model.ainvoke(
                     [("system", SYSTEM_PROMPT), ("human", requirement)],

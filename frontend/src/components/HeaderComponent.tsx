@@ -1,6 +1,6 @@
 import React from 'react';
 import { Layout, Typography, Button, Space, Avatar, Dropdown } from 'antd';
-import { UserOutlined, LogoutOutlined, SettingOutlined, ApiOutlined, BookOutlined } from '@ant-design/icons';
+import { UserOutlined, LogoutOutlined, SettingOutlined, ApiOutlined, BookOutlined, ControlOutlined } from '@ant-design/icons';
 import keycloak from '../services/keycloak';
 
 const { Header } = Layout;
@@ -12,9 +12,11 @@ interface HeaderComponentProps {
   onBackToHome?: () => void;
   onMcpConfigOpen?: () => void;
   onSkillsHubOpen?: () => void;
+  onGlobalParamsOpen?: () => void;
   canManageSettings?: boolean;
   canManageMcp?: boolean;
   canManageSkills?: boolean;
+  canManageGlobalParams?: boolean;
 }
 
 const HeaderComponent: React.FC<HeaderComponentProps> = ({
@@ -23,9 +25,11 @@ const HeaderComponent: React.FC<HeaderComponentProps> = ({
   onBackToHome,
   onMcpConfigOpen,
   onSkillsHubOpen,
+  onGlobalParamsOpen,
   canManageSettings = false,
   canManageMcp = false,
   canManageSkills = false,
+  canManageGlobalParams = false,
 }) => {
   const username = keycloak.tokenParsed?.preferred_username || keycloak.tokenParsed?.sub || '用户';
 
@@ -45,19 +49,41 @@ const HeaderComponent: React.FC<HeaderComponentProps> = ({
   ];
 
   return (
-    <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0' }}>
-      <Title onClick={onBackToHome} level={3} style={{ margin: 0, color: '#1890ff', cursor: 'pointer' }}>测试用例生成工具</Title>
+    <Header style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      background: 'var(--color-bg-elevated)',
+      padding: '0 var(--space-6)',
+      borderBottom: '1px solid var(--color-border)',
+      height: 'var(--header-height)',
+      lineHeight: 'var(--header-height)',
+    }}>
+      <Title
+        onClick={onBackToHome}
+        level={3}
+        style={{
+          margin: 0,
+          color: 'var(--color-primary)',
+          cursor: 'pointer',
+          letterSpacing: 'var(--letter-spacing-tight)',
+          fontWeight: 'var(--font-weight-bold)',
+        }}
+      >
+        测试用例生成工具
+      </Title>
       <div>
         <Space size="middle">
           {canManageMcp && <Button type="default" onClick={onMcpConfigOpen} icon={<ApiOutlined />}>MCP</Button>}
+          {canManageGlobalParams && <Button type="default" onClick={onGlobalParamsOpen} icon={<ControlOutlined />}>全局参数</Button>}
           {canManageSkills && <Button type="default" onClick={onSkillsHubOpen} icon={<BookOutlined />}>Skills</Button>}
           {canManageSettings && (
             <Button type="default" onClick={onSettingsOpen} disabled={settingButtonStatus} icon={<SettingOutlined />}>设置</Button>
           )}
           <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
             <Space style={{ cursor: 'pointer' }}>
-              <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1890ff' }} />
-              <span style={{ fontSize: '14px', color: '#333' }}>{username}</span>
+              <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: 'var(--color-primary)' }} />
+              <span style={{ fontSize: 'var(--font-size-base)', color: 'var(--color-text)' }}>{username}</span>
             </Space>
           </Dropdown>
         </Space>

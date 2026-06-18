@@ -96,7 +96,11 @@
       "mcp__lark-mcp__wiki_v2_space_getNode",
       "mcp__lark-mcp__docx_v1_document_rawContent",
       "PowerShell(Start-Process -NoNewWindow -FilePath \"python\" -ArgumentList \"-m\", \"uvicorn\", \"main:app\", \"--reload\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\" -WorkingDirectory \"F:\\\\VSCode\\\\ai-generate-testcase\\\\backend\")",
-      "PowerShell(Stop-Process *)"
+      "PowerShell(Stop-Process *)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import openai; print\\('openai:', openai.__version__\\); import langchain_deepseek; print\\('langchain_deepseek:', langchain_deepseek.__version__\\)\")",
+      "Bash(powershell *)",
+      "Bash(F:/VSCode/ai-generate-testcase/backend/.venv/Scripts/python.exe *)",
+      "Bash(npm run *)"
     ]
   },
   "enableAllProjectMcpServers": true,

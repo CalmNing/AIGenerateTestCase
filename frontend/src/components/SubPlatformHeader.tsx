@@ -37,17 +37,31 @@ const SubPlatformHeader: React.FC<SubPlatformHeaderProps> = ({
 
   return (
     <div style={{
-      padding: '16px',
-      background: '#fff',
-      borderBottom: '1px solid #e8e8e8',
+      padding: '0 var(--space-6)',
+      background: 'var(--color-bg-elevated)',
+      borderBottom: '1px solid var(--color-border)',
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
+      height: 'var(--header-height)',
+      minHeight: 'var(--header-height)',
     }}>
-      <h2 onClick={onBackToHome} style={{ margin: 0, cursor: 'pointer' }}>{title}</h2>
+      <h2
+        onClick={onBackToHome}
+        style={{
+          margin: 0,
+          cursor: 'pointer',
+          fontSize: 'var(--font-size-lg)',
+          fontWeight: 'var(--font-weight-semibold)',
+          color: 'var(--color-text)',
+          letterSpacing: 'var(--letter-spacing-tight)',
+        }}
+      >
+        {title}
+      </h2>
       <Space size="middle">
         {environmentName && (
-          <span style={{ color: '#666', fontSize: '14px' }}>
+          <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-base)' }}>
             当前环境: <strong>{environmentName}</strong>
           </span>
         )}
@@ -61,8 +75,8 @@ const SubPlatformHeader: React.FC<SubPlatformHeaderProps> = ({
         )}
         <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
           <Space style={{ cursor: 'pointer' }}>
-            <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1890ff' }} />
-            <span style={{ fontSize: '14px', color: '#333' }}>{username}</span>
+            <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: 'var(--color-primary)' }} />
+            <span style={{ fontSize: 'var(--font-size-base)', color: 'var(--color-text)' }}>{username}</span>
           </Space>
         </Dropdown>
       </Space>

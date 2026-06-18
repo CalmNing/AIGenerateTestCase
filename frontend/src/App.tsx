@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
 import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
@@ -21,6 +21,7 @@ import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/TestCaseGenerator';
 import TestCaseManager from './components/TestCaseManager';
+import SessionApiConfig from './components/SessionApiConfig';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
 import ApiScenarioTestTool from './components/ApiScenarioTestTool';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
@@ -489,7 +490,10 @@ const App: React.FC = () => {
         case_level: values.case_level,
         status: values.status as TestCaseStatus,
         preset_conditions: values.preset_conditions.split('\n').filter((item: string) => item.trim()),
-        steps: values.steps.split('\n').filter((item: string) => item.trim()),
+        // steps可能是数组（从EditTestcaseModal传来）或字符串
+        steps: Array.isArray(values.steps)
+          ? values.steps
+          : values.steps.split('\n').filter((item: string) => item.trim()),
         expected_results: values.expected_results.split('\n').filter((item: string) => item.trim())
       };
 
@@ -731,7 +735,57 @@ const App: React.FC = () => {
         if (result.passed) {
           notification.success({ message: '执行成功', description: `测试用例 ${testcase.case_name} 已执行通过`, placement: 'topRight' });
         } else {
-          notification.error({ message: '执行失败', description: `测试用例 ${testcase.case_name} 执行未通过，请查看详细信息`, placement: 'topRight' });
+          // 构建详细的失败信息
+          const stepResult = result.result?.step;
+          let detailMessage = `测试用例 ${testcase.case_name} 执行未通过`;
+
+          if (stepResult) {
+            // 显示断言失败详情
+            const failedAssertions = (stepResult.assertions || []).filter((a: any) => !a.passed);
+            if (failedAssertions.length > 0) {
+              const assertionDetails = failedAssertions.map((a: any) =>
+                `${a.type}: 期望 ${a.expected}, 实际 ${a.actual}`
+              ).join('\n');
+              detailMessage += `\n\n断言失败:\n${assertionDetails}`;
+            }
+
+            // 显示请求和响应信息
+            if (stepResult.request) {
+              detailMessage += `\n\n请求: ${stepResult.request.method} ${stepResult.request.url}`;
+              if (stepResult.request.body) {
+                const reqBodyStr = typeof stepResult.request.body === 'string'
+                  ? stepResult.request.body
+                  : JSON.stringify(stepResult.request.body, null, 2);
+                detailMessage += `\n请求体: ${reqBodyStr.substring(0, 500)}${reqBodyStr.length > 500 ? '...' : ''}`;
+              }
+            }
+            if (stepResult.response) {
+              detailMessage += `\n响应状态码: ${stepResult.response.status_code}`;
+              if (stepResult.response.body) {
+                const bodyStr = typeof stepResult.response.body === 'string'
+                  ? stepResult.response.body
+                  : JSON.stringify(stepResult.response.body, null, 2);
+                detailMessage += `\n响应内容: ${bodyStr.substring(0, 500)}${bodyStr.length > 500 ? '...' : ''}`;
+              }
+            }
+
+            // 显示错误详情
+            if (stepResult.detail) {
+              detailMessage += `\n\n错误详情: ${stepResult.detail}`;
+            }
+          }
+
+          // 使用 Modal 显示详细错误信息
+          Modal.error({
+            title: '测试用例执行失败',
+            content: (
+              <div style={{ whiteSpace: 'pre-wrap', maxHeight: '60vh', overflow: 'auto' }}>
+                {detailMessage}
+              </div>
+            ),
+            width: 600,
+            okText: '确定',
+          });
         }
         // 重新加载测试用例
         loadTestcases(selectedSession.id, filters);
@@ -1229,7 +1283,34 @@ const App: React.FC = () => {
   }, [canManageGlobalParams]);
 
   return (
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        token: {
+          colorPrimary: '#4f46e5',
+          colorSuccess: '#10b981',
+          colorWarning: '#f59e0b',
+          colorError: '#f43f5e',
+          colorInfo: '#4f46e5',
+          colorText: '#0f172a',
+          colorTextSecondary: '#475569',
+          colorTextTertiary: '#94a3b8',
+          colorBgContainer: '#ffffff',
+          colorBgLayout: '#f8fafc',
+          colorBgElevated: '#ffffff',
+          colorBorder: '#e2e8f0',
+          colorBorderSecondary: '#f1f5f9',
+          borderRadius: 6,
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
+          fontSize: 14,
+          controlHeight: 36,
+          colorLink: '#4f46e5',
+          colorLinkHover: '#4338ca',
+          colorLinkActive: '#3730a3',
+        },
+        algorithm: theme.defaultAlgorithm,
+      }}
+    >
       {currentPlatform === 'home' ? (
         <HomePage
           onNavigateToAI={navigateToAITestcase}
@@ -1273,7 +1354,7 @@ const App: React.FC = () => {
             onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
             canManageGlobalParams={canManageGlobalParams}
           />
-          <div style={{ padding: '16px' }}>
+          <div style={{ padding: 'var(--space-4)' }}>
             <ScheduledTaskManager />
           </div>
         </div>
@@ -1296,9 +1377,11 @@ const App: React.FC = () => {
             onBackToHome={navigateToHome}
             onMcpConfigOpen={() => canManageMcp && setIsMcpConfigVisible(true)}
             onSkillsHubOpen={() => canManageSkills && setIsSkillsHubVisible(true)}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
             canManageSettings={canManageSettings}
             canManageMcp={canManageMcp}
             canManageSkills={canManageSkills}
+            canManageGlobalParams={canManageGlobalParams}
           />
           <Layout>
             <SessionSidebar
@@ -1322,8 +1405,8 @@ const App: React.FC = () => {
               onEditModule={handleEditModule}
               onOpenAddModuleModal={handleOpenAddModuleModal}
             />
-            <Layout style={{ padding: '4px' }}>
-              <Content style={{ background: '#fff', padding: '10px', margin: 0 }}>
+            <Layout style={{ padding: 'var(--space-4)' }}>
+              <Content style={{ background: 'var(--color-bg-elevated)', padding: 'var(--space-4)', margin: 0, borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border-light)' }}>
                 <Tabs
                   activeKey={activeTab}
                   onChange={(key) => {
@@ -1336,7 +1419,7 @@ const App: React.FC = () => {
                   items={
                     selectedModule === 0
                       ? [
-                          // 只显示"管理测试用例"页签
+                          // 只显示"管理测试用例"和"API调用配置"页签
                           {
                             key: 'manage',
                             label: '管理测试用例',
@@ -1367,12 +1450,28 @@ const App: React.FC = () => {
                                 onBatchMove={handleBatchMoveTestcase}
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
+                                onApiExecute={handleApiExecuteTestcase}
+                              />
+                            ),
+                          },
+                          {
+                            key: 'api-config',
+                            label: 'API调用配置',
+                            children: (
+                              <SessionApiConfig
+                                selectedSession={selectedSession}
+                                onConfigUpdated={() => {
+                                  // 配置更新后的回调
+                                  if (selectedSession) {
+                                    loadTestcases(selectedSession.id, filters);
+                                  }
+                                }}
                               />
                             ),
                           },
                         ]
                       : [
-                          // 显示两个页签
+                          // 显示三个页签
                           {
                             key: 'generate',
                             label: '生成测试用例',
@@ -1426,6 +1525,21 @@ const App: React.FC = () => {
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
                                 onApiExecute={handleApiExecuteTestcase}
+                              />
+                            ),
+                          },
+                          {
+                            key: 'api-config',
+                            label: 'API调用配置',
+                            children: (
+                              <SessionApiConfig
+                                selectedSession={selectedSession}
+                                onConfigUpdated={() => {
+                                  // 配置更新后的回调
+                                  if (selectedSession) {
+                                    loadTestcases(selectedSession.id, filters);
+                                  }
+                                }}
                               />
                             ),
                           },
@@ -1486,8 +1600,8 @@ const App: React.FC = () => {
             }}
             confirmLoading={loading}
           >
-            <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', marginBottom: '4px' }}>父模块：</label>
+            <div style={{ marginBottom: 'var(--space-3)' }}>
+              <label style={{ display: 'block', marginBottom: 'var(--space-1)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>父模块：</label>
               <Select
                 placeholder="请选择父模块（可选）"
                 value={newModuleParentId}
@@ -1505,7 +1619,7 @@ const App: React.FC = () => {
               </Select>
             </div>
             <div>
-              <label style={{ display: 'block', marginBottom: '4px' }}>模块名称：</label>
+              <label style={{ display: 'block', marginBottom: 'var(--space-1)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>模块名称：</label>
               <Input
                 placeholder="请输入模块名称"
                 value={newModuleName}
@@ -1522,8 +1636,8 @@ const App: React.FC = () => {
             onCancel={() => setIsEditModuleModalVisible(false)}
             confirmLoading={loading}
           >
-            <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', marginBottom: '4px' }}>父模块：</label>
+            <div style={{ marginBottom: 'var(--space-3)' }}>
+              <label style={{ display: 'block', marginBottom: 'var(--space-1)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>父模块：</label>
               <Select
                 placeholder="请选择父模块（可选）"
                 value={editModuleParentId}
@@ -1544,7 +1658,7 @@ const App: React.FC = () => {
               </Select>
             </div>
             <div>
-              <label style={{ display: 'block', marginBottom: '4px' }}>模块名称：</label>
+              <label style={{ display: 'block', marginBottom: 'var(--space-1)', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)' }}>模块名称：</label>
               <Input
                 placeholder="请输入模块名称"
                 value={editModuleName}
@@ -1566,7 +1680,7 @@ const App: React.FC = () => {
               value={editSessionName}
               onChange={(e) => setEditSessionName(e.target.value)}
               onPressEnter={handleEditSession}
-              style={{ marginBottom: '8px' }}
+              style={{ marginBottom: 'var(--space-2)' }}
             />
           </Modal>
 
@@ -1627,11 +1741,11 @@ const App: React.FC = () => {
         onCancel={() => setIsGlobalParamsModalVisible(false)}
         width={600}
       >
-        <div style={{ marginBottom: '16px' }}>
+        <div style={{ marginBottom: 'var(--space-4)' }}>
           {/* 环境选择和管理 */}
-          <div style={{ marginBottom: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 'bold' }}>环境管理</h3>
+          <div style={{ marginBottom: 'var(--space-5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+              <h3 style={{ margin: 0, fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-semibold)' }}>环境管理</h3>
               <Button
                 type="primary"
                 size="small"
@@ -1640,20 +1754,21 @@ const App: React.FC = () => {
                 添加环境
               </Button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
               {environments.map(env => (
                 <div
                   key={env.id}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    padding: '4px 12px',
-                    borderRadius: '16px',
-                    background: currentEnvironmentId === env.id ? '#1890ff' : '#f0f0f0',
-                    color: currentEnvironmentId === env.id ? '#fff' : '#333',
+                    padding: 'var(--space-1) var(--space-3)',
+                    borderRadius: 'var(--radius-full)',
+                    background: currentEnvironmentId === env.id ? 'var(--color-primary)' : 'var(--color-border-light)',
+                    color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-text)',
                     cursor: 'pointer',
-                    fontSize: '12px',
-                    gap: '4px'
+                    fontSize: 'var(--font-size-xs)',
+                    gap: 'var(--space-1)',
+                    transition: 'all 0.2s ease',
                   }}
                   onClick={() => handleSwitchEnvironment(env.id)}
                 >
@@ -1665,7 +1780,7 @@ const App: React.FC = () => {
                     type="text"
                     size="small"
                     icon={<EditOutlined />}
-                    style={{ color: currentEnvironmentId === env.id ? '#fff' : '#999', padding: 0, fontSize: '12px' }}
+                    style={{ color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-text-tertiary)', padding: 0, fontSize: 'var(--font-size-xs)' }}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleOpenEditEnvironment(env);
@@ -1687,7 +1802,7 @@ const App: React.FC = () => {
                     <Button
                       type="text"
                       size="small"
-                      style={{ color: currentEnvironmentId === env.id ? '#fff' : '#ff4d4f', padding: 0, fontSize: '14px' }}
+                      style={{ color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-danger)', padding: 0, fontSize: '14px' }}
                       onClick={(e) => e.stopPropagation()}
                     >
                       ×
@@ -1699,12 +1814,12 @@ const App: React.FC = () => {
           </div>
 
           {/* 当前环境的参数 */}
-          <p style={{ color: '#666', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
+          <p style={{ color: 'var(--color-text-secondary)', marginBottom: 'var(--space-3)', fontSize: 'var(--font-size-sm)' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
 
           {getCurrentEnvironment().parameters.map((param, index) => (
             <Space
               key={index}
-              style={{ width: '100%', marginBottom: '12px' }}
+              style={{ width: '100%', marginBottom: 'var(--space-3)' }}
               align="center"
             >
               <Input
@@ -1734,7 +1849,7 @@ const App: React.FC = () => {
             type="dashed"
             icon={<PlusOutlined />}
             onClick={handleAddEnvironmentParameter}
-            style={{ marginTop: '8px', width: '100%' }}
+            style={{ marginTop: 'var(--space-2)', width: '100%' }}
             size="middle"
           >
             添加全局参数
@@ -1754,9 +1869,9 @@ const App: React.FC = () => {
           placeholder="请输入环境名称"
           value={newEnvironmentName}
           onChange={(e) => setNewEnvironmentName(e.target.value)}
-          style={{ marginBottom: '16px' }}
+          style={{ marginBottom: 'var(--space-4)' }}
         />
-        <div style={{ color: '#999', fontSize: '12px' }}>
+        <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>
@@ -1774,9 +1889,9 @@ const App: React.FC = () => {
           value={editEnvironmentName}
           onChange={(e) => setEditEnvironmentName(e.target.value)}
           onPressEnter={handleConfirmEditEnvironment}
-          style={{ marginBottom: '16px' }}
+          style={{ marginBottom: 'var(--space-4)' }}
         />
-        <div style={{ color: '#999', fontSize: '12px' }}>
+        <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>

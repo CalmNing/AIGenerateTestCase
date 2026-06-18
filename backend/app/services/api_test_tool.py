@@ -1031,7 +1031,6 @@ async def generate_body_from_schema(
                 temperature=0,
                 api_key=SecretStr(api_key),
                 base_url=api_base_url or None,
-                openai_proxy=api_proxy_url or None,
                 max_retries=2,
             )
         response = await model.ainvoke(prompt)

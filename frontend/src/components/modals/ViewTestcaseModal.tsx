@@ -1,6 +1,6 @@
 import React from 'react';
-import { Modal, Button } from 'antd';
-import { CheckOutlined,UpOutlined,DownOutlined } from '@ant-design/icons';
+import { Modal, Button, Tag } from 'antd';
+import { CheckOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
 
 interface ViewTestcaseModalProps {
@@ -55,14 +55,15 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
         </Button>
       ]}
       width={800}
-      bodyStyle={{
-      height: '600px', // 内容区域固定高度
-      maxHeight: '80vh', // 适配小屏幕
-      overflowY: 'auto', // 纵向滚动
-      padding: '6px',
-      boxSizing: 'border-box',
-    }}
-
+      styles={{
+        body: {
+          height: '600px',
+          maxHeight: '80vh',
+          overflowY: 'auto',
+          padding: 'var(--space-4)',
+          boxSizing: 'border-box',
+        },
+      }}
     >
       {selectedTestcase && (
         <div>
@@ -74,24 +75,26 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
           </div>
           <div style={{ marginBottom: 12 }}>
             <h3>当前状态:
-              <span style={{ 
-                color: selectedTestcase.status === TestCaseStatus.PASSED ? 'green' : 
-                      selectedTestcase.status === TestCaseStatus.FAILED ? 'red' : 'orange',
-                fontWeight: 'bold'
-              }}>
-                {selectedTestcase.status === TestCaseStatus.PASSED ? ' 已通过' : 
-                 selectedTestcase.status === TestCaseStatus.FAILED ? ' 未通过' : ' 未执行'}
-              </span>
+              <Tag
+                color={
+                  selectedTestcase.status === TestCaseStatus.PASSED ? 'success' :
+                  selectedTestcase.status === TestCaseStatus.FAILED ? 'error' : 'warning'
+                }
+                style={{ marginLeft: 8 }}
+              >
+                {selectedTestcase.status === TestCaseStatus.PASSED ? '已通过' :
+                 selectedTestcase.status === TestCaseStatus.FAILED ? '未通过' : '未执行'}
+              </Tag>
             </h3>
           </div>
            <div style={{ marginBottom: 12 }}>
             <h3>
               	Bug: {selectedTestcase.bug_id ? (
-                <a 
-                  href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${selectedTestcase.bug_id}`} 
+                <a
+                  href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${selectedTestcase.bug_id}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ color: '#1890ff' }}
+                  style={{ color: 'var(--color-primary)' }}
                 >
                   {selectedTestcase.bug_id}
                 </a>

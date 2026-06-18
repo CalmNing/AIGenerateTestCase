@@ -6,6 +6,7 @@ from typing import List, Optional
 from pydantic import field_validator, model_validator
 from sqlmodel import Field, SQLModel, Relationship
 from pydantic.config import ConfigDict
+from sqlalchemy.dialects.sqlite import JSON
 
 cn_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
 
@@ -62,13 +63,11 @@ class Session(BaseModel, table=True):
     """会话数据模型"""
     name: str
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+    api_config: Optional[dict] = Field(default=None, sa_type=JSON, description="会话级API调用配置（headers、environment_id等）")
     # 定义与测试用例的一对多关系
     test_cases: List["TestCase"] = Relationship(back_populates="session")
     # 定义与模块的一对多关系
     modules: List["Module"] = Relationship(back_populates="session")
-
-
-from sqlalchemy.dialects.sqlite import JSON
 
 
 class TestCase(BaseModel, table=True):

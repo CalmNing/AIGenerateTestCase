@@ -6,6 +6,20 @@ import { Session, TestCase, TestCaseStatus } from '../types';
 const { Sider } = Layout;
 const { Title } = Typography;
 
+// 覆盖 Menu 样式，让会话名称可以完整显示
+const sessionMenuStyles = `
+  .session-menu .ant-menu-item {
+    height: auto !important;
+    line-height: normal !important;
+    padding-inline: 16px !important;
+  }
+  .session-menu .ant-menu-title-content {
+    flex: 1 !important;
+    min-width: 0 !important;
+    width: 0 !important;
+  }
+`;
+
 interface SessionSidebarProps {
   sessions: Session[];
   testcases: TestCase[];
@@ -36,13 +50,12 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   const menuItems = sessions.map(session => ({
     key: session.id,
     label: (
-      <Space>
+      <div style={{ display: 'flex', alignItems: 'center', width: '100%', minHeight: '40px' }}>
         <span style={{
-          fontSize: "16px",
-          lineHeight: "40px",
-          width: "130px",
-          height: "40px",
-          display: "block",     
+          fontSize: "var(--font-size-base)",
+          flex: 1,
+          minWidth: 0,
+          display: "block",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -98,23 +111,24 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
             style={{ marginLeft: 'auto' }}
           />
         </Popover>
-      </Space>
+      </div>
     ),
     icon: <MessageTwoTone />,
     onClick: () => onSelectSession(session)
   }));
 
   return (
-    <Sider width={240} style={{ background: '#fff', borderRight: '1px solid #f0f0f0', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #f0f0f0' }}>
-        <Title level={5} style={{ margin: 0 }}>会话管理</Title>
-        <div style={{ marginTop: '8px' }}>
+    <Sider width={240} style={{ background: 'var(--color-bg-elevated)', borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column' }}>
+      <style>{sessionMenuStyles}</style>
+      <div style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+        <Title level={5} style={{ margin: 0, fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-semibold)' }}>会话管理</Title>
+        <div style={{ marginTop: 'var(--space-2)' }}>
           <Input
             placeholder="输入会话名称"
             value={newSessionName}
             onChange={(e) => onNewSessionNameChange(e.target.value)}
             onPressEnter={onCreateSession}
-            style={{ marginBottom: '8px' }}
+            style={{ marginBottom: 'var(--space-2)' }}
           />
           <Button type="primary" block onClick={onCreateSession} icon={<PlusOutlined />}>
             创建会话
@@ -122,11 +136,14 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
         </div>
       </div>
       <Menu
+        className="session-menu"
         mode="vertical"
         style={{
           margin: '0',
           maxHeight: 'calc(100vh - 210px)',
           overflow: 'auto',
+          borderRight: 'none',
+          flex: 1,
         }}
         selectedKeys={selectedSession ? [String(selectedSession.id)] : []}
         items={menuItems}

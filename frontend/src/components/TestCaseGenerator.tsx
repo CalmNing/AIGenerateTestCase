@@ -91,7 +91,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
 
   const handleSmartMatch = async () => {
     if (!requirement.trim()) {
-      antMessage.warning('Please enter requirement text first');
+      antMessage.warning('请先输入需求文本');
       return;
     }
     setSmartMatching(true);
@@ -104,7 +104,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
       if (res.code === 200 && res.data?.matches) {
         const matchedIds = res.data.matches.map((m: any) => m.endpoint_id);
         if (matchedIds.length === 0) {
-          antMessage.info('No matching API endpoints found');
+          antMessage.info('未找到匹配的API接口');
           return;
         }
         if (onApiEndpointChange) onApiEndpointChange(matchedIds);
@@ -113,13 +113,13 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
           if (onApiProjectChange) onApiProjectChange(projId);
           if (!apiEndpoints.length) loadApiEndpoints(projId);
         }
-        antMessage.success('Smart matched ' + matchedIds.length + ' API endpoints');
+        antMessage.success('智能匹配到 ' + matchedIds.length + ' 个API接口');
       } else {
-        antMessage.info('No matching API endpoints found');
+        antMessage.info('未找到匹配的API接口');
       }
     } catch (e: any) {
       console.error('Smart match failed:', e);
-      antMessage.error('Smart match failed: ' + (e?.response?.data?.message || e.message));
+      antMessage.error('智能匹配失败: ' + (e?.response?.data?.message || e.message));
     } finally {
       setSmartMatching(false);
     }
@@ -133,30 +133,30 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   return (
     <div style={{ display: 'flex', height: '100%' }}>
       <div style={{ flex: 1, overflow: 'auto' }}>
-        <Card title='Generate Test Cases' variant='borderless'>
+        <Card title='生成测试用例' variant='borderless'>
           {!selectedSession ? (
             <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <Text type='secondary'>Please select or create a session first</Text>
+              <Text type='secondary'>请先选择或创建会话</Text>
             </div>
           ) : (
             <div>
               <div style={{ marginBottom: '16px' }}>
-                <Text strong>Session:</Text> <Text>{selectedSession.name}</Text>
+                <Text strong>会话:</Text> <Text>{selectedSession.name}</Text>
               </div>
               {!selectedModule ? (
                 <div style={{ marginBottom: '16px' }}>
-                  <Text strong>Module:</Text> <Text>None</Text>
+                  <Text strong>模块:</Text> <Text>无</Text>
                 </div>
               ) : (
                 <div style={{ marginBottom: '16px' }}>
-                  <Text strong>Module:</Text> <Text>{modules.find(m => m.id === selectedModule)?.module_name || 'None'}</Text>
+                  <Text strong>模块:</Text> <Text>{modules.find(m => m.id === selectedModule)?.module_name || '无'}</Text>
                 </div>
               )}
 
               <div style={{ marginBottom: 16, padding: 12, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fafafa'}}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text strong>Link API Endpoints:</Text>
-                  <Tooltip title='Auto-match API endpoints by requirement text'>
+                  <Text strong>关联API接口:</Text>
+                  <Tooltip title='根据需求文本自动匹配API接口'>
                     <Button
                       size='small'
                       icon={<ThunderboltOutlined />}
@@ -164,14 +164,14 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                       loading={smartMatching}
                       disabled={!requirement.trim()}
                     >
-                      {' '}Smart Match
+                      {' '}智能匹配
                     </Button>
                   </Tooltip>
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                   <Select
                     style={{ flex: 1 }}
-                    placeholder='Select API project'
+                    placeholder='选择API项目'
                     allowClear
                     value={selectedApiProjectId}
                     onChange={handleProjectChange}
@@ -180,14 +180,14 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                   <Select
                     mode='multiple'
                     style={{ flex: 2 }}
-                    placeholder='Select endpoints (multi)'
+                    placeholder='选择接口（可多选）'
                     value={selectedApiEndpointId || []}
                     onChange={handleEndpointChange}
                     options={apiEndpoints.map(e => ({
                       label: endpointLabel(e),
                       value: e.id,
                     }))}
-                    notFoundContent={loadingApis ? <Spin size='small' /> : 'No API endpoints'}
+                    notFoundContent={loadingApis ? <Spin size='small' /> : '暂无API接口'}
                     loading={loadingApis}
                     maxTagCount={3}
                     maxTagTextLength={20}
@@ -205,17 +205,17 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                   />
                 </div>
                 <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                  AI will inject endpoint schemas into the prompt and generate executable api_call steps
+                  AI 会将接口 Schema 注入提示词，生成可执行的 api_call 测试步骤
                 </div>
               </div>
 
               <div style={{ marginBottom: '16px' }}>
-                <Text strong>Requirement:</Text>
+                <Text strong>需求描述:</Text>
                 <div style={{ marginTop: '8px' }}>
                   <Input.TextArea
                     ref={textAreaRef}
                     rows={14}
-                    placeholder='Describe your requirements... Linked API endpoints will be used as reference for generating test steps with executable api_call blocks.'
+                    placeholder='请输入需求描述... 已关联的 API 接口将作为参考，生成包含可执行 api_call 步骤的测试用例。'
                     value={requirement}
                     onChange={(e) => onRequirementChange(e.target.value)}
                     style={{
@@ -236,7 +236,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 block
                 style={{ borderRadius: '8px', fontSize: '16px', height: '48px' }}
               >
-                AI Generate Test Cases
+                AI 生成测试用例
               </Button>
             </div>
           )}

@@ -68,6 +68,9 @@ export const sessionApi = {
   // 获取所有会话
   getSessions: (): Promise<ApiResponse<Session[]>> => api.get('/sessions/'),
 
+  // 获取单个会话
+  getSession: (id: number): Promise<ApiResponse<Session>> => api.get(`/sessions/${id}`),
+
   // 创建会话
   createSession: (name: string): Promise<ApiResponse<Session>> => api.post('/sessions/', { name }),
 

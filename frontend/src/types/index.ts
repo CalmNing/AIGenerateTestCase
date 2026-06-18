@@ -46,6 +46,10 @@ export interface TestCaseResponse {
 // 更新会话请求类型
 export interface UpdateSessionRequest {
   name: string;
+  api_config?: {
+    headers?: Array<{ key: string; value: string }>;
+    environment_id?: number;
+  } | null;
 }
 
 // API响应类型

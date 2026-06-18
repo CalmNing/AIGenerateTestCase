@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Table, Space, Button, PaginationProps, TableProps, message, Modal } from 'antd';
+import { Table, Space, Button, PaginationProps, TableProps, message, Modal, Tag, Tooltip } from 'antd';
+import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, DeleteOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../types';
 
 interface TestCaseTableProps {
@@ -70,29 +71,18 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 70,
+      width: 80,
       align: 'center' as 'center' | 'left' | 'right',
       render: (status: TestCaseStatus) => {
-        let statusText = '';
-        let statusColor = '';
-
         switch (status) {
           case TestCaseStatus.PASSED:
-            statusText = '已通过';
-            statusColor = 'green';
-            break;
+            return <Tag color="success" style={{ margin: 0 }}>已通过</Tag>;
           case TestCaseStatus.FAILED:
-            statusText = '未通过';
-            statusColor = 'red';
-            break;
+            return <Tag color="error" style={{ margin: 0 }}>未通过</Tag>;
           case TestCaseStatus.NOT_RUN:
           default:
-            statusText = '未执行';
-            statusColor = 'orange';
-            break;
+            return <Tag color="warning" style={{ margin: 0 }}>未执行</Tag>;
         }
-
-        return <span style={{ color: statusColor, display: 'inline-block', width: '100%', textAlign: 'center' }}>{statusText}</span>;
       },
     },
     {
@@ -119,39 +109,71 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
               href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: '#1890ff', display: 'inline-block', width: '100%', textAlign: 'center' }}
+              style={{ color: 'var(--color-primary)', display: 'inline-block', width: '100%', textAlign: 'center' }}
             >
               {`${bugId}`}
             </a>
           );
         } else {
-          return <span style={{ color: '#bfbfbf', display: 'inline-block', width: '100%', textAlign: 'center' }}>无</span>;
+          return <span style={{ color: 'var(--color-text-disabled)', display: 'inline-block', width: '100%', textAlign: 'center' }}>无</span>;
         }
       },
     },
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 180,
       align: 'center' as 'center' | 'left' | 'right',
       render: (_: any, record: TestCase) => (
         <div style={{ textAlign: 'center' }}>
-          <Space size='small'>
-            <Button size='small' type="link" onClick={() => onView(record)}>查看</Button>
-            <Button size='small' type="link" onClick={() => onEdit(record)}>编辑</Button>
-            <Button
-              size='small'
-              type="link"
-              style={{ color: '#46ac65' }}
-              // icon={<CheckOutlined />}
-              onClick={() => onComplete(record)}
-            // disabled={record.status === TestCaseStatus.PASSED}
-            >
-              执行
-            </Button>
+          <Space size={4}>
+            <Tooltip title="查看">
+              <Button
+                size="small"
+                type="text"
+                icon={<EyeOutlined />}
+                onClick={() => onView(record)}
+                style={{ color: 'var(--color-text-secondary)' }}
+              />
+            </Tooltip>
+            <Tooltip title="编辑">
+              <Button
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                onClick={() => onEdit(record)}
+                style={{ color: 'var(--color-text-secondary)' }}
+              />
+            </Tooltip>
+            <Tooltip title="执行">
+              <Button
+                size="small"
+                type="text"
+                icon={<CheckCircleOutlined />}
+                onClick={() => onComplete(record)}
+                style={{ color: 'var(--color-success)' }}
+              />
+            </Tooltip>
             {onApiExecute && record.api_endpoint_id && (
-              <Button size="small" type="link" style={{ color: "#722ed1" }} onClick={() => onApiExecute(record)}>API ??</Button>)}
-            <Button size='small' type="link" onClick={() => onMove(record)}>移动</Button>
+              <Tooltip title="API 执行">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<ApiOutlined />}
+                  onClick={() => onApiExecute(record)}
+                  style={{ color: 'var(--color-primary)' }}
+                />
+              </Tooltip>
+            )}
+            <Tooltip title="移动">
+              <Button
+                size="small"
+                type="text"
+                icon={<DragOutlined />}
+                onClick={() => onMove(record)}
+                style={{ color: 'var(--color-text-secondary)' }}
+              />
+            </Tooltip>
           </Space>
         </div>
       ),
@@ -236,7 +258,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
         okType="danger"
       >
         <p>您确定要删除选中的 {selectedRowKeys.length} 个测试用例吗？</p>
-        <p style={{ color: '#ff4d4f' }}>此操作不可恢复，请谨慎操作！</p>
+        <p style={{ color: 'var(--color-danger)' }}>此操作不可恢复，请谨慎操作！</p>
       </Modal>
     </>
   );

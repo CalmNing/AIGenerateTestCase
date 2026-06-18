@@ -9,7 +9,7 @@ from sqlmodel import select, desc, func
 
 from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
-from db.models import TestCase, StatusValue, McpServer
+from db.models import Session, TestCase, StatusValue, McpServer
 from utils.base_response import Response
 import traceback
 from app.services.api_test_tool import run_endpoint
@@ -461,9 +461,12 @@ async def execute_testcase(
     if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="关联的 API 项目不存在")
 
-    # ??? steps ??? api_call ??? overrides
-    # ?? steps ?? api_call ????? overrides
+    # 从 steps 中提取 api_call 配置作为 overrides
+    # 如果测试用例没有自己的 api_call 配置，则使用会话级别的配置
     overrides = {}
+    has_testcase_api_config = False
+
+    # 首先检查测试用例自己的 api_call 配置
     for step in testcase.steps:
         if isinstance(step, dict) and step.get("type") == "api_call":
             overrides = {
@@ -474,8 +477,19 @@ async def execute_testcase(
                 "environment_id": step.get("environment_id"),
                 "base_url": step.get("base_url"),
             }
+            has_testcase_api_config = True
             # 只取第一个 api_call 配置
             break
+
+    # 如果测试用例没有自己的配置，使用会话级别的配置
+    if not has_testcase_api_config:
+        session_db = session.get(Session, session_id)
+        if session_db and session_db.api_config:
+            api_config = session_db.api_config
+            overrides = {
+                "headers": api_config.get("headers"),
+                "environment_id": api_config.get("environment_id"),
+            }
 
     try:
         result = await run_endpoint(session, project, endpoint, overrides)

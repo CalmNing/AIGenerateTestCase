@@ -1,5 +1,4 @@
-﻿version: '3.8'
-services:
+﻿services:
   backend:
     build: ./backend
     container_name: backend
@@ -18,7 +17,7 @@ services:
       - TZ=Asia/Shanghai
       - KEYCLOAK_SERVER_URL=http://keycloak:8080
       # - KEYCLOAK_EXTERNAL_URL=http://192.168.13.110:8090
-      - KEYCLOAK_EXTERNAL_URL=http://192.168.13.111:8090
+      - KEYCLOAK_EXTERNAL_URL=http://keycloak:8090
       - KEYCLOAK_REALM=ai-testcase
       - KEYCLOAK_CLIENT_ID=backend
       - KEYCLOAK_ADMIN_URL=http://keycloak:8080
@@ -30,7 +29,7 @@ services:
       - KEYCLOAK_SYNC_RETRIES=6
       - KEYCLOAK_SYNC_RETRY_DELAY=5
       # - CORS_ORIGINS=http://localhost:5173,http://192.168.13.110:8001
-      - CORS_ORIGINS=http://192.168.13.111:5173,http://192.168.13.111:8001
+      - CORS_ORIGINS=http://192.168.13.111:5173,http://192.168.13.111:8001,http://localhost:8001
       - npm_config_cache=/root/.npm
       - NO_UPDATE_NOTIFIER=1
 
@@ -75,7 +74,8 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       # KC_HOSTNAME: 192.168.13.110
-      KC_HOSTNAME: 192.168.13.111
+#      KC_HOSTNAME: 192.168.13.111
+      KC_HOSTNAME: localhost
 #      KC_HOSTNAME_PORT: 8090
 #      KC_HOSTNAME_STRICT: "false"
 #      KC_HOSTNAME_STRICT_HTTPS: "false"
@@ -98,33 +98,33 @@ services:
       retries: 3
       start_period: 60s
 
-  lanhu-mcp:
-    build:
-      context: ./lanhu-mcp
-      dockerfile: Dockerfile
-    container_name: lanhu-mcp
-    restart: unless-stopped
-    ports:
-      - "8002:8000"
-    volumes:
-      - lanhu_mcp_data:/app/data
-      - lanhu_mcp_logs:/app/logs
-    env_file:
-      - ./lanhu-mcp/.env
-    environment:
-      - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=8000
-      - TZ=Asia/Shanghai
-    networks:
-      - app-network
+#  lanhu-mcp:
+#    build:
+#      context: ./lanhu-mcp
+#      dockerfile: Dockerfile
+#    container_name: lanhu-mcp
+#    restart: unless-stopped
+#    ports:
+#      - "8002:8000"
+#    volumes:
+#      - lanhu_mcp_data:/app/data
+#      - lanhu_mcp_logs:/app/logs
+#    env_file:
+#      - ./lanhu-mcp/.env
+#    environment:
+#      - SERVER_HOST=0.0.0.0
+#      - SERVER_PORT=8000
+#      - TZ=Asia/Shanghai
+#    networks:
+#      - app-network
 
 volumes:
   backend_data:
   npm_cache:
   uv_cache:
   postgres_data:
-  lanhu_mcp_data:
-  lanhu_mcp_logs:
+#  lanhu_mcp_data:
+#  lanhu_mcp_logs:
 
 networks:
   app-network:
