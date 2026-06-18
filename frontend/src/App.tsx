@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
@@ -719,27 +719,27 @@ const App: React.FC = () => {
 
   // 打开批量移动测试用例对话框
 
-  // ??????? API ??
+  // 执行测试用例 API 执行
   const handleApiExecuteTestcase = async (testcase: TestCase) => {
     if (!selectedSession) return;
     // Set executing state in the table through a callback approach
-    notification.info({ message: '????...', description: `????????: ${testcase.case_name}`, placement: 'topRight' });
+    notification.info({ message: '正在执行...', description: `正在执行测试用例: ${testcase.case_name}`, placement: 'topRight' });
     try {
       const res = await testcaseApi.executeTestcase(selectedSession.id, testcase.id);
       if (res.code === 200 && res.data) {
         const result = res.data;
         if (result.passed) {
-          notification.success({ message: '????', description: `???? ${testcase.case_name} ????`, placement: 'topRight' });
+          notification.success({ message: '执行成功', description: `测试用例 ${testcase.case_name} 已执行通过`, placement: 'topRight' });
         } else {
-          notification.error({ message: '?????', description: `???? ${testcase.case_name} ???????????????`, placement: 'topRight' });
+          notification.error({ message: '执行失败', description: `测试用例 ${testcase.case_name} 执行未通过，请查看详细信息`, placement: 'topRight' });
         }
-        // ????????
+        // 重新加载测试用例
         loadTestcases(selectedSession.id, filters);
       } else {
-        notification.error({ message: '????', description: res.message || '????', placement: 'topRight' });
+        notification.error({ message: '执行失败', description: res.message || '执行失败', placement: 'topRight' });
       }
     } catch (error: any) {
-      notification.error({ message: '????', description: error?.response?.data?.message || error.message || '????', placement: 'topRight' });
+      notification.error({ message: '执行失败', description: error?.response?.data?.message || error.message || '执行失败', placement: 'topRight' });
     }
   };
   const handleBatchMoveTestcase = (ids: number[]) => {
@@ -783,7 +783,7 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
-  const [selectedApiEndpointId, setSelectedApiEndpointId] = useState<number | null>(null);
+  const [selectedApiEndpointId, setSelectedApiEndpointId] = useState<number[]>([]);
   const [selectedApiProjectId, setSelectedApiProjectId] = useState<number | null>(null);
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
@@ -942,7 +942,7 @@ const App: React.FC = () => {
           imageBase64, // 传递图片base64数据
           selectedModule === 0 ? undefined : Number(selectedModule), // 传递模块ID
           selectedSkills.length > 0 ? selectedSkills : undefined,
-          selectedApiEndpointId,
+          selectedApiEndpointId.length > 0 ? selectedApiEndpointId : undefined,
           selectedApiProjectId
         );
         console.log('生成测试用例API响应:', response);
@@ -1389,7 +1389,7 @@ const App: React.FC = () => {
                                 // onImageChange={setImageBase64}
                                 historyPromptRefreshKey={historyPromptRefreshKey}
                                 selectedApiEndpointId={selectedApiEndpointId}
-                                onApiEndpointChange={setSelectedApiEndpointId}
+                                onApiEndpointChange={(ids: number[]) => setSelectedApiEndpointId(ids)}
                                 selectedApiProjectId={selectedApiProjectId}
                                 onApiProjectChange={setSelectedApiProjectId}
                               />
@@ -1785,3 +1785,6 @@ const App: React.FC = () => {
 };
 
 export default App;
+
+
+

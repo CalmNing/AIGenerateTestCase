@@ -102,7 +102,7 @@ export const testcaseApi = {
   }, imageBase64?: string | null,
     moduleId?: number | null,
     selectedSkills?: string[],
-    apiEndpointId?: number | null,
+    apiEndpointId?: number[] | number | null,
     apiProjectId?: number | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
@@ -180,6 +180,17 @@ export const testcaseApi = {
 
     // 发送请求，axios会自动设置正确的Content-Type头
     // 包括multipart/form-data和边界信息
+    // ?????API??ID?????????ID?
+    if (apiEndpointId !== null && apiEndpointId !== undefined) {
+      const endpointStr = Array.isArray(apiEndpointId) ? apiEndpointId.join(",") : String(apiEndpointId);
+      if (endpointStr) {
+        formData.append("api_endpoint_id", endpointStr);
+      }
+    }
+    if (apiProjectId !== null && apiProjectId !== undefined) {
+      formData.append("api_project_id", String(apiProjectId));
+    }
+
     return api.post(`/testcases/${sessionId}/testcases`, formData);
   },
 
@@ -392,5 +403,7 @@ export const apiTestApi = {
   deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
   getScenarioResults: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
     api.get(`/api-test/scenarios/${scenarioId}/results`),
-  runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`)
+  runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`),
+  matchEndpoint: (data: { requirement: string; project_id?: number }): Promise<ApiResponse<{ matches: any[]; total_matches: number }>> =>
+    api.post("/api-test/match-endpoint", data),
 };

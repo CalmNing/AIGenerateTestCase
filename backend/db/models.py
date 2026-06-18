@@ -83,8 +83,8 @@ class TestCase(BaseModel, table=True):
     bug_id: Optional[int] = Field(default=None)
     module_id: Optional[int] = Field(default=None)
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
-    api_endpoint_id: Optional[int] = Field(default=None, description="??? API Endpoint ID???????")
-    api_project_id: Optional[int] = Field(default=None, description="??? API Project ID")
+    api_endpoint_id: Optional[int] = Field(default=None, description="关联的 API Endpoint ID（逗号分隔）")
+    api_project_id: Optional[int] = Field(default=None, description="关联的 API Project ID")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
