@@ -79,32 +79,110 @@
           ]
         }
       },
-      { "name": "testcase:read", "description": "Auto-managed permission role" },
-      { "name": "testcase:create", "description": "Auto-managed permission role" },
-      { "name": "testcase:update", "description": "Auto-managed permission role" },
-      { "name": "testcase:delete", "description": "Auto-managed permission role" },
-      { "name": "testcase:generate", "description": "Auto-managed permission role" },
-      { "name": "session:read", "description": "Auto-managed permission role" },
-      { "name": "session:create", "description": "Auto-managed permission role" },
-      { "name": "session:update", "description": "Auto-managed permission role" },
-      { "name": "session:delete", "description": "Auto-managed permission role" },
-      { "name": "module:read", "description": "Auto-managed permission role" },
-      { "name": "module:create", "description": "Auto-managed permission role" },
-      { "name": "module:update", "description": "Auto-managed permission role" },
-      { "name": "module:delete", "description": "Auto-managed permission role" },
-      { "name": "iot:read", "description": "Auto-managed permission role" },
-      { "name": "iot:create", "description": "Auto-managed permission role" },
-      { "name": "iot:update", "description": "Auto-managed permission role" },
-      { "name": "iot:delete", "description": "Auto-managed permission role" },
-      { "name": "iot:execute", "description": "Auto-managed permission role" },
-      { "name": "config:manage", "description": "Auto-managed permission role" },
-      { "name": "mcp:manage", "description": "Auto-managed permission role" },
-      { "name": "skills:manage", "description": "Auto-managed permission role" },
-      { "name": "global_parameter:manage", "description": "Auto-managed permission role" },
-      { "name": "scheduled_task:manage", "description": "Auto-managed permission role" },
-      { "name": "mock:manage", "description": "Auto-managed permission role" },
-      { "name": "mock_log:read", "description": "Auto-managed permission role" },
-      { "name": "mock_log:delete", "description": "Auto-managed permission role" }
+      {
+        "name": "testcase:read",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "testcase:create",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "testcase:update",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "testcase:delete",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "testcase:generate",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "session:read",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "session:create",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "session:update",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "session:delete",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "module:read",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "module:create",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "module:update",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "module:delete",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "iot:read",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "iot:create",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "iot:update",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "iot:delete",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "iot:execute",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "config:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "mcp:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "skills:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "global_parameter:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "scheduled_task:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "mock:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "mock_log:read",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "mock_log:delete",
+        "description": "Auto-managed permission role"
+      }
     ]
   },
   "clients": [
@@ -118,7 +196,11 @@
         "http://localhost:5173/*",
         "http://localhost:8001/*",
         "http://192.168.13.110:8001/*",
-        "http://192.168.13.111:8001/*"
+        "http://192.168.13.111:8001/*",
+        "http://localhost:5173",
+        "http://localhost:8001",
+        "http://192.168.13.110:8001",
+        "http://192.168.13.111:8001"
       ],
       "webOrigins": [
         "http://localhost:5173",
