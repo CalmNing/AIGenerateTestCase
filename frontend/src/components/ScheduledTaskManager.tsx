@@ -382,7 +382,7 @@ const ScheduledTaskManager: React.FC = () => {
             type="text"
             onClick={() => handleRunTask(record.id)}
             size="small"
-            style={{ textDecoration: 'underline', color: '#1890ff' }}
+            style={{ color: 'var(--color-primary)' }}
           >
             执行
           </Button>
@@ -390,7 +390,7 @@ const ScheduledTaskManager: React.FC = () => {
             type="text"
             onClick={() => handleToggleTask(record)}
             size="small"
-            style={{ textDecoration: 'underline', color: record.enabled ? '#ff4d4f' : '#52c41a' }}
+            style={{ color: record.enabled ? 'var(--color-danger)' : 'var(--color-success)' }}
           >
             {record.enabled ? '禁用' : '启用'}
           </Button>
@@ -398,7 +398,7 @@ const ScheduledTaskManager: React.FC = () => {
             type="text"
             onClick={() => handleViewLog(record)}
             size="small"
-            style={{ textDecoration: 'underline', color: '#1890ff' }}
+            style={{ color: 'var(--color-primary)' }}
           >
             日志
           </Button>
@@ -406,7 +406,7 @@ const ScheduledTaskManager: React.FC = () => {
             type="text"
             onClick={() => handleOpenEdit(record)}
             size="small"
-            style={{ textDecoration: 'underline', color: '#1890ff' }}
+            style={{ color: 'var(--color-primary)' }}
           >
             编辑
           </Button>
@@ -414,7 +414,7 @@ const ScheduledTaskManager: React.FC = () => {
             type="text"
             onClick={() => handleCopyTask(record)}
             size="small"
-            style={{ textDecoration: 'underline', color: '#1890ff' }}
+            style={{ color: 'var(--color-primary)' }}
           >
             复制
           </Button>
@@ -427,7 +427,7 @@ const ScheduledTaskManager: React.FC = () => {
             <Button
               type="text"
               size="small"
-              style={{ textDecoration: 'underline', color: '#ff4d4f' }}
+              danger
             >
               删除
             </Button>
@@ -442,15 +442,18 @@ const ScheduledTaskManager: React.FC = () => {
     <div style={{ height: 'calc(100vh - 100px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <Card title="定时任务管理" bordered={false} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         bodyStyle={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 16, overflow: 'hidden' }}>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreate}>创建定时任务</Button>
+        <div className="filter-bar">
+          <label>任务名称</label>
           <Input.Search
             placeholder="搜索任务名称..."
             allowClear
-            style={{ width: 300 }}
+            size="small"
+            style={{ width: 220 }}
             onChange={(e) => setSearchTask(e.target.value)}
             onSearch={(val) => setSearchTask(val)}
           />
+          <div style={{ flex: 1 }} />
+          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleOpenCreate}>创建定时任务</Button>
         </div>
 
         <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -459,9 +462,13 @@ const ScheduledTaskManager: React.FC = () => {
             dataSource={tasks.filter(t => !searchTask || t.name.toLowerCase().includes(searchTask.toLowerCase()))}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 10 }}
-            // size="small"
-            scroll={{ y: 'calc(100vh - 240px)' }}
+            size="small"
+            pagination={{
+              pageSize: 10,
+              size: 'small',
+              showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
+            }}
+            scroll={{ y: 'calc(100vh - 260px)' }}
           />
         </div>
 
@@ -495,24 +502,24 @@ const ScheduledTaskManager: React.FC = () => {
                 </Descriptions>
 
                 {entry.request && (
-                  <div style={{ marginTop: 16, borderRadius: 6, border: '1px solid #e8e8e8', padding: 12, backgroundColor: '#f9f9f9' }}>
-                    <Text strong style={{ fontSize: '14px', color: '#333' }}>请求详情</Text>
+                  <div className="sub-platform-detail-block">
+                    <Text strong style={{ fontSize: '14px', color: 'var(--color-text)' }}>请求详情</Text>
                     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>方法:</Text>
+                        <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>方法:</Text>
                         <Text style={{ flex: 1, fontSize: '13px' }}>{entry.request.method}</Text>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>URL:</Text>
+                        <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>URL:</Text>
                         <Text style={{ flex: 1, fontSize: '13px', wordBreak: 'break-all' }}>{entry.request.url}</Text>
                       </div>
                       {entry.request.headers && Object.keys(entry.request.headers).length > 0 && (
                         <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>Headers:</Text>
+                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>Headers:</Text>
                           <div style={{ flex: 1, fontSize: '12px' }}>
                             {Object.entries(entry.request.headers).map(([key, value], idx) => (
-                              <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid #f0f0f0' }}>
-                                <Text style={{ color: '#888' }}>{key}:</Text> <Text>{String(value)}</Text>
+                              <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+                                <Text style={{ color: 'var(--color-text-tertiary)' }}>{key}:</Text> <Text>{String(value)}</Text>
                               </div>
                             ))}
                           </div>
@@ -520,11 +527,11 @@ const ScheduledTaskManager: React.FC = () => {
                       )}
                       {entry.request.params && Object.keys(entry.request.params).length > 0 && (
                         <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>Params:</Text>
+                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>Params:</Text>
                           <div style={{ flex: 1, fontSize: '12px' }}>
                             {Object.entries(entry.request.params).map(([key, value], idx) => (
-                              <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid #f0f0f0' }}>
-                                <Text style={{ color: '#888' }}>{key}:</Text> <Text>{String(value)}</Text>
+                              <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+                                <Text style={{ color: 'var(--color-text-tertiary)' }}>{key}:</Text> <Text>{String(value)}</Text>
                               </div>
                             ))}
                           </div>
@@ -532,8 +539,8 @@ const ScheduledTaskManager: React.FC = () => {
                       )}
                       {entry.request.body && (
                         <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>Body:</Text>
-                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: '#f0f0f0', padding: 8, borderRadius: 4, border: '1px solid #e0e0e0' }}>
+                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>Body:</Text>
+                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: 'var(--color-border-light)', padding: 8, borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
                             {typeof entry.request.body === 'object' ? JSON.stringify(entry.request.body, null, 2) : entry.request.body}
                           </div>
                         </div>
@@ -543,17 +550,17 @@ const ScheduledTaskManager: React.FC = () => {
                 )}
 
                 {entry.response && (
-                  <div style={{ marginTop: 16, borderRadius: 6, border: '1px solid #b7eb8f', padding: 12, backgroundColor: '#f6ffed' }}>
-                    <Text strong style={{ fontSize: '14px', color: '#333' }}>响应详情</Text>
+                  <div className="sub-platform-detail-block sub-platform-detail-block-success">
+                    <Text strong style={{ fontSize: '14px', color: 'var(--color-text)' }}>响应详情</Text>
                     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500 }}>状态码:</Text>
+                        <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>状态码:</Text>
                         <Text style={{ fontSize: '13px' }}>{entry.response.status_code}</Text>
                       </div>
                       {entry.response.body !== undefined && entry.response.body !== null && (
                         <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: '#666', fontSize: '13px', fontWeight: 500, flexShrink: 0 }}>响应体:</Text>
-                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: '#f0f0f0', padding: 8, borderRadius: 4, border: '1px solid #e0e0e0', maxHeight: 300, overflow: 'auto' }}>
+                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500, flexShrink: 0 }}>响应体:</Text>
+                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: 'var(--color-border-light)', padding: 8, borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', maxHeight: 300, overflow: 'auto' }}>
                             <Paragraph style={{ margin: 0, fontSize: '12px', whiteSpace: 'pre-wrap' }}>
                               {typeof entry.response.body === 'object'
                                 ? JSON.stringify(entry.response.body, null, 2)
@@ -567,12 +574,12 @@ const ScheduledTaskManager: React.FC = () => {
                 )}
 
                 {entry.extracted && Object.keys(entry.extracted).length > 0 && (
-                  <div style={{ marginTop: 16, borderRadius: 6, border: '1px solid #e8e8e8', padding: 12, backgroundColor: '#f9f9f9' }}>
-                    <Text strong style={{ fontSize: '14px', color: '#333' }}>提取的变量</Text>
+                  <div className="sub-platform-detail-block">
+                    <Text strong style={{ fontSize: '14px', color: 'var(--color-text)' }}>提取的变量</Text>
                     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {Object.entries(entry.extracted).map(([key, value], idx) => (
-                        <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', padding: '2px 0', borderBottom: '1px solid #f0f0f0' }}>
-                          <Text style={{ width: 120, color: '#666', fontSize: '13px', fontWeight: 500 }}>{key}:</Text>
+                        <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', padding: '2px 0', borderBottom: '1px solid var(--color-border-light)' }}>
+                          <Text style={{ width: 120, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>{key}:</Text>
                           <Text style={{ flex: 1, fontSize: '13px' }}>{String(value)}</Text>
                         </div>
                       ))}
@@ -581,10 +588,10 @@ const ScheduledTaskManager: React.FC = () => {
                 )}
 
                 {entry.detail && (
-                  <div style={{ marginTop: 16, borderRadius: 6, border: '1px solid #ffccc7', padding: 12, backgroundColor: '#fff1f0' }}>
-                    <Text strong style={{ fontSize: '14px', color: '#cf1322' }}>错误详情</Text>
+                  <div className="sub-platform-detail-block sub-platform-detail-block-error">
+                    <Text strong style={{ fontSize: '14px', color: 'var(--color-danger)' }}>错误详情</Text>
                     <div style={{ marginTop: 8 }}>
-                      <Paragraph style={{ margin: 0, color: '#cf1322', fontSize: '13px' }}>{entry.detail}</Paragraph>
+                      <Paragraph style={{ margin: 0, color: 'var(--color-danger)', fontSize: '13px' }}>{entry.detail}</Paragraph>
                     </div>
                   </div>
                 )}
@@ -667,7 +674,7 @@ const ScheduledTaskManager: React.FC = () => {
                     };
 
                     return (
-                      <div key={requestId} style={{ display: 'flex', alignItems: 'center', marginBottom: 8, padding: 8, border: '1px solid #e8e8e8', borderRadius: 4, backgroundColor: '#f9f9f9' }}>
+                      <div key={requestId} style={{ display: 'flex', alignItems: 'center', marginBottom: 8, padding: 8, border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--color-bg)' }}>
                         <span style={{ marginRight: 12, fontWeight: 500, width: 24, textAlign: 'center' }}>{index + 1}</span>
                         <span style={{ flex: 1 }}>{request?.name || `请求 ${requestId}`}</span>
                         <Space size="small">

@@ -1,17 +1,16 @@
 import React from 'react';
-import { Card, Typography, Space, Button, Input, Select, notification, Switch } from 'antd';
-import { DownloadOutlined } from '@ant-design/icons';
+import { Card, Typography, Button, Input, Select, notification, Switch, Empty } from 'antd';
+import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../types';
 import TestCaseTable from './TestCaseTable';
-// 静态导入xlsx库
 import * as XLSX from 'xlsx';
 
 const { Text } = Typography;
 
 interface TestCaseManagerProps {
   selectedSession: Session | null;
-  modules: Module[]; // 模块列表
-  selectedModule: number|string; // 当前选中的模块
+  modules: Module[];
+  selectedModule: number | string;
   testcases: TestCase[];
   testcasesResponse: TestCaseResponse;
   filters?: TestCaseFilters;
@@ -27,6 +26,14 @@ interface TestCaseManagerProps {
   onApiExecute?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
 }
+
+const statItems = (resp: TestCaseResponse, filters?: TestCaseFilters) => [
+  { key: 'all', label: '全部', value: resp.totalNumber, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', active: !filters?.status && !filters?.exist_bug, status: undefined, exist_bug: false },
+  { key: 'passed', label: '已通过', value: resp.passed, color: 'var(--color-success)', bg: 'var(--color-success-bg)', active: filters?.status === TestCaseStatus.PASSED, status: TestCaseStatus.PASSED, exist_bug: false },
+  { key: 'not_run', label: '未执行', value: resp.not_run, color: 'var(--color-warning)', bg: 'var(--color-warning-bg)', active: filters?.status === TestCaseStatus.NOT_RUN, status: TestCaseStatus.NOT_RUN, exist_bug: false },
+  { key: 'failed', label: '未通过', value: resp.failed, color: 'var(--color-danger)', bg: 'var(--color-danger-bg)', active: filters?.status === TestCaseStatus.FAILED, status: TestCaseStatus.FAILED, exist_bug: false },
+  { key: 'bug', label: 'Bug', value: resp.totalBugs, color: 'var(--color-danger)', bg: 'var(--color-danger-bg)', active: !!filters?.exist_bug, status: undefined, exist_bug: true },
+];
 
 const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   selectedSession,
@@ -49,298 +56,148 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
 }) => {
   const handleExportExcel = () => {
     if (testcases.length === 0) {
-      notification.warning({
-        message: '导出失败',
-        description: '当前没有可导出的测试用例',
-        placement: 'topRight'
-      });
+      notification.warning({ message: '导出失败', description: '当前没有可导出的测试用例', placement: 'topRight' });
       return;
     }
-
     try {
-      // 准备导出数据
-      const exportData = testcases.map(tc => {
-        // 根据 module_id 查找模块名称
-        const moduleName = tc.module_id 
-          ? modules.find(m => m.id === tc.module_id)?.module_name || '未知模块'
-          : '未分配模块';
-        
-        return {
-          '模块名称': moduleName,
-          '用例名称': tc.case_name,
-          '用例级别': `P${tc.case_level}`,
-          '前置条件': tc.preset_conditions.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
-          '测试步骤': tc.steps.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
-          '预期结果': tc.expected_results.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
-          '状态': tc.status === TestCaseStatus.PASSED ? '已通过' :
-            tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
-          'bug': tc.bug_id ? `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}` : '',
-          // '创建时间': new Date(tc.created_at).toLocaleString(),
-        };
-      });
-
-      // 创建工作表
+      const exportData = testcases.map(tc => ({
+        '模块名称': tc.module_id ? modules.find(m => m.id === tc.module_id)?.module_name || '未知模块' : '未分配模块',
+        '用例名称': tc.case_name,
+        '用例级别': `P${tc.case_level}`,
+        '前置条件': tc.preset_conditions.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
+        '测试步骤': tc.steps.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
+        '预期结果': tc.expected_results.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
+        '状态': tc.status === TestCaseStatus.PASSED ? '已通过' : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
+        'bug': tc.bug_id ? `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}` : '',
+      }));
       const ws = XLSX.utils.json_to_sheet(exportData);
-
-      // 创建工作簿
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, '测试用例');
-
-      // 生成文件名
-      const fileName = `测试用例_${new Date().toISOString().slice(0, 10)}.xlsx`;
-
-      // 导出文件
-      XLSX.writeFile(wb, fileName);
-
-      // 显示成功通知
-      notification.success({
-        message: '导出成功',
-        description: `已导出 ${testcases.length} 条测试用例`,
-        placement: 'topRight'
-      });
+      XLSX.writeFile(wb, `测试用例_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      notification.success({ message: '导出成功', description: `已导出 ${testcases.length} 条测试用例`, placement: 'topRight' });
     } catch (error) {
       console.error('导出Excel失败:', error);
-      notification.error({
-        message: '导出失败',
-        description: '导出Excel时发生错误，请重试',
-        placement: 'topRight'
-      });
+      notification.error({ message: '导出失败', description: '导出Excel时发生错误，请重试', placement: 'topRight' });
     }
   };
 
+  const setFilter = (status: TestCaseStatus | undefined, exist_bug: boolean) => {
+    onFiltersChange({
+      case_name: '', bug_id: '', exist_bug, status,
+      module_id: selectedModule === 0 ? undefined : Number(selectedModule),
+    });
+  };
+
   return (
-    <Card variant="borderless">
+    <Card variant="borderless" styles={{ body: { padding: 0 } }}>
       {!selectedSession ? (
-        <div style={{ textAlign: 'center', padding: '20px 0' }}>
-          <Text type="secondary">请先从左侧选择一个会话</Text>
-        </div>
-      )
-        // : testcases.length === 0 ? (
-        //   <div style={{ textAlign: 'center', padding: '40px 0' }}>
-        //     <Text type="secondary">当前会话中没有测试用例，请先生成测试用例</Text>
-        //   </div>
-        // ) 
-        : (
-          <div style={{ display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
-            {/* 固定顶部区域：统计信息和操作按钮 */}
-            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, background: '#f5f5f5', borderRadius: 4 }}>
-              <Space size="large">
-                <div
-                  onClick={() => {
-                    const newFilters = {
-                      case_name: '',
-                      bug_id: '',
-                      exist_bug: false,
-                      status: undefined,
-                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                    };
-                    onFiltersChange(newFilters);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <Text strong>总用例数: </Text>
-                  <Text style={{ color: '#1890ff', fontWeight: 'bold' }}>{testcasesResponse.totalNumber}</Text>
-                </div>
-                <div
-                  onClick={() => {
-                    const newFilters = {
-                      case_name: '',
-                      bug_id: '',
-                      exist_bug: false,
-                      status: TestCaseStatus.PASSED,
-                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                    };
-                    onFiltersChange(newFilters);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <Text strong>已通过: </Text>
-                  <Text type="success" style={{ fontWeight: 'bold' }}>
-                    {testcasesResponse.passed}
-
-                  </Text>
-                </div>
-                {/* secondary | success | warning | danger */}
-                <div
-                  onClick={() => {
-                    const newFilters = {
-                      case_name: '',
-                      bug_id: '',
-                      exist_bug: false,
-                      status: TestCaseStatus.NOT_RUN,
-                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                    };
-                    onFiltersChange(newFilters);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                >
-
-                  <Text strong>未执行: </Text>
-                  <Text type="warning" style={{ fontWeight: 'bold' }}>
-                    {testcasesResponse.not_run}
-                  </Text>
-                </div>
-                <div
-                  onClick={() => {
-                    const newFilters = {
-                      case_name: '',
-                      bug_id: '',
-                      exist_bug: false,
-                      status: TestCaseStatus.FAILED,
-                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                    };
-                    onFiltersChange(newFilters);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <Text strong>未通过: </Text>
-                  <Text type="secondary" style={{ fontWeight: 'bold' }}>
-                    {testcasesResponse.failed}
-                  </Text>
-                </div>
-                <div
-                  onClick={() => {
-                    const newFilters = {
-                      case_name: '',
-                      bug_id: '',
-                      exist_bug: true,
-                      status: undefined,
-                      module_id: selectedModule === 0 ? undefined : Number(selectedModule)
-                    };
-                    onFiltersChange(newFilters);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <Text strong>Bug数量: </Text>
-                  <Text type="danger" style={{ fontWeight: 'bold' }}>
-                    {testcasesResponse.totalBugs}
-                  </Text>
-                </div>
-              </Space>
-
-              <Space size="middle">
-                <Button type="primary" onClick={onAdd}>
-                  新增测试用例
-                </Button>
-                <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportExcel}>
-                  导出Excel
-                </Button>
-              </Space>
-            </div>
-
-            {/* 筛选区域 */}
-            <div style={{ marginBottom: 16, padding: 12, background: '#f5f5f5', borderRadius: 4 }}>
-              <Space size="middle">
-                <label>用例名称: </label>
-                <Input
-                  placeholder="请输入用例名称"
-                  value={filters?.case_name ?? ''}
-                  onChange={(e) => {
-                    const newFilters = { ...filters, case_name: e.target.value };
-                    onFiltersChange(newFilters);
-                  }}
-                  onPressEnter={() => {
-                    if (selectedSession) {
-                      onLoadTestcases(selectedSession.id, filters);
-                    }
-                  }}
-                  style={{ width: 200 }}
-                />
-                <label>用例状态: </label>
-                <Select
-                  placeholder="用例状态"
-                  value={filters?.status ?? undefined}
-                  onChange={(value) => {
-                    const newFilters = { ...filters, status: value };
-                    onFiltersChange(newFilters);
-                  }}
-                  style={{ width: 120 }}
-                >
-                  <Select.Option value="">全部</Select.Option>
-                  <Select.Option value={TestCaseStatus.NOT_RUN}>未执行</Select.Option>
-                  <Select.Option value={TestCaseStatus.PASSED}>已通过</Select.Option>
-                  <Select.Option value={TestCaseStatus.FAILED}>未通过</Select.Option>
-                </Select>
-                <label>BugId: </label>
-                <Input
-                  placeholder="请输入BugId"
-                  value={filters?.bug_id ?? ''}
-                  onChange={(e) => {
-                    const newFilters = { ...filters, bug_id: e.target.value };
-                    onFiltersChange(newFilters);
-                  }}
-                  onPressEnter={() => {
-                    if (selectedSession) {
-                      onLoadTestcases(selectedSession.id, filters);
-                    }
-                  }}
-                  style={{ width: 200 }}
-                />
-                <label>只看bug: </label>
-                <Switch
-                  checked={filters?.exist_bug ?? false}
-                  onChange={(checked) => {
-                    const newFilters = { ...filters, exist_bug: checked };
-                    onFiltersChange(newFilters);
-                  }}
-                />
-                <Button
-                  type="primary"
-                  onClick={() => {
-                    if (selectedSession) {
-                      onLoadTestcases(selectedSession.id, filters);
-                      // notification.info({
-                      //   message: '筛选已应用',
-                      //   description: '测试用例列表已根据筛选条件更新',
-                      //   placement: 'topRight'
-                      // });
-                    }
-                  }}
-                >
-                  筛选
-                </Button>
-                <Button
-                  onClick={() => {
-                    const newFilters = {
-                      case_name: '',
-                      status: undefined,
-                      bug_id: '',
-                      exist_bug: false,
-                      module_id: filters?.module_id ?? undefined
-                    };
-                    onFiltersChange(newFilters);
-                    if (selectedSession) {
-                      onLoadTestcases(selectedSession.id, newFilters);
-                    }
-                    // notification.info({
-                    //   message: '筛选已重置',
-                    //   description: '所有筛选条件已重置',
-                    //   placement: 'topRight'
-                    // });
-                  }}>
-                  重置
-                </Button>
-              </Space>
-            </div>
-
-            {/* 表格容器 */}
-            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
-
-              <TestCaseTable
-                testcases={testcases}
-                onView={onView}
-                onEdit={onEdit}
-                onComplete={onComplete}
-                onDelete={onDelete}
-                onBatchDelete={onBatchDelete}
-                onMove={onMove}
-                onApiExecute={onApiExecute}
-                onBatchMove={onBatchMove}
-              />
-
-            </div>
+        <Empty
+          image={<FileTextOutlined style={{ fontSize: 48, color: 'var(--color-text-disabled)' }} />}
+          description="请先从左侧选择一个会话"
+          style={{ padding: '60px 0' }}
+        />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {/* Stats bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 12, padding: '6px 8px', background: 'var(--color-bg)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border-light)' }}>
+            {statItems(testcasesResponse, filters).map(item => (
+              <div
+                key={item.key}
+                onClick={() => setFilter(item.status, item.exist_bug)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 14px', borderRadius: 'var(--radius-md)',
+                  cursor: 'pointer', transition: 'all 180ms ease',
+                  background: item.active ? item.bg : 'transparent',
+                  color: item.active ? item.color : 'var(--color-text-secondary)',
+                  fontWeight: item.active ? 600 : 400,
+                  fontSize: 13,
+                }}
+                onMouseEnter={(e) => { if (!item.active) e.currentTarget.style.background = 'rgba(0,0,0,0.03)'; }}
+                onMouseLeave={(e) => { if (!item.active) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span>{item.label}</span>
+                <span style={{ fontWeight: 700, color: item.active ? item.color : 'var(--color-text)' }}>{item.value}</span>
+              </div>
+            ))}
+            <div style={{ flex: 1 }} />
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={onAdd}>新增</Button>
+            <Button size="small" icon={<DownloadOutlined />} onClick={handleExportExcel}>导出</Button>
           </div>
-        )}
+
+          {/* Filter bar */}
+          <div className="filter-bar">
+            <label>名称</label>
+            <Input
+              size="small"
+              placeholder="搜索用例名称"
+              value={filters?.case_name ?? ''}
+              onChange={(e) => onFiltersChange({ ...filters, case_name: e.target.value } as TestCaseFilters)}
+              onPressEnter={() => selectedSession && onLoadTestcases(selectedSession.id, filters)}
+              style={{ width: 160 }}
+              allowClear
+            />
+            <label>状态</label>
+            <Select
+              size="small"
+              placeholder="全部"
+              allowClear
+              value={filters?.status ?? undefined}
+              onChange={(value) => onFiltersChange({ ...filters, status: value } as TestCaseFilters)}
+              style={{ width: 100 }}
+              options={[
+                { label: '未执行', value: TestCaseStatus.NOT_RUN },
+                { label: '已通过', value: TestCaseStatus.PASSED },
+                { label: '未通过', value: TestCaseStatus.FAILED },
+              ]}
+            />
+            <label>Bug ID</label>
+            <Input
+              size="small"
+              placeholder="Bug ID"
+              value={filters?.bug_id ?? ''}
+              onChange={(e) => onFiltersChange({ ...filters, bug_id: e.target.value } as TestCaseFilters)}
+              onPressEnter={() => selectedSession && onLoadTestcases(selectedSession.id, filters)}
+              style={{ width: 120 }}
+              allowClear
+            />
+            <label>仅Bug</label>
+            <Switch
+              size="small"
+              checked={filters?.exist_bug ?? false}
+              onChange={(checked) => onFiltersChange({ ...filters, exist_bug: checked } as TestCaseFilters)}
+            />
+            <div style={{ flex: 1 }} />
+            <Button size="small" type="primary" onClick={() => selectedSession && onLoadTestcases(selectedSession.id, filters)}>
+              筛选
+            </Button>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={() => {
+                const reset = { case_name: '', status: undefined, bug_id: '', exist_bug: false, module_id: filters?.module_id ?? undefined };
+                onFiltersChange(reset as TestCaseFilters);
+                selectedSession && onLoadTestcases(selectedSession.id, reset as TestCaseFilters);
+              }}
+            >
+              重置
+            </Button>
+          </div>
+
+          {/* Table */}
+          <TestCaseTable
+            testcases={testcases}
+            onView={onView}
+            onEdit={onEdit}
+            onComplete={onComplete}
+            onDelete={onDelete}
+            onBatchDelete={onBatchDelete}
+            onMove={onMove}
+            onApiExecute={onApiExecute}
+            onBatchMove={onBatchMove}
+          />
+        </div>
+      )}
     </Card>
   );
 };

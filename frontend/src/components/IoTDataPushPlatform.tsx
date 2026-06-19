@@ -1134,13 +1134,13 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       width: 180,
       render: (_: any, record: SavedRequest) => (
         <Space size="small">
-          <Button type="text" size="small" style={{ textDecoration: 'underline', color: '#1890ff' }} onClick={() => createTabFromSavedRequest(record)}>
+          <Button type="text" size="small" style={{ color: 'var(--color-primary)' }} onClick={() => createTabFromSavedRequest(record)}>
             打开
           </Button>
-          <Button type="text" size="small" style={{ textDecoration: 'underline', color: '#1890ff' }} onClick={() => handleCopySavedRequest(record)}>
+          <Button type="text" size="small" style={{ color: 'var(--color-primary)' }} onClick={() => handleCopySavedRequest(record)}>
             复制
           </Button>
-          <Button type="text" size="small" style={{ textDecoration: 'underline', color: '#ff4d4f' }} onClick={() => handleDeleteSavedRequest(record.id)}>
+          <Button type="text" size="small" danger onClick={() => handleDeleteSavedRequest(record.id)}>
             删除
           </Button>
         </Space>
@@ -1149,20 +1149,20 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   ];
 
   return (
-    <div style={{ padding: '8px 10px', height: 'calc(100vh - 88px)', background: '#f0f2f5', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ padding: '8px 10px', height: 'calc(100vh - 88px)', background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* 顶部工具栏 */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         padding: '8px 12px',
-        background: '#fff',
-        borderRadius: '6px',
+        background: 'var(--color-bg-elevated)',
+        borderRadius: 'var(--radius-md)',
         marginBottom: '8px',
-        boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+        boxShadow: 'var(--shadow-sm)',
         flexShrink: 0,
       }}>
-        <span style={{ fontWeight: 600, fontSize: 15, color: '#333' }}>IoT 数据推送平台</span>
+        <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--color-text)' }}>IoT 数据推送平台</span>
         <Space>
           <Button
             type="primary"
@@ -1184,9 +1184,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          background: '#fff',
-          borderRadius: '6px',
-          boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+          background: 'var(--color-bg-elevated)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-sm)',
           marginRight: rightCollapsed ? '4px' : undefined,
         }}>
           <Tabs
@@ -1258,7 +1258,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                     </Form.Item>
 
                     <Form.Item label="请求头" style={{ marginBottom: 12 }}>
-                      <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 200, overflow: 'auto' }}>
+                      <div style={{ padding: '8px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', maxHeight: 200, overflow: 'auto' }}>
                         {headers.map((header, index) => (
                           <Space
                             key={index}
@@ -1302,7 +1302,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                     </Form.Item>
 
                     <Form.Item label="请求参数" style={{ marginBottom: 0 }}>
-                      <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 300, overflow: 'auto' }}>
+                      <div style={{ padding: '8px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', maxHeight: 300, overflow: 'auto' }}>
                         {parameters.map((param, index) => (
                           <div key={index} style={{ marginBottom: 6, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
                             {/* 参数类型选择 */}
@@ -1383,21 +1383,21 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                               <div><code>$..name</code> — 递归查找所有 name 字段</div>
                             </div>
                           }>
-                            <QuestionCircleOutlined style={{ color: '#999', fontSize: 13 }} />
+                            <QuestionCircleOutlined style={{ color: 'var(--color-text-tertiary)', fontSize: 13 }} />
                           </Tooltip>
                         </Space>
                       }
                       style={{ marginBottom: 0 }}
                     >
                       {postExtractions.length === 0 ? (
-                        <div style={{ padding: '4px 8px', color: '#999', fontSize: 12 }}>
+                        <div style={{ padding: '4px 8px', color: 'var(--color-text-tertiary)', fontSize: 12 }}>
                           暂无提取规则
                           <Button type="link" size="small" onClick={handleAddExtraction} style={{ padding: 0, marginLeft: 8 }}>
                             添加
                           </Button>
                         </div>
                       ) : (
-                        <div style={{ padding: '8px', background: '#fafafa', borderRadius: '4px', maxHeight: 200, overflow: 'auto' }}>
+                        <div style={{ padding: '8px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', maxHeight: 200, overflow: 'auto' }}>
                           {postExtractions.map((rule, index) => (
                             <Space
                               key={index}
@@ -1447,18 +1447,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         {/* 左侧拖拽手柄 */}
         {!rightCollapsed && (
           <div
+            className={`drag-handle${isDragging === 'left' ? ' drag-handle-active' : ''}`}
             onMouseDown={(e) => handleMouseDown('left', e)}
-            style={{
-              width: 6,
-              cursor: 'col-resize',
-              background: isDragging === 'left' ? '#1890ff' : 'transparent',
-              transition: 'background 0.15s',
-              flexShrink: 0,
-              position: 'relative',
-              zIndex: 10,
-            }}
-            onMouseEnter={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = '#ddd'; }}
-            onMouseLeave={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = 'transparent'; }}
           />
         )}
 
@@ -1476,9 +1466,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
-            background: '#fff',
-            borderRadius: '6px',
-            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+            background: 'var(--color-bg-elevated)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: 'var(--shadow-sm)',
             overflow: 'hidden',
             minHeight: 0,
           }}>
@@ -1487,10 +1477,10 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
               justifyContent: 'space-between',
               alignItems: 'center',
               padding: '6px 12px',
-              borderBottom: '1px solid #f0f0f0',
+              borderBottom: '1px solid var(--color-border)',
               flexShrink: 0,
             }}>
-              <span style={{ fontWeight: 500, fontSize: 14, color: '#333', display: 'flex', alignItems: 'center', gap: 8 }}>请求体
+              <span style={{ fontWeight: 500, fontSize: 14, color: 'var(--color-text)', display: 'flex', alignItems: 'center', gap: 8 }}>请求体
                 <Tooltip title={
                   <div style={{ maxWidth: 660, fontSize: 12, lineHeight: 1.8 }}>
                     <div style={{ fontWeight: 600, marginBottom: 4 }}>1. 内置函数 {'{{$function}}'}</div>
@@ -1518,7 +1508,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                 }
                   overlayInnerStyle={{ maxWidth: 680 }}>
 
-                  <QuestionCircleOutlined style={{ color: '#999', cursor: 'pointer', fontSize: 13 }} />
+                  <QuestionCircleOutlined style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 13 }} />
                 </Tooltip>
               </span>
               <Button
@@ -1564,9 +1554,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
-            background: '#fff',
-            borderRadius: '6px',
-            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+            background: 'var(--color-bg-elevated)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: 'var(--shadow-sm)',
             overflow: 'hidden',
             minHeight: 0,
           }}>
@@ -1577,14 +1567,14 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   padding: '6px 12px',
-                  borderBottom: '1px solid #f0f0f0',
+                  borderBottom: '1px solid var(--color-border)',
                   flexShrink: 0,
                 }}>
                   <Space size={16}>
-                    <span style={{ fontWeight: 500, fontSize: 14, color: '#333' }}>响应结果</span>
+                    <span style={{ fontWeight: 500, fontSize: 14, color: 'var(--color-text)' }}>响应结果</span>
                     <span>
                       状态码: <strong style={{
-                        color: response.status >= 200 && response.status < 300 ? '#52c41a' : '#ff4d4f',
+                        color: response.status >= 200 && response.status < 300 ? 'var(--color-success)' : 'var(--color-danger)',
                       }}>
                         {response.status} {response.statusText}
                       </strong>
@@ -1608,7 +1598,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   flex: 1,
                   fontFamily: 'Consolas, Monaco, monospace',
                   whiteSpace: 'pre-wrap',
-                  background: '#f8f9fa',
+                  background: 'var(--color-bg)',
                   padding: '12px',
                   overflow: 'auto',
                   fontSize: '13px',
@@ -1624,7 +1614,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#bfbfbf',
+                color: 'var(--color-text-disabled)',
                 fontSize: 14,
               }}>
                 点击发送按钮查看响应结果
@@ -1636,18 +1626,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         {/* 右侧拖拽手柄 */}
         {!rightCollapsed && (
           <div
+            className={`drag-handle${isDragging === 'right' ? ' drag-handle-active' : ''}`}
             onMouseDown={(e) => handleMouseDown('right', e)}
-            style={{
-              width: 6,
-              cursor: 'col-resize',
-              background: isDragging === 'right' ? '#1890ff' : 'transparent',
-              transition: 'background 0.15s',
-              flexShrink: 0,
-              position: 'relative',
-              zIndex: 10,
-            }}
-            onMouseEnter={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = '#ddd'; }}
-            onMouseLeave={(e) => { if (!isDragging) (e.target as HTMLElement).style.background = 'transparent'; }}
           />
         )}
 
@@ -1656,9 +1636,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           width: rightCollapsed ? 0 : `${rightWidth}%`,
           minWidth: rightCollapsed ? 0 : 200,
           overflow: 'hidden',
-          background: '#fff',
-          borderRadius: '6px',
-          boxShadow: rightCollapsed ? 'none' : '0 1px 4px rgba(0, 0, 0, 0.08)',
+          background: 'var(--color-bg-elevated)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: rightCollapsed ? 'none' : 'var(--shadow-sm)',
           transition: rightCollapsed ? 'width 0.2s ease, minWidth 0.2s ease' : undefined,
           flexShrink: 0,
           position: 'relative',
@@ -1675,7 +1655,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   top: 8,
                   right: 8,
                   zIndex: 20,
-                  color: '#999',
+                  color: 'var(--color-text-tertiary)',
                 }}
               />
             </Tooltip>
@@ -1688,10 +1668,10 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 padding: '6px 12px',
-                borderBottom: '1px solid #f0f0f0',
+                borderBottom: '1px solid var(--color-border)',
                 flexShrink: 0,
               }}>
-                <span style={{ fontWeight: 600, fontSize: 16, color: '#333' }}>保存的请求</span>
+                <span style={{ fontWeight: 600, fontSize: 16, color: 'var(--color-text)' }}>保存的请求</span>
                 <Space>
                   <Button
                     icon={<SyncOutlined />}
@@ -1707,13 +1687,13 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                       icon={<RightOutlined />}
                       onClick={() => setRightCollapsed(true)}
                       // size="small"
-                      style={{ color: '#999' }}
+                      style={{ color: 'var(--color-text-tertiary)' }}
                     />
                   </Tooltip>
                 </Space>
               </div>
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '8px 12px', borderBottom: '1px solid #f0f0f0' }}>
+                <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>
                   <Input.Search
                     // size="small"
                     placeholder="搜索名称..."
@@ -1728,8 +1708,13 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                     columns={savedRequestsColumns}
                     dataSource={savedRequests.filter(r => !searchRequests || r.name.toLowerCase().includes(searchRequests.toLowerCase()))}
                     rowKey="id"
-                    pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
                     size="small"
+                    pagination={{
+                      pageSize: 20,
+                      showSizeChanger: false,
+                      size: 'small',
+                      showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
+                    }}
                     style={{ fontSize: 13 }}
                     sticky
                   />
@@ -1752,15 +1737,15 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                 top: '50%',
                 transform: 'translateY(-50%)',
                 zIndex: 20,
-                background: '#fff',
+                background: 'var(--color-bg-elevated)',
                 boxShadow: '0 1px 4px rgba(0, 0, 0, 0.12)',
-                borderRadius: '6px 0 0 6px',
+                borderRadius: 'var(--radius-md) 0 0 var(--radius-md)',
                 width: 24,
                 height: 64,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#666',
+                color: 'var(--color-text-secondary)',
               }}
             />
           </Tooltip>
@@ -1781,7 +1766,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           onChange={(e) => setSaveRequestName(e.target.value)}
           style={{ marginBottom: '16px' }}
         />
-        <div style={{ color: '#999', fontSize: '12px' }}>
+        <div style={{ color: 'var(--color-text-tertiary)', fontSize: '12px' }}>
           保存后可在右侧"保存的请求"侧边栏中查看和管理
         </div>
       </Modal>
@@ -1815,9 +1800,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                     display: 'flex',
                     alignItems: 'center',
                     padding: '4px 12px',
-                    borderRadius: '16px',
-                    background: currentEnvironmentId === env.id ? '#1890ff' : '#f0f0f0',
-                    color: currentEnvironmentId === env.id ? '#fff' : '#333',
+                    borderRadius: 'var(--radius-full)',
+                    background: currentEnvironmentId === env.id ? 'var(--color-primary)' : 'var(--color-border-light)',
+                    color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-text)',
                     cursor: 'pointer',
                     fontSize: '12px',
                     gap: '8px'
@@ -1834,13 +1819,13 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                         style={{
                           width: 120,
                           background: 'rgba(255,255,255,0.9)',
-                          color: '#333'
+                          color: 'var(--color-text)'
                         }}
                       />
                       <Button
                         size="small"
                         type="link"
-                        style={{ color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#1890ff' }}
+                        style={{ color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : 'var(--color-primary)' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleSaveEnvironmentName();
@@ -1851,7 +1836,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                       <Button
                         size="small"
                         type="link"
-                        style={{ color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999' }}
+                        style={{ color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : 'var(--color-text-tertiary)' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleCancelEditEnvironmentName();
@@ -1868,7 +1853,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                         size="small"
                         icon={<EditOutlined />}
                         style={{
-                          color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#1890ff',
+                          color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : 'var(--color-primary)',
                           padding: 0,
                           margin: 0,
                           width: '20px',
@@ -1888,7 +1873,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                           type="text"
                           size="small"
                           style={{
-                            color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#999',
+                            color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : 'var(--color-text-tertiary)',
                             padding: 0,
                             margin: 0,
                             width: '20px',
@@ -1913,7 +1898,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           </div>
 
           {/* 当前环境的参数 */}
-          <p style={{ color: '#666', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
+          <p style={{ color: 'var(--color-text-secondary)', marginBottom: '12px' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
 
           {getCurrentEnvironment().parameters.map((param, index) => (
             <Space
@@ -1970,7 +1955,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           onChange={(e) => setNewEnvironmentName(e.target.value)}
           style={{ marginBottom: '16px' }}
         />
-        <div style={{ color: '#999', fontSize: '12px' }}>
+        <div style={{ color: 'var(--color-text-tertiary)', fontSize: '12px' }}>
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>

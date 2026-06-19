@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Card, Typography, Input, Button, Select, Space, Spin, Tag, Tooltip, message as antMessage } from 'antd';
-import { ThunderboltOutlined } from '@ant-design/icons';
+import { Card, Typography, Input, Button, Select, Space, Spin, Tag, Tooltip, Empty, message as antMessage } from 'antd';
+import { ThunderboltOutlined, MessageOutlined } from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../types';
 import HistoryPromptSidebar from './HistoryPromptSidebar';
 
@@ -135,9 +135,11 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
       <div style={{ flex: 1, overflow: 'auto' }}>
         <Card title='生成测试用例' variant='borderless'>
           {!selectedSession ? (
-            <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <Text type='secondary'>请先选择或创建会话</Text>
-            </div>
+            <Empty
+              image={<MessageOutlined style={{ fontSize: 48, color: 'var(--color-text-disabled)' }} />}
+              description="请先选择或创建会话"
+              style={{ padding: '60px 0' }}
+            />
           ) : (
             <div>
               <div style={{ marginBottom: '16px' }}>
@@ -234,6 +236,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 loading={loading}
                 disabled={!requirement.trim()}
                 block
+                className={loading ? 'generate-btn-loading' : ''}
                 style={{ borderRadius: '8px', fontSize: '16px', height: '48px' }}
               >
                 AI 生成测试用例

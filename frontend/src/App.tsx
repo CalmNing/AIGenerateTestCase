@@ -1370,7 +1370,7 @@ const App: React.FC = () => {
           <IoTMockPlatform />
         </div>
       ) : (
-        <Layout style={{ minHeight: '100vh' }}>
+        <Layout style={{ height: '100vh', overflow: 'hidden' }}>
           <HeaderComponent
             onSettingsOpen={handleOpenSettingModal}
             settingButtonStatus={settingButtonStatus}
@@ -1383,7 +1383,7 @@ const App: React.FC = () => {
             canManageSkills={canManageSkills}
             canManageGlobalParams={canManageGlobalParams}
           />
-          <Layout>
+          <Layout style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
             <SessionSidebar
               testcases={testcases}
               sessions={sessions}
@@ -1405,7 +1405,7 @@ const App: React.FC = () => {
               onEditModule={handleEditModule}
               onOpenAddModuleModal={handleOpenAddModuleModal}
             />
-            <Layout style={{ padding: 'var(--space-4)' }}>
+            <Layout style={{ padding: 'var(--space-4)', minHeight: 0, overflow: 'hidden' }}>
               <Content style={{ background: 'var(--color-bg-elevated)', padding: 'var(--space-4)', margin: 0, borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border-light)' }}>
                 <Tabs
                   activeKey={activeTab}
@@ -1740,10 +1740,11 @@ const App: React.FC = () => {
         onOk={() => setIsGlobalParamsModalVisible(false)}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
         width={600}
+        styles={{ body: { padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '65vh' } }}
       >
-        <div style={{ marginBottom: 'var(--space-4)' }}>
-          {/* 环境选择和管理 */}
-          <div style={{ marginBottom: 'var(--space-5)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}>
+          {/* 环境选择和管理 - 固定区域 */}
+          <div style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--color-border-light)', flexShrink: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
               <h3 style={{ margin: 0, fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-semibold)' }}>环境管理</h3>
               <Button
@@ -1754,7 +1755,7 @@ const App: React.FC = () => {
                 添加环境
               </Button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginBottom: 'var(--space-3)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
               {environments.map(env => (
                 <div
                   key={env.id}
@@ -1813,47 +1814,55 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* 当前环境的参数 */}
-          <p style={{ color: 'var(--color-text-secondary)', marginBottom: 'var(--space-3)', fontSize: 'var(--font-size-sm)' }}>全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用</p>
+          {/* 参数提示 - 固定区域 */}
+          <p style={{ color: 'var(--color-text-secondary)', margin: 0, padding: 'var(--space-3) var(--space-5)', fontSize: 'var(--font-size-sm)', flexShrink: 0, borderBottom: '1px solid var(--color-border-light)', background: 'var(--color-bg-secondary)' }}>
+            全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用
+          </p>
 
-          {getCurrentEnvironment().parameters.map((param, index) => (
-            <Space
-              key={index}
-              style={{ width: '100%', marginBottom: 'var(--space-3)' }}
-              align="center"
+          {/* 参数列表 - 可滚动区域 */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-3) var(--space-5)' }}>
+            {getCurrentEnvironment().parameters.map((param, index) => (
+              <Space
+                key={index}
+                style={{ width: '100%', marginBottom: 'var(--space-3)' }}
+                align="center"
+              >
+                <Input
+                  placeholder="参数名"
+                  value={param.key}
+                  onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
+                  style={{ width: 150 }}
+                  size="middle"
+                />
+                <Input
+                  placeholder="参数值"
+                  value={param.value}
+                  onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
+                  style={{ flex: 1, width: 330 }}
+                  size="middle"
+                />
+                <Button
+                  icon={<MinusOutlined />}
+                  danger
+                  onClick={() => handleRemoveEnvironmentParameter(index)}
+                  size="small"
+                />
+              </Space>
+            ))}
+          </div>
+
+          {/* 添加按钮 - 固定底部 */}
+          <div style={{ padding: 'var(--space-2) var(--space-5) var(--space-4)', borderTop: '1px solid var(--color-border-light)', flexShrink: 0 }}>
+            <Button
+              type="dashed"
+              icon={<PlusOutlined />}
+              onClick={handleAddEnvironmentParameter}
+              style={{ width: '100%' }}
+              size="middle"
             >
-              <Input
-                placeholder="参数名"
-                value={param.key}
-                onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
-                style={{ width: 150 }}
-                size="middle"
-              />
-              <Input
-                placeholder="参数值"
-                value={param.value}
-                onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
-                style={{ flex: 1, width: 330 }}
-                size="middle"
-              />
-              <Button
-                icon={<MinusOutlined />}
-                danger
-                onClick={() => handleRemoveEnvironmentParameter(index)}
-                size="small"
-              />
-            </Space>
-          ))}
-
-          <Button
-            type="dashed"
-            icon={<PlusOutlined />}
-            onClick={handleAddEnvironmentParameter}
-            style={{ marginTop: 'var(--space-2)', width: '100%' }}
-            size="middle"
-          >
-            添加全局参数
-          </Button>
+              添加全局参数
+            </Button>
+          </div>
         </div>
       </Modal>
 

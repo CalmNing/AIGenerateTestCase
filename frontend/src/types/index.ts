@@ -219,6 +219,7 @@ export interface ApiProject {
   name: string;
   base_url: string;
   headers: Array<{ key: string; value: string }>;
+  environment_id?: number | null;
   source_type: string;
   source_url?: string | null;
   raw_spec?: string;
@@ -277,7 +278,6 @@ export interface ApiScenario {
   project_id: number;
   name: string;
   description: string;
-  base_url?: string | null;
   environment_id?: number | null;
   variables: Array<{ key: string; value: string }>;
   steps: ApiScenarioStep[];

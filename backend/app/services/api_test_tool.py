@@ -887,7 +887,8 @@ async def _execute_endpoint_step(
 
 async def run_endpoint(db: Session, project: ApiProject, endpoint: ApiEndpoint, overrides: dict | None = None) -> dict:
     overrides = overrides or {}
-    variables = build_param_map(db, overrides.get("environment_id"), overrides.get("variables") or [])
+    env_id = overrides.get("environment_id") or endpoint.environment_id or project.environment_id
+    variables = build_param_map(db, env_id, overrides.get("variables") or [])
     default_base_url = (overrides.get("base_url") or project.base_url or "").rstrip("/")
     async with httpx.AsyncClient(limits=API_TEST_HTTP_LIMITS) as client:
         step, passed = await _execute_endpoint_step(
@@ -1537,7 +1538,7 @@ def create_unit_test_scenario(db: Session, project: ApiProject, endpoint: ApiEnd
         name=f"{endpoint.name or endpoint.method + ' ' + endpoint.path} 接口单测 {time.strftime('%Y%m%d%H%M%S')}",
         description=f"自动生成接口单测：{endpoint.method} {endpoint.path}",
         base_url=project.base_url,
-        environment_id=endpoint.environment_id,
+        environment_id=endpoint.environment_id or project.environment_id,
         variables=[],
         steps=generate_unit_test_steps(endpoint),
         user_id=user_id,
@@ -1549,8 +1550,9 @@ def create_unit_test_scenario(db: Session, project: ApiProject, endpoint: ApiEnd
 
 
 async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) -> dict:
-    variables = build_param_map(db, scenario.environment_id, scenario.variables or [])
-    base_url = (scenario.base_url or project.base_url or "").rstrip("/")
+    env_id = scenario.environment_id or project.environment_id
+    variables = build_param_map(db, env_id, scenario.variables or [])
+    base_url = (project.base_url or "").rstrip("/")
     results = []
     passed = True
 

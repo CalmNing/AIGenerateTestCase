@@ -1,7 +1,6 @@
 /frontend/dist/
 /frontend/node_modules/
-/backend/data/
+/backend/data/testcases.db
 /*/.idea/
 __pycache__/
 .idea
-/backend/data

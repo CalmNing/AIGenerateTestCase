@@ -68,7 +68,10 @@ const HeaderComponent: React.FC<HeaderComponentProps> = ({
           cursor: 'pointer',
           letterSpacing: 'var(--letter-spacing-tight)',
           fontWeight: 'var(--font-weight-bold)',
+          transition: 'color 200ms ease, opacity 200ms ease',
         }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
       >
         测试用例生成工具
       </Title>

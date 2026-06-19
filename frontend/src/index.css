@@ -109,16 +109,51 @@ body {
   background: var(--color-text-tertiary);
 }
 
+/* ===== Keyframe Animations ===== */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px 4px rgba(79, 70, 229, 0.15);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 /* 应用容器 */
 .app-container {
   height: 100vh;
 }
 
-/* 会话列表项 */
-.session-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+/* ===== Session Sidebar ===== */
+.session-item:hover .session-item-actions {
+  opacity: 1 !important;
 }
 
 /* 测试用例卡片 */
@@ -161,6 +196,7 @@ body {
 .api-scenario-editor-form .api-scenario-editor-tabs {
   flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -169,6 +205,7 @@ body {
 .api-endpoint-editor-form .api-endpoint-editor-tabs {
   flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -182,14 +219,24 @@ body {
 
 .api-scenario-editor-form .api-scenario-editor-tabs > .ant-tabs-nav {
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .api-endpoint-editor-form .api-endpoint-editor-tabs > .ant-tabs-nav {
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .api-asset-tabs > .ant-tabs-nav {
   flex: 0 0 auto;
+}
+
+.api-step-tabs > .ant-tabs-nav {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .api-scenario-editor-form .api-scenario-editor-tabs > .ant-tabs-content-holder {
@@ -234,6 +281,359 @@ body {
   overflow: hidden;
 }
 
+/* Tab content fade transition */
+.ant-tabs-tabpane-active {
+  animation: fade-in 250ms ease-out;
+}
+
+/* ===== Table ===== */
+.ant-table {
+  border-radius: var(--radius-lg) !important;
+}
+.ant-table-thead > tr > th {
+  background: var(--color-border-light) !important;
+  font-weight: var(--font-weight-semibold) !important;
+  font-size: 13px !important;
+  color: var(--color-text-secondary) !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  text-transform: none;
+}
+.ant-table-thead > tr > th::before {
+  display: none !important;
+}
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--color-border-light) !important;
+  transition: background-color 150ms ease;
+}
+.ant-table-tbody > tr:hover > td {
+  background-color: var(--color-primary-bg) !important;
+}
+.ant-table-tbody > tr.ant-table-row-selected > td {
+  background-color: color-mix(in srgb, var(--color-primary) 6%, white) !important;
+}
+.ant-table-cell-row-hover {
+  background-color: var(--color-primary-bg) !important;
+}
+.ant-table-body {
+  scrollbar-width: thin;
+}
+
+/* Table action buttons */
+.table-action-btn {
+  color: var(--color-text-tertiary) !important;
+  transition: all 120ms ease !important;
+  border-radius: var(--radius-sm) !important;
+}
+.table-action-btn:hover {
+  color: var(--color-text-secondary) !important;
+  background: var(--color-border-light) !important;
+  transform: scale(1.1);
+}
+.table-action-btn:active {
+  transform: scale(0.95);
+}
+.table-action-btn-success:hover {
+  color: var(--color-success) !important;
+  background: var(--color-success-bg) !important;
+}
+.table-action-btn-primary:hover {
+  color: var(--color-primary) !important;
+  background: var(--color-primary-bg) !important;
+}
+
+/* Batch action bar */
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-primary) 5%, white);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 15%, transparent);
+  border-radius: var(--radius-lg);
+  animation: fade-in 200ms ease-out;
+}
+
+/* ===== Tabs ===== */
+.ant-tabs .ant-tabs-tab {
+  transition: color 200ms ease, background 200ms ease;
+  padding: 8px 16px !important;
+  border-radius: var(--radius-md) var(--radius-md) 0 0 !important;
+  flex-shrink: 0;
+}
+.ant-tabs .ant-tabs-tab:hover {
+  color: var(--color-primary) !important;
+}
+.ant-tabs .ant-tabs-tab-active {
+  background: var(--color-bg-elevated);
+}
+.ant-tabs .ant-tabs-ink-bar {
+  background: var(--color-primary) !important;
+  height: 2px !important;
+  border-radius: 1px !important;
+}
+.ant-tabs-nav {
+  margin-bottom: 0 !important;
+}
+.api-endpoint-editor-tabs > .ant-tabs-nav,
+.api-scenario-editor-tabs > .ant-tabs-nav,
+.api-step-tabs > .ant-tabs-nav {
+  margin-bottom: 8px !important;
+}
+.ant-tabs-tab-btn {
+  white-space: nowrap;
+}
+
+/* Endpoint editor tabs: scrollable overflow for 8 tabs */
+.api-endpoint-editor-tabs .ant-tabs-nav-wrap,
+.api-scenario-editor-tabs .ant-tabs-nav-wrap,
+.api-step-tabs .ant-tabs-nav-wrap {
+  min-width: 0 !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+.api-endpoint-editor-tabs .ant-tabs-nav-wrap::-webkit-scrollbar,
+.api-scenario-editor-tabs .ant-tabs-nav-wrap::-webkit-scrollbar,
+.api-step-tabs .ant-tabs-nav-wrap::-webkit-scrollbar {
+  display: none;
+}
+.api-endpoint-editor-tabs .ant-tabs-nav-list,
+.api-scenario-editor-tabs .ant-tabs-nav-list,
+.api-step-tabs .ant-tabs-nav-list {
+  min-width: 0 !important;
+  flex-wrap: nowrap !important;
+}
+
+/* ===== Scenario Result Toolbar ===== */
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.result-record-select {
+  flex: 1;
+  min-width: 0;
+}
+.result-record-select .ant-select-selector {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===== Export Button ===== */
+.export-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-md) !important;
+  font-size: 12px;
+  transition: all 0.2s ease;
+}
+.export-trigger:hover {
+  background: var(--color-primary-bg) !important;
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+}
+
+/* ===== Debug Result ===== */
+.debug-result-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.debug-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+.debug-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  color: var(--color-text-secondary);
+}
+.debug-elapsed {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.debug-assertion-summary {
+  font-size: 12px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.debug-result-collapse {
+  border-radius: var(--radius-md) !important;
+}
+.debug-result-collapse > .ant-collapse-item > .ant-collapse-header {
+  padding: 8px 12px !important;
+  font-size: 13px;
+}
+.debug-result-collapse > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+  padding: 10px 12px !important;
+}
+.debug-collapse-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.debug-collapse-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.debug-json-block {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--color-border-light);
+}
+.debug-json-block .cm-editor {
+  font-size: 12px;
+}
+.debug-detail-text {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  padding: 0 2px;
+}
+
+/* ===== Endpoint Editor Form ===== */
+.api-endpoint-editor-form .ant-form-item {
+  margin-bottom: 10px;
+}
+.api-endpoint-editor-form .ant-space {
+  gap: 8px !important;
+}
+
+/* URL Bar: Method + Path */
+.endpoint-url-bar {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-elevated);
+  transition: border-color 0.2s, box-shadow 0.2s;
+  margin-bottom: 10px;
+}
+.endpoint-url-bar:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+.endpoint-url-bar .ant-select.endpoint-method-select {
+  width: 110px;
+  flex-shrink: 0;
+}
+.endpoint-url-bar .ant-select.endpoint-method-select .ant-select-selector {
+  border: none !important;
+  border-radius: 0 !important;
+  border-right: 1px solid var(--color-border-light) !important;
+  background: var(--color-bg) !important;
+  height: 100% !important;
+  font-weight: 600;
+  font-size: 13px;
+}
+.endpoint-url-bar .ant-select-focused.endpoint-method-select .ant-select-selector {
+  box-shadow: none !important;
+}
+.endpoint-url-bar .endpoint-path-input {
+  flex: 1;
+  min-width: 0;
+}
+.endpoint-url-bar .endpoint-path-input .ant-input {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 13px;
+}
+
+/* Full URL override — compact */
+.endpoint-form-fullurl {
+  margin-bottom: 10px !important;
+}
+.endpoint-form-fullurl .ant-form-item-label {
+  padding-bottom: 2px;
+}
+.endpoint-form-fullurl .ant-form-item-label > label {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+/* ===== Filter Bar ===== */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  margin-bottom: 12px;
+}
+.filter-bar label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+/* ===== Module Item ===== */
+.module-item:hover .module-item-actions {
+  opacity: 1 !important;
+}
+
+.module-item-actions .ant-btn {
+  transition: background-color 150ms ease;
+}
+.module-item-actions .ant-btn:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* Generate button loading pulse */
+.generate-btn-loading {
+  animation: pulse-glow 1.8s ease-in-out infinite;
+}
+
+/* Header button hover */
+.ant-layout-header .ant-btn-default {
+  transition: transform 150ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+.ant-layout-header .ant-btn-default:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.12);
+}
+
+/* Stats bar transition */
+.ant-card {
+  animation: fade-in 300ms ease-out;
+}
+
+/* Notification entrance */
+.ant-notification-notice {
+  animation: slide-in-right 300ms ease-out;
+}
+
 .home-workbench {
   min-height: 100vh;
   padding: var(--space-10);
@@ -262,6 +662,7 @@ body {
   justify-content: space-between;
   align-items: flex-end;
   gap: var(--space-6);
+  animation: fade-in-up 500ms ease-out both;
 }
 
 .home-eyebrow {
@@ -320,24 +721,62 @@ body {
   width: 100%;
   min-height: 190px;
   padding: var(--space-6);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-light);
   border-radius: var(--radius-xl);
   background: var(--color-bg-elevated);
   color: var(--color-text);
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 6px 16px rgba(0, 0, 0, 0.04);
   cursor: pointer;
   text-align: left;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   gap: var(--space-5);
-  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 200ms ease, border-color 200ms ease;
+  transition: transform 280ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 280ms ease, border-color 280ms ease;
+  animation: fade-in-up 500ms ease-out both;
+  position: relative;
+  overflow: hidden;
+}
+
+.home-tool-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--tool-accent);
+  opacity: 0;
+  transition: opacity 280ms ease;
+}
+
+.home-tool-card:hover::before {
+  opacity: 1;
+}
+
+.home-tool-card-primary {
+  animation-delay: 100ms;
+}
+
+.home-secondary-grid .home-tool-card:nth-child(1) {
+  animation-delay: 200ms;
+}
+.home-secondary-grid .home-tool-card:nth-child(2) {
+  animation-delay: 300ms;
+}
+.home-secondary-grid .home-tool-card:nth-child(3) {
+  animation-delay: 400ms;
+}
+.home-secondary-grid .home-tool-card:nth-child(4) {
+  animation-delay: 500ms;
 }
 
 .home-tool-card:hover {
   transform: translateY(-4px);
-  border-color: var(--tool-accent);
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.15);
+  border-color: color-mix(in srgb, var(--tool-accent) 30%, transparent);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.08),
+    0 24px 48px color-mix(in srgb, var(--tool-accent) 10%, transparent);
 }
 
 .home-tool-card:focus-visible {
@@ -467,4 +906,210 @@ body {
     min-height: 180px;
     padding: var(--space-5);
   }
+}
+
+/* ===== Sub-Platform Shared Styles ===== */
+.sub-platform-page {
+  background: var(--color-bg);
+}
+
+.sub-platform-panel {
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.sub-platform-section-header {
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+}
+
+.sub-platform-text-secondary {
+  color: var(--color-text-secondary);
+}
+
+.sub-platform-text-tertiary {
+  color: var(--color-text-tertiary);
+}
+
+.sub-platform-detail-block {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  padding: var(--space-3);
+  background: var(--color-bg);
+}
+
+.sub-platform-detail-block-success {
+  border-color: var(--color-success);
+  background: var(--color-success-bg);
+}
+
+.sub-platform-detail-block-error {
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+.sub-platform-action-link {
+  text-decoration: none;
+  transition: opacity 150ms ease;
+}
+.sub-platform-action-link:hover {
+  opacity: 0.8;
+}
+
+/* Drag handle for resizable panels */
+.drag-handle {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 150ms ease;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+.drag-handle:hover {
+  background: var(--color-border);
+}
+.drag-handle-active {
+  background: var(--color-primary) !important;
+}
+
+/* ===== Scenario Steps Editor ===== */
+.scenario-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scenario-steps-collapse {
+  background: transparent !important;
+  border: none !important;
+}
+.scenario-steps-collapse > .ant-collapse-item {
+  border: 1px solid var(--color-border) !important;
+  border-radius: 6px !important;
+  overflow: hidden;
+  background: var(--color-bg-container);
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.scenario-steps-collapse > .ant-collapse-item:hover {
+  border-color: var(--color-primary-hover) !important;
+}
+.scenario-steps-collapse > .ant-collapse-item-active {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 1px var(--color-primary-border);
+}
+.scenario-steps-collapse > .ant-collapse-item > .ant-collapse-header {
+  padding: 8px 12px !important;
+  align-items: center !important;
+}
+.scenario-steps-collapse > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+  padding: 12px !important;
+}
+.step-header-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+.step-method-tag {
+  font-family: 'SF Mono', 'Fira Code', monospace !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.3px;
+  border-radius: 3px !important;
+  flex-shrink: 0;
+}
+.step-method-get    { background: #e6f7ff !important; color: #1890ff !important; border-color: #91d5ff !important; }
+.step-method-post   { background: #f6ffed !important; color: #52c41a !important; border-color: #b7eb8f !important; }
+.step-method-put    { background: #fff7e6 !important; color: #fa8c16 !important; border-color: #ffd591 !important; }
+.step-method-delete { background: #fff1f0 !important; color: #ff4d4f !important; border-color: #ffa39e !important; }
+.step-method-patch  { background: #f9f0ff !important; color: #722ed1 !important; border-color: #d3adf7 !important; }
+.step-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.step-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.step-actions .ant-btn-text {
+  color: var(--color-text-tertiary) !important;
+}
+.step-actions .ant-btn-text:hover {
+  color: var(--color-text) !important;
+}
+.step-config-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.step-checkboxes {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding-top: 4px;
+  flex-shrink: 0;
+}
+
+/* ===== Asset List Items (Endpoints & Scenarios) ===== */
+.asset-list-item {
+  padding: 8px 10px !important;
+  border-radius: var(--radius-md) !important;
+  cursor: pointer;
+  transition: background 150ms ease, box-shadow 150ms ease;
+  border: 1px solid transparent;
+}
+.asset-list-item:hover {
+  background: var(--color-bg-text-hover) !important;
+}
+.asset-list-item-selected {
+  background: var(--color-primary-bg) !important;
+  border-color: var(--color-primary-border) !important;
+}
+.asset-list-item .ant-list-item-meta-title {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 2px !important;
+}
+.asset-list-item .ant-list-item-meta-description {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+.asset-list-item .ant-list-item-action {
+  margin-inline-start: 8px !important;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.asset-list-item:hover .ant-list-item-action {
+  opacity: 1;
+}
+.scenario-item-steps {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
 }

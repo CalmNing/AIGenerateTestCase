@@ -195,6 +195,7 @@ class ApiProject(BaseModel, table=True):
     name: str = Field(default="", description="项目名称")
     base_url: str = Field(default="", description="默认 Base URL")
     headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="项目级请求头")
+    environment_id: Optional[int] = Field(default=None, description="项目默认执行环境ID")
     source_type: str = Field(default="manual", description="来源: upload | url | manual")
     source_url: Optional[str] = Field(default=None, description="OpenAPI/Swagger 来源 URL")
     raw_spec: Optional[str] = Field(default=None, description="原始 OpenAPI/Swagger 文档")

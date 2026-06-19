@@ -100,7 +100,18 @@
       "Bash(.venv\\\\Scripts\\\\python.exe -c \"import openai; print\\('openai:', openai.__version__\\); import langchain_deepseek; print\\('langchain_deepseek:', langchain_deepseek.__version__\\)\")",
       "Bash(powershell *)",
       "Bash(F:/VSCode/ai-generate-testcase/backend/.venv/Scripts/python.exe *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(npm install *)",
+      "Bash(grep *)",
+      "Bash(node -e ' *)",
+      "Bash(alembic revision *)",
+      "Bash(.venv/bin/alembic revision *)",
+      "Bash(.venv/bin/alembic upgrade *)",
+      "Bash(.venv/bin/alembic stamp *)",
+      "Bash(sqlite3 /Users/anning/aicode/AIGenerateTestCase/backend/data/testcases.db \"PRAGMA table_info\\(apiproject\\);\")",
+      "Bash(.venv/bin/python -c \"from app.services.api_test_tool import run_endpoint, run_scenario; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python *)",
+      "Bash(npx eslint *)"
     ]
   },
   "enableAllProjectMcpServers": true,

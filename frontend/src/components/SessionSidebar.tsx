@@ -1,18 +1,10 @@
 import React from 'react';
-import { Layout, Menu, Typography, Button, Input, Space, Popover } from 'antd';
-import { PlusOutlined, MessageTwoTone, EllipsisOutlined } from '@ant-design/icons';
+import { Layout, Typography, Button, Input, Popover, Space } from 'antd';
+import { PlusOutlined, MessageOutlined, EllipsisOutlined, EditOutlined, FolderAddOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseStatus } from '../types';
 
 const { Sider } = Layout;
 const { Title } = Typography;
-
-// 让会话名称可以完整显示
-const sessionMenuStyle = `
-  .session-sidebar .ant-menu-title-content {
-    flex: 1 1 0% !important;
-    min-width: 0 !important;
-  }
-`;
 
 interface SessionSidebarProps {
   sessions: Session[];
@@ -39,81 +31,8 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
   onOpenAddModuleModal,
   onOpenEditSessionModal
 }) => {
-  // 组件现在不再需要这些状态变量，直接在Popover中计算禁用状态
-
-  const menuItems = sessions.map(session => ({
-    key: session.id,
-    label: (
-      <Space size={4}>
-        <span style={{
-          fontSize: "var(--font-size-base)",
-          lineHeight: "40px",
-          maxWidth: "140px",
-          height: "40px",
-          display: "block",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}>{session.name}</span>
-
-        <Popover
-          content={(
-            <Space direction="vertical" size="small">
-              <Button
-                type="text"
-                size="small"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenEditSessionModal(session);
-                }}
-              >
-                编辑会话
-              </Button>
-              <Button
-                type="text"
-                size="small"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenAddModuleModal();
-                }}
-              >
-                新增模块
-              </Button>
-
-              <Button
-                type="text"
-                danger
-                size="small"
-                disabled={testcases.some(tc => tc.session_id === session.id && (tc.status === TestCaseStatus.PASSED || tc.status === TestCaseStatus.FAILED))}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteSession(session.id);
-                }}
-              >
-                删除会话
-              </Button>
-            </Space>
-          )}
-          // title="操作"
-          trigger="click"
-          placement="bottom"
-        >
-          <Button
-            type="text"
-            icon={<EllipsisOutlined />}
-            size="small"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </Popover>
-      </Space>
-    ),
-    icon: <MessageTwoTone />,
-    onClick: () => onSelectSession(session)
-  }));
-
   return (
-    <Sider width={240} className="session-sidebar" style={{ background: 'var(--color-bg-elevated)', borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column' }}>
-      <style>{sessionMenuStyle}</style>
+    <Sider width={240} className="session-sidebar" style={{ background: 'var(--color-bg-elevated)', borderRight: '1px solid var(--color-border)' }}>
       <div style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
         <Title level={5} style={{ margin: 0, fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-semibold)' }}>会话管理</Title>
         <div style={{ marginTop: 'var(--space-2)' }}>
@@ -129,17 +48,119 @@ const SessionSidebar: React.FC<SessionSidebarProps> = ({
           </Button>
         </div>
       </div>
-      <Menu
-        mode="vertical"
-        style={{
-          margin: '0',
-          maxHeight: 'calc(100vh - 210px)',
-          overflow: 'auto',
-          borderRight: 'none',
-        }}
-        selectedKeys={selectedSession ? [String(selectedSession.id)] : []}
-        items={menuItems}
-      />
+      <div style={{ maxHeight: 'calc(100vh - 210px)', overflowY: 'auto', padding: '4px 0' }}>
+        {sessions.map(session => {
+          const isSelected = selectedSession?.id === session.id;
+          return (
+            <div
+              key={session.id}
+              className="session-item"
+              onClick={() => onSelectSession(session)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                height: 44,
+                padding: '0 12px',
+                margin: '2px 8px',
+                borderRadius: 'var(--radius-lg)',
+                cursor: 'pointer',
+                transition: 'background-color 200ms ease, box-shadow 200ms ease',
+                background: isSelected ? 'var(--color-primary-bg)' : 'transparent',
+                boxShadow: isSelected ? 'inset 3px 0 0 0 var(--color-primary)' : 'none',
+              }}
+              onMouseEnter={(e) => {
+                if (!isSelected) e.currentTarget.style.background = 'var(--color-border-light)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isSelected) e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              <span style={{
+                flex: '0 0 auto',
+                fontSize: 16,
+                color: isSelected ? 'var(--color-primary)' : 'var(--color-text-tertiary)',
+                transition: 'color 200ms ease',
+                marginRight: 8,
+              }}>
+                <MessageOutlined />
+              </span>
+              <span style={{
+                flex: '1 1 0',
+                minWidth: 0,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                fontSize: 'var(--font-size-base)',
+                color: isSelected ? 'var(--color-primary)' : 'var(--color-text)',
+                fontWeight: isSelected ? 'var(--font-weight-medium)' : 'var(--font-weight-normal)',
+                transition: 'color 200ms ease',
+              }}>
+                {session.name}
+              </span>
+              <div className="session-item-actions" style={{
+                flex: '0 0 auto',
+                opacity: 0,
+                transition: 'opacity 150ms ease',
+              }}>
+                <Popover
+                  content={(
+                    <Space direction="vertical" size={4} style={{ minWidth: 100 }}>
+                      <Button
+                        type="text"
+                        size="small"
+                        block
+                        icon={<EditOutlined />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenEditSessionModal(session);
+                        }}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        type="text"
+                        size="small"
+                        block
+                        icon={<FolderAddOutlined />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenAddModuleModal();
+                        }}
+                      >
+                        新增模块
+                      </Button>
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        block
+                        icon={<DeleteOutlined />}
+                        disabled={testcases.some(tc => tc.session_id === session.id && (tc.status === TestCaseStatus.PASSED || tc.status === TestCaseStatus.FAILED))}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteSession(session.id);
+                        }}
+                      >
+                        删除
+                      </Button>
+                    </Space>
+                  )}
+                  trigger="click"
+                  placement="bottomRight"
+                >
+                  <Button
+                    type="text"
+                    icon={<EllipsisOutlined />}
+                    size="small"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ padding: 0, height: 24, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  />
+                </Popover>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </Sider>
   );
 };

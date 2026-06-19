@@ -6,6 +6,7 @@ import {
   Card,
   Checkbox,
   Collapse,
+  Dropdown,
   Descriptions,
   Empty,
   Form,
@@ -18,17 +19,24 @@ import {
   Tabs,
   Table,
   Tag,
+  Tooltip,
   Upload,
 } from 'antd';
 import {
+  ArrowUpOutlined,
+  ArrowDownOutlined,
   CopyOutlined,
+  SnippetsOutlined,
   DeleteOutlined,
   DownloadOutlined,
   ExperimentOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RobotOutlined,
   SaveOutlined,
+  SwapOutlined,
   SyncOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
@@ -69,6 +77,7 @@ const fixedCardBodyStyle: React.CSSProperties = {
 const scenarioEditorFormStyle: React.CSSProperties = {
   flex: '1 1 0',
   minHeight: 0,
+  minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
@@ -93,6 +102,7 @@ const assetTabPaneStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: 12,
   overflow: 'hidden',
+  paddingTop: 12,
 };
 const assetListScrollStyle: React.CSSProperties = {
   flex: '1 1 0',
@@ -103,29 +113,10 @@ const assetListScrollStyle: React.CSSProperties = {
 };
 const scenarioActionsStyle: React.CSSProperties = {
   flex: '0 0 auto',
-  paddingTop: 12,
-  paddingBottom: 2,
-  borderTop: '1px solid #f0f0f0',
-  background: '#fff',
-};
-const debugResultPanelStyle: React.CSSProperties = {
-  border: '1px solid #e5e7eb',
-  borderRadius: 8,
-  background: '#fff',
-  overflow: 'hidden',
-};
-const debugResultPanelHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-  padding: '10px 12px',
-  borderBottom: '1px solid #eef0f3',
-  background: '#fafafa',
-  fontWeight: 600,
-};
-const debugResultPanelBodyStyle: React.CSSProperties = {
-  padding: 12,
+  paddingTop: 8,
+  paddingBottom: 0,
+  borderTop: '1px solid var(--color-border-light)',
+  background: 'var(--color-bg-elevated)',
 };
 const assertionTypeOptions = [
   { label: '状态码范围', value: 'status_code_range' },
@@ -417,7 +408,6 @@ function hydrateStepWithEndpoint(step: ApiScenarioStep, endpoints: ApiEndpoint[]
 function scenarioToFormValues(scenario: ApiScenario, endpoints: ApiEndpoint[] = []) {
   return {
     ...scenario,
-    environment_id: scenario.environment_id ?? undefined,
     variables: normalizeRows(scenario.variables),
     steps: normalizeRows(scenario.steps).map((step) => hydrateStepWithEndpoint(step, endpoints)),
   };
@@ -428,7 +418,6 @@ function endpointToFormValues(endpoint: ApiEndpoint) {
     ...endpoint,
     headers: normalizeRows(endpoint.headers),
     parameters: normalizeRows(endpoint.parameters),
-    environment_id: endpoint.environment_id ?? undefined,
     pre_actions: normalizeRows(endpoint.pre_actions),
     post_actions: normalizeRows(endpoint.post_actions),
     assertions: normalizeRows(endpoint.assertions),
@@ -464,6 +453,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [importUrl, setImportUrl] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [endpointSearch, setEndpointSearch] = useState('');
+  const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(false);
 
   const [projectForm] = Form.useForm();
   const [endpointForm] = Form.useForm();
@@ -723,6 +713,7 @@ const ApiScenarioTestTool: React.FC = () => {
       name: values.name || selectedProject.name,
       base_url: values.base_url || '',
       headers: cleanKeyValueRows(values.headers),
+      environment_id: normalizeEnvironmentId(values.environment_id),
       source_url: values.source_url || null,
     });
     if (res.code === 200 && res.data) {
@@ -787,7 +778,6 @@ const ApiScenarioTestTool: React.FC = () => {
       name: values.name,
       path: values.path,
       url: values.url || null,
-      environment_id: normalizeEnvironmentId(values.environment_id),
       body: values.body || '',
       headers: preservePairMetadata(cleanKeyValueRows(values.headers), selectedEndpoint.headers),
       parameters: preservePairMetadata(cleanParameterRows(values.parameters), selectedEndpoint.parameters, true),
@@ -820,13 +810,12 @@ const ApiScenarioTestTool: React.FC = () => {
   };
 
   const buildEndpointPayloadFromForm = () => {
-    const values = endpointForm.getFieldsValue();
     const projectValues = projectForm.getFieldsValue(true);
     return {
       ...buildEndpointUpdatePayload(),
       base_url: projectValues.base_url ?? selectedProject?.base_url,
       project_headers: cleanKeyValueRows(projectValues.headers ?? selectedProject?.headers),
-      environment_id: normalizeEnvironmentId(values.environment_id),
+      environment_id: normalizeEnvironmentId(projectValues.environment_id) ?? selectedProject?.environment_id ?? null,
     };
   };
 
@@ -863,10 +852,11 @@ const ApiScenarioTestTool: React.FC = () => {
     setBodyGenerating(true);
     try {
       const values = endpointForm.getFieldsValue(true);
+      const projectValues = projectForm.getFieldsValue(true);
       const res = await apiTestApi.generateEndpointBody(selectedEndpoint.id, {
         ...readModelConfig(),
         current_body: values.body || '',
-        environment_id: normalizeEnvironmentId(values.environment_id),
+        environment_id: normalizeEnvironmentId(projectValues.environment_id) ?? selectedProject?.environment_id ?? null,
         instruction: '',
       });
       if (res.code === 200 && res.data) {
@@ -892,15 +882,16 @@ const ApiScenarioTestTool: React.FC = () => {
       return;
     }
     if (!endpoint.request_schema || Object.keys(endpoint.request_schema).length === 0) {
-      message.warning('Current endpoint has no request schema');
+      message.warning('当前接口没有请求 Schema');
       return;
     }
     setScenarioStepBodyGenerating(stepIndex);
     try {
+      const projectValues = projectForm.getFieldsValue(true);
       const res = await apiTestApi.generateEndpointBody(endpoint.id, {
         ...readModelConfig(),
         current_body: scenarioForm.getFieldValue(['steps', stepIndex, 'body']) || '',
-        environment_id: normalizeEnvironmentId(scenarioForm.getFieldValue('environment_id')),
+        environment_id: normalizeEnvironmentId(projectValues.environment_id) ?? selectedProject?.environment_id ?? null,
         instruction: '',
       });
       if (res.code === 200 && res.data) {
@@ -949,7 +940,6 @@ const ApiScenarioTestTool: React.FC = () => {
     const res = await apiTestApi.createScenario(selectedProjectId, {
       name: '新接口场景',
       description: '',
-      base_url: selectedProject?.base_url,
       variables: [],
       steps: [],
     });
@@ -967,8 +957,6 @@ const ApiScenarioTestTool: React.FC = () => {
       const res = await apiTestApi.createScenario(selectedProjectId, {
         name: `${scenario.name} (复制)`,
         description: scenario.description || '',
-        base_url: scenario.base_url,
-        environment_id: scenario.environment_id ?? undefined,
         variables: cloneRows(scenario.variables),
         steps: cloneRows(scenario.steps),
       });
@@ -1004,7 +992,6 @@ const ApiScenarioTestTool: React.FC = () => {
       const payload = {
         ...selectedScenario,
         ...values,
-        environment_id: normalizeEnvironmentId(values.environment_id),
         variables: cleanScenarioVariables(values.variables),
         steps: cleanScenarioSteps(values.steps),
       };
@@ -1054,7 +1041,7 @@ const ApiScenarioTestTool: React.FC = () => {
   };
 
   const renderJsonBlock = (value: unknown) => (
-    <pre style={{ maxHeight: 360, overflow: 'auto', background: '#f6f8fa', padding: 12, borderRadius: 6, fontSize: 12 }}>
+    <pre style={{ maxHeight: 360, overflow: 'auto', background: 'var(--color-bg)', padding: 12, borderRadius: 'var(--radius-md)', fontSize: 12 }}>
       {JSON.stringify(value ?? {}, null, 2)}
     </pre>
   );
@@ -1065,7 +1052,7 @@ const ApiScenarioTestTool: React.FC = () => {
 
   const renderCompactValue = (value: unknown) => {
     if (value === undefined || value === null || value === '') {
-      return <span style={{ color: '#9ca3af' }}>暂无</span>;
+      return <span style={{ color: 'var(--color-text-disabled)' }}>暂无</span>;
     }
     if (typeof value === 'object') {
       return (
@@ -1076,16 +1063,6 @@ const ApiScenarioTestTool: React.FC = () => {
     }
     return <span style={{ wordBreak: 'break-word' }}>{String(value)}</span>;
   };
-
-  const renderDebugPanel = (title: string, children: React.ReactNode, extra?: React.ReactNode) => (
-    <div style={debugResultPanelStyle}>
-      <div style={debugResultPanelHeaderStyle}>
-        <span>{title}</span>
-        {extra}
-      </div>
-      <div style={debugResultPanelBodyStyle}>{children}</div>
-    </div>
-  );
 
   const renderKeyValueResultTable = (value: unknown) => {
     const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -1118,15 +1095,17 @@ const ApiScenarioTestTool: React.FC = () => {
         dataSource={rows}
         columns={[
           {
-            title: '结果',
+            title: '',
             dataIndex: 'passed',
-            width: 90,
-            render: (passed: boolean) => <Tag color={passed ? 'success' : 'error'}>{passed ? '通过' : '未通过'}</Tag>,
+            width: 36,
+            render: (passed: boolean) => (
+              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: passed ? 'var(--color-success)' : 'var(--color-error)' }} />
+            ),
           },
           {
             title: '断言类型',
             dataIndex: 'type',
-            width: 180,
+            width: 140,
             render: (type: string) => assertionTypeLabels[type] || type || '-',
           },
           { title: '期望', dataIndex: 'expected', render: renderCompactValue },
@@ -1144,53 +1123,134 @@ const ApiScenarioTestTool: React.FC = () => {
     const responseStatusCode = response.status_code;
     const method = request.method || selectedEndpoint?.method || '-';
     const statusColor = passed ? 'success' : status === 'error' ? 'error' : 'warning';
+    const statusCodeOk = responseStatusCode !== undefined && responseStatusCode >= 200 && responseStatusCode < 400;
+
+    const assertionRows = Array.isArray(step.assertions) ? step.assertions : [];
+    const passedCount = assertionRows.filter((a: any) => a.passed).length;
+    const failedCount = assertionRows.filter((a: any) => !a.passed).length;
 
     return (
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Alert
-          type={passed ? 'success' : 'error'}
-          showIcon
-          message={options.title || (passed ? '执行通过' : '执行未通过')}
-          description={step.detail || `执行状态：${scenarioStepStatusLabels[status] || status}`}
+      <div className="debug-result-container">
+        {/* Status bar */}
+        <div className="debug-status-bar">
+          <Tag color={statusColor} style={{ marginRight: 0 }}>{options.title || (passed ? '通过' : '未通过')}</Tag>
+          <Tag color="blue">{method}</Tag>
+          <span className="debug-url" title={request.url}>{request.url || '-'}</span>
+          {responseStatusCode !== undefined && (
+            <Tag color={statusCodeOk ? 'success' : 'error'}>{responseStatusCode}</Tag>
+          )}
+          {response.elapsed_ms !== undefined && (
+            <span className="debug-elapsed">{response.elapsed_ms} ms</span>
+          )}
+          {assertionRows.length > 0 && (
+            <span className="debug-assertion-summary">
+              <span style={{ color: 'var(--color-success)' }}>{passedCount} 通过</span>
+              {failedCount > 0 && <span style={{ color: 'var(--color-error)', marginLeft: 8 }}>{failedCount} 失败</span>}
+            </span>
+          )}
+        </div>
+
+        {/* Detail panels */}
+        <Collapse
+          className="debug-result-collapse"
+          size="small"
+          defaultActiveKey={['assertions', 'response-body']}
+          items={[
+            {
+              key: 'assertions',
+              label: (
+                <span className="debug-collapse-label">
+                  断言结果
+                  {assertionRows.length > 0 && (
+                    <span className="debug-collapse-badge">
+                      {passedCount}/{assertionRows.length}
+                    </span>
+                  )}
+                </span>
+              ),
+              children: renderAssertionResultTable(step.assertions),
+            },
+            {
+              key: 'response-body',
+              label: '响应 Body',
+              children: response.body !== undefined ? (
+                <div className="debug-json-block">
+                  <CodeMirror
+                    value={typeof response.body === 'string' ? response.body : JSON.stringify(response.body, null, 2)}
+                    height="320px"
+                    extensions={jsonExtensions}
+                    readOnly
+                    editable={false}
+                  />
+                </div>
+              ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无响应" />,
+            },
+            {
+              key: 'request-url',
+              label: '请求地址',
+              children: (
+                <Descriptions size="small" column={1} bordered>
+                  <Descriptions.Item label="Method"><Tag color="blue">{method}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="URL">{renderCompactValue(request.url)}</Descriptions.Item>
+                  <Descriptions.Item label="响应状态">
+                    {responseStatusCode !== undefined ? <Tag color={statusCodeOk ? 'success' : 'error'}>{responseStatusCode}</Tag> : '暂无响应'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="耗时">{response.elapsed_ms !== undefined ? `${response.elapsed_ms} ms` : '暂无'}</Descriptions.Item>
+                </Descriptions>
+              ),
+            },
+            {
+              key: 'request-body',
+              label: '请求 Body',
+              children: request.body !== undefined ? (
+                <div className="debug-json-block">
+                  <CodeMirror
+                    value={typeof request.body === 'string' ? request.body : JSON.stringify(request.body, null, 2)}
+                    height="200px"
+                    extensions={jsonExtensions}
+                    readOnly
+                    editable={false}
+                  />
+                </div>
+              ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无请求体" />,
+            },
+            {
+              key: 'request-headers',
+              label: '请求头',
+              children: renderKeyValueResultTable(request.headers),
+            },
+            {
+              key: 'request-params',
+              label: '请求参数',
+              children: renderKeyValueResultTable(request.params),
+            },
+            {
+              key: 'response-headers',
+              label: '响应头',
+              children: renderKeyValueResultTable(response.headers),
+            },
+            {
+              key: 'pre-vars',
+              label: '前置变量',
+              children: renderKeyValueResultTable(step.pre_updates),
+            },
+            {
+              key: 'post-extract',
+              label: '后置提取',
+              children: renderKeyValueResultTable(step.extracted),
+            },
+            ...(options.raw !== undefined ? [{
+              key: 'raw',
+              label: '原始调试数据',
+              children: renderJsonBlock(options.raw),
+            }] : []),
+          ]}
         />
 
-        {renderDebugPanel(
-          '请求地址',
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="Method">
-              <Tag color="blue">{method}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="URL">{renderCompactValue(request.url)}</Descriptions.Item>
-            <Descriptions.Item label="响应状态">
-              {responseStatusCode !== undefined ? <Tag color={responseStatusCode >= 200 && responseStatusCode < 400 ? 'success' : 'error'}>{responseStatusCode}</Tag> : '暂无响应'}
-            </Descriptions.Item>
-            <Descriptions.Item label="耗时">{response.elapsed_ms !== undefined ? `${response.elapsed_ms} ms` : '暂无'}</Descriptions.Item>
-          </Descriptions>,
-          <Tag color={statusColor}>{scenarioStepStatusLabels[status] || status}</Tag>,
+        {step.detail && (
+          <div className="debug-detail-text">{step.detail}</div>
         )}
-
-        {renderDebugPanel('请求头', renderKeyValueResultTable(request.headers))}
-        {renderDebugPanel('请求参数', renderKeyValueResultTable(request.params))}
-        {renderDebugPanel('请求 Body', renderCompactValue(request.body))}
-        {renderDebugPanel('前置变量', renderKeyValueResultTable(step.pre_updates))}
-        {renderDebugPanel('后置提取', renderKeyValueResultTable(step.extracted))}
-        {renderDebugPanel('断言结果', renderAssertionResultTable(step.assertions))}
-        {renderDebugPanel('响应头', renderKeyValueResultTable(response.headers))}
-        {renderDebugPanel('响应 Body', renderCompactValue(response.body))}
-
-        {options.raw !== undefined && (
-          <Collapse
-            size="small"
-            items={[
-              {
-                key: 'raw',
-                label: '原始调试数据',
-                children: renderJsonBlock(options.raw),
-              },
-            ]}
-          />
-        )}
-      </Space>
+      </div>
     );
   };
 
@@ -1218,7 +1278,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>添加 Header</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>添加 Header</Button>
         </Space>
       )}
     </Form.List>
@@ -1248,7 +1308,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button icon={<PlusOutlined />} onClick={() => add({ key: '', value: '', in: 'query', required: false })}>添加 Param</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ key: '', value: '', in: 'query', required: false })}>添加 Param</Button>
         </Space>
       )}
     </Form.List>
@@ -1269,7 +1329,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>Add variable</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>添加变量</Button>
         </Space>
       )}
     </Form.List>
@@ -1290,7 +1350,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>{addLabel}</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ key: '', value: '' })}>{addLabel}</Button>
         </Space>
       )}
     </Form.List>
@@ -1320,7 +1380,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => add({ key: '', value: '', in: 'query', required: false })}>Add param</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ key: '', value: '', in: 'query', required: false })}>添加 Param</Button>
         </Space>
       )}
     </Form.List>
@@ -1341,7 +1401,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => add({ type: 'set_variable', key: '', value: '' })}>Add pre action</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ type: 'set_variable', key: '', value: '' })}>添加前置动作</Button>
         </Space>
       )}
     </Form.List>
@@ -1371,7 +1431,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => add({ type: 'extract_jsonpath', key: '', jsonpath: '' })}>Add post action</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ type: 'extract_jsonpath', key: '', jsonpath: '' })}>添加后置提取</Button>
         </Space>
       )}
     </Form.List>
@@ -1410,7 +1470,7 @@ const ApiScenarioTestTool: React.FC = () => {
               <Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
             </Space>
           ))}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => add(defaultAssertions()[0])}>Add assertion</Button>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add(defaultAssertions()[0])}>添加断言</Button>
         </Space>
       )}
     </Form.List>
@@ -1419,97 +1479,99 @@ const ApiScenarioTestTool: React.FC = () => {
   const renderScenarioStepsEditor = () => (
     <Form.List name="steps">
       {(fields, { add, remove, move }) => (
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Button
-            icon={<PlusOutlined />}
-            onClick={() => {
-              const endpoint = endpoints[0];
-              add(endpoint ? scenarioStepFromEndpoint(endpoint) : {
-                enabled: true,
-                continue_on_failure: false,
-                headers: [],
-                parameters: [],
-                pre_actions: [],
-                post_actions: [],
-                assertions: defaultAssertions(),
-              });
-            }}
-          >
-            Add step
-          </Button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
           {fields.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No steps" />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无步骤" />
           ) : (
-            <div>
+            <div className="scenario-steps-list">
               <Collapse
                 size="small"
+                className="scenario-steps-collapse"
                 defaultActiveKey={[]}
-                items={fields.map((field, index) => ({
-                  key: String(field.key),
-                  label: (() => {
-                    const step = watchedScenarioSteps[field.name] || {};
-                    const endpoint = endpoints.find((item) => item.id === step.endpoint_id);
-                    const name = String(step.name || endpoint?.name || '').trim();
-                    return <Space><Tag>{index + 1}</Tag><span>{name || 'Step'}</span></Space>;
-                  })(),
-                  extra: (
-                    <Space onClick={(event) => event.stopPropagation()}>
-                      <Button size="small" disabled={index === 0} onClick={() => move(index, index - 1)}>Up</Button>
-                      <Button size="small" disabled={index === fields.length - 1} onClick={() => move(index, index + 1)}>Down</Button>
-                      <Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
-                    </Space>
-                  ),
-                  children: (
-                    <>
-              <Space style={{ width: '100%' }} align="start" wrap>
-                <Form.Item name={[field.name, 'endpoint_id']} label="接口" style={{ minWidth: 320, flex: 1 }}>
-                  <Select
-                    showSearch
-                    placeholder="按接口名称或路径搜索"
-                    filterOption={(input, option) => {
-                      const endpoint = endpoints.find((item) => item.id === option?.value);
-                      return endpoint ? endpointSearchText(endpoint).includes(input.toLowerCase()) : false;
-                    }}
-                    options={endpointOptions}
-                    onChange={(id) => {
-                      const endpoint = endpoints.find((item) => item.id === id);
-                      if (endpoint) {
-                        const currentStep = scenarioForm.getFieldValue(['steps', field.name]) || {};
-                        scenarioForm.setFieldValue(['steps', field.name], {
-                          ...scenarioStepFromEndpoint(endpoint),
-                          enabled: currentStep.enabled !== false,
-                          continue_on_failure: Boolean(currentStep.continue_on_failure),
-                        });
-                      }
-                    }}
-                  />
-                </Form.Item>
-                <Form.Item name={[field.name, 'name']} label="Name" style={{ minWidth: 220, flex: 1 }}>
-                  <Input />
-                </Form.Item>
-                <Form.Item name={[field.name, 'enabled']} valuePropName="checked" label=" ">
-                  <Checkbox>Enabled</Checkbox>
-                </Form.Item>
-                <Form.Item name={[field.name, 'continue_on_failure']} valuePropName="checked" label=" ">
-                  <Checkbox>Continue on failure</Checkbox>
-                </Form.Item>
-              </Space>
+                items={fields.map((field, index) => {
+                  const step = watchedScenarioSteps[field.name] || {};
+                  const endpoint = endpoints.find((item) => item.id === step.endpoint_id);
+                  const method = step.method || endpoint?.method;
+                  const name = String(step.name || endpoint?.name || '').trim();
+                  const enabled = step.enabled !== false;
+                  return {
+                    key: String(field.key),
+                    label: (
+                      <div className="step-header-label">
+                        <span className="step-number">{index + 1}</span>
+                        {method && <Tag className={`step-method-tag step-method-${method.toLowerCase()}`} style={{ margin: 0, fontSize: 11 }}>{method}</Tag>}
+                        <span className="step-name">{name || '未命名步骤'}</span>
+                        {!enabled && <Tag style={{ marginLeft: 4, fontSize: 11 }}>禁用</Tag>}
+                      </div>
+                    ),
+                    extra: (
+                      <div className="step-actions" onClick={(event) => event.stopPropagation()}>
+                        <Button type="text" size="small" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, index - 1)} />
+                        <Button type="text" size="small" icon={<ArrowDownOutlined />} disabled={index === fields.length - 1} onClick={() => move(index, index + 1)} />
+                        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                      </div>
+                    ),
+                    children: (
+                      <>
+                <div className="step-config-row">
+                  <Form.Item name={[field.name, 'endpoint_id']} label="接口" style={{ minWidth: 280, flex: 2, marginBottom: 8 }}>
+                    <Select
+                      showSearch
+                      placeholder="按接口名称或路径搜索"
+                      filterOption={(input, option) => {
+                        const ep = endpoints.find((item) => item.id === option?.value);
+                        return ep ? endpointSearchText(ep).includes(input.toLowerCase()) : false;
+                      }}
+                      options={endpointOptions}
+                      onChange={(id) => {
+                        const ep = endpoints.find((item) => item.id === id);
+                        if (ep) {
+                          const currentStep = scenarioForm.getFieldValue(['steps', field.name]) || {};
+                          scenarioForm.setFieldValue(['steps', field.name], {
+                            ...scenarioStepFromEndpoint(ep),
+                            enabled: currentStep.enabled !== false,
+                            continue_on_failure: Boolean(currentStep.continue_on_failure),
+                          });
+                        }
+                      }}
+                    />
+                  </Form.Item>
+                  <Form.Item name={[field.name, 'name']} label="步骤名称" style={{ minWidth: 160, flex: 1, marginBottom: 8 }}>
+                    <Input placeholder="可选" />
+                  </Form.Item>
+                  <div className="step-checkboxes">
+                    <Form.Item name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                      <Checkbox>启用</Checkbox>
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'continue_on_failure']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                      <Checkbox>失败继续</Checkbox>
+                    </Form.Item>
+                  </div>
+                </div>
               <Tabs
+                className="api-step-tabs"
                 size="small"
                 items={[
                   {
                     key: 'request',
-                    label: 'Request',
+                    label: '请求',
                     children: (
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        <Space style={{ width: '100%' }} align="start">
-                          <Form.Item name={[field.name, 'method']} label="Method" style={{ width: 130 }}>
-                            <Select allowClear options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((method) => ({ label: method, value: method }))} />
+                      <Space direction="vertical" style={{ width: '100%' }} size="small">
+                        <div className="endpoint-url-bar">
+                          <Form.Item name={[field.name, 'method']} noStyle>
+                            <Select
+                              className="endpoint-method-select"
+                              allowClear
+                              options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => ({ label: m, value: m }))}
+                              popupMatchSelectWidth={false}
+                            />
                           </Form.Item>
-                          <Form.Item name={[field.name, 'url']} label="URL / Path" style={{ flex: 1 }}>
-                            <Input />
-                          </Form.Item>
-                        </Space>
+                          <div className="endpoint-path-input">
+                            <Form.Item name={[field.name, 'url']} noStyle>
+                              <Input placeholder="/api/v1/resource 或完整 URL" />
+                            </Form.Item>
+                          </div>
+                        </div>
                         <Space>
                           <Button
                             size="small"
@@ -1518,78 +1580,275 @@ const ApiScenarioTestTool: React.FC = () => {
                             disabled={!endpoints.find((item) => item.id === scenarioForm.getFieldValue(['steps', field.name, 'endpoint_id']))?.request_schema}
                             onClick={() => handleGenerateScenarioStepBody(field.name)}
                           >
-                            AI Body
+                            AI 生成 Body
                           </Button>
                         </Space>
-                        <Form.Item name={[field.name, 'body']} label="Body">
+                        <Form.Item name={[field.name, 'body']} label="Body" style={{ marginBottom: 0 }}>
                           <TextArea rows={5} />
                         </Form.Item>
                       </Space>
                     ),
                   },
-                  { key: 'headers', label: 'Headers', children: renderNestedKeyValueList([field.name, 'headers'], 'Add header') },
-                  { key: 'params', label: 'Params', children: renderNestedParamsList([field.name, 'parameters']) },
-                  { key: 'pre', label: 'Pre', children: renderPreActionsList([field.name, 'pre_actions']) },
-                  { key: 'post', label: 'Post', children: renderPostActionsList([field.name, 'post_actions'], getStepJsonPathOptions(field.name)) },
-                  { key: 'assertions', label: 'Assertions', children: renderAssertionsList([field.name, 'assertions'], getStepJsonPathOptions(field.name)) },
+                  { key: 'headers', label: '请求头', children: renderNestedKeyValueList([field.name, 'headers'], '添加 Header') },
+                  { key: 'params', label: '参数', children: renderNestedParamsList([field.name, 'parameters']) },
+                  { key: 'pre', label: '前置', children: renderPreActionsList([field.name, 'pre_actions']) },
+                  { key: 'post', label: '后置', children: renderPostActionsList([field.name, 'post_actions'], getStepJsonPathOptions(field.name)) },
+                  { key: 'assertions', label: '断言', children: renderAssertionsList([field.name, 'assertions'], getStepJsonPathOptions(field.name)) },
                 ]}
               />
                     </>
                   ),
-                }))}
+                };
+                })}
               />
             </div>
           )}
-        </Space>
+          <Button type="dashed" size="small" block icon={<PlusOutlined />} onClick={() => add({ endpoint_id: undefined, name: '', method: undefined, url: undefined, headers: [], parameters: [], body: undefined, pre_actions: [], post_actions: [], assertions: [], enabled: true, continue_on_failure: false })}>
+            添加步骤
+          </Button>
+        </div>
       )}
     </Form.List>
   );
 
-  const handleDownloadCollection = () => {
-    if (!selectedProject) return;
-    const collection = {
-      info: {
-        name: selectedProject.name,
-        schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
-      },
-      item: endpoints.map((endpoint) => ({
-        name: endpoint.name,
-        request: {
-          method: endpoint.method,
-          header: endpoint.headers,
-          url: {
-            raw: `{{baseUrl}}${endpoint.path}`,
-            host: ['{{baseUrl}}'],
-            path: endpoint.path.split('/').filter(Boolean),
-            query: endpoint.parameters.filter((param) => param.in !== 'path').map((param) => ({ key: param.key, value: param.value })),
-          },
-          body: endpoint.body ? { mode: 'raw', raw: endpoint.body } : undefined,
-        },
-        event: [{
-          listen: 'test',
-          script: {
-            type: 'text/javascript',
-            exec: ['pm.test("status code is 2xx", function () { pm.expect(pm.response.code).to.be.within(200, 299); });'],
-          },
-        }],
-      })),
-      variable: [{ key: 'baseUrl', value: selectedProject.base_url }],
+  const handleBatchReplaceVariables = async () => {
+    const envRes = await globalParameterApi.getEnvironments();
+    const latestEnvs = envRes.code === 200 ? (envRes.data || []) : environments;
+    if (envRes.code === 200) setEnvironments(envRes.data || []);
+    const envId = normalizeEnvironmentId(projectForm.getFieldValue('environment_id'))
+      ?? selectedProject?.environment_id
+      ?? latestEnvs.find((e: GlobalParameter) => e.is_default)?.id;
+    if (!envId) { message.warning('请先配置项目环境'); return; }
+    const env = latestEnvs.find((e: GlobalParameter) => e.id === envId);
+    if (!env) { message.warning('未找到环境配置'); return; }
+    if (!env.parameters.length) { message.warning('当前环境没有配置变量'); return; }
+    const envKeys = new Set(env.parameters.map((p) => p.key));
+
+    const replaceJsonValue = (val: any): any => {
+      if (Array.isArray(val)) return val.map(replaceJsonValue);
+      if (val && typeof val === 'object') return Object.fromEntries(Object.entries(val).map(([k, v]) => [k, envKeys.has(k) ? `{{${k}}}` : replaceJsonValue(v)]));
+      return val;
     };
-    const blob = new Blob([JSON.stringify(collection, null, 2)], { type: 'application/json' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${selectedProject.name || 'api-collection'}.postman_collection.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+    const replaceBody = (body?: string | null): string => {
+      if (!body) return body ?? '';
+      try { return JSON.stringify(replaceJsonValue(JSON.parse(body)), null, 2); } catch { return body; }
+    };
+    const replaceKV = <T extends { key: string; value: string }>(rows?: T[]): T[] | undefined =>
+      rows?.map((r) => envKeys.has(r.key) ? { ...r, value: `{{${r.key}}}` } : r);
+
+    const countJson = (obj: any): number => {
+      let n = 0;
+      const walk = (v: any): void => {
+        if (Array.isArray(v)) { v.forEach(walk); return; }
+        if (v && typeof v === 'object') Object.entries(v).forEach(([k, val]) => { if (envKeys.has(k)) n++; else walk(val); });
+      };
+      walk(obj);
+      return n;
+    };
+
+    let totalCount = 0;
+    let endpointCount = 0;
+    let scenarioCount = 0;
+
+    for (const ep of endpoints) {
+      try { totalCount += countJson(JSON.parse(ep.body || '{}')); } catch { /* 非 JSON */ }
+      ep.headers?.forEach((r) => { if (envKeys.has(r.key)) totalCount++; });
+      ep.parameters?.forEach((r) => { if (envKeys.has(r.key)) totalCount++; });
+      const newBody = replaceBody(ep.body);
+      const newHeaders = replaceKV(ep.headers);
+      const newParams = replaceKV(ep.parameters);
+      const changed = newBody !== (ep.body ?? '') || JSON.stringify(newHeaders) !== JSON.stringify(ep.headers) || JSON.stringify(newParams) !== JSON.stringify(ep.parameters);
+      if (changed) {
+        await apiTestApi.updateEndpoint(ep.id, { ...ep, body: newBody, headers: newHeaders, parameters: newParams });
+        endpointCount++;
+      }
+    }
+
+    for (const sc of scenarios) {
+      sc.variables?.forEach((r) => { if (envKeys.has(r.key)) totalCount++; });
+      sc.steps?.forEach((step) => {
+        try { totalCount += countJson(JSON.parse(step.body || '{}')); } catch { /* 非 JSON */ }
+        step.headers?.forEach((r) => { if (envKeys.has(r.key)) totalCount++; });
+        step.parameters?.forEach((r) => { if (envKeys.has(r.key)) totalCount++; });
+      });
+      const newVars = replaceKV(sc.variables);
+      const newSteps = sc.steps?.map((step) => ({ ...step, body: replaceBody(step.body), headers: replaceKV(step.headers), parameters: replaceKV(step.parameters) }));
+      const changed = JSON.stringify(newVars) !== JSON.stringify(sc.variables) || JSON.stringify(newSteps) !== JSON.stringify(sc.steps);
+      if (changed) {
+        await apiTestApi.updateScenario(sc.id, { ...sc, variables: newVars, steps: newSteps });
+        scenarioCount++;
+      }
+    }
+
+    if (totalCount > 0) {
+      message.success(`已替换 ${totalCount} 处（${endpointCount} 个接口，${scenarioCount} 个场景）`);
+      if (selectedProjectId) loadProjectData(selectedProjectId);
+    } else {
+      message.info(`未找到匹配的字段（环境：${env.name}，变量：${[...envKeys].join('、')}）`);
+    }
+  };
+
+  const handleReplaceVariables = async (target: 'endpoint' | 'scenario') => {
+    const envRes = await globalParameterApi.getEnvironments();
+    const latestEnvs = envRes.code === 200 ? (envRes.data || []) : environments;
+    if (envRes.code === 200) setEnvironments(envRes.data || []);
+    const envId = normalizeEnvironmentId(projectForm.getFieldValue('environment_id'))
+      ?? selectedProject?.environment_id
+      ?? latestEnvs.find((e: GlobalParameter) => e.is_default)?.id;
+    if (!envId) { message.warning('请先配置项目环境'); return; }
+    const env = latestEnvs.find((e: GlobalParameter) => e.id === envId);
+    if (!env) { message.warning('未找到环境配置'); return; }
+    if (!env.parameters.length) { message.warning('当前环境没有配置变量'); return; }
+    const envKeys = new Set(env.parameters.map((p) => p.key));
+
+    // JSON body：key 匹配环境变量 key 时，value 替换为 {{key}}
+    const replaceBody = (body?: string | null): string => {
+      if (!body) return body ?? '';
+      try {
+        return JSON.stringify(replaceJsonValue(JSON.parse(body)), null, 2);
+      } catch { return body; }
+    };
+    const replaceJsonValue = (val: any): any => {
+      if (Array.isArray(val)) return val.map(replaceJsonValue);
+      if (val && typeof val === 'object') {
+        return Object.fromEntries(Object.entries(val).map(([k, v]) => [k, envKeys.has(k) ? `{{${k}}}` : replaceJsonValue(v)]));
+      }
+      return val;
+    };
+
+    // key-value 数组：key 匹配环境变量 key 时，value 替换为 {{key}}
+    const replaceKV = <T extends { key: string; value: string }>(rows?: T[]): T[] | undefined =>
+      rows?.map((r) => envKeys.has(r.key) ? { ...r, value: `{{${r.key}}}` } : r);
+
+    const form = target === 'endpoint' ? endpointForm : scenarioForm;
+    const values = form.getFieldsValue(true);
+    let count = 0;
+
+    if (target === 'endpoint') {
+      form.setFieldValue('body', replaceBody(values.body));
+      form.setFieldValue('headers', replaceKV(values.headers));
+      form.setFieldValue('parameters', replaceKV(values.parameters));
+      if (selectedEndpoint) {
+        // 计数 body 中匹配的 key
+        try {
+          const countJson = (obj: any): void => {
+            if (Array.isArray(obj)) { obj.forEach(countJson); return; }
+            if (obj && typeof obj === 'object') {
+              Object.entries(obj).forEach(([k, v]) => { if (envKeys.has(k)) count++; else countJson(v); });
+            }
+          };
+          countJson(JSON.parse(selectedEndpoint.body || '{}'));
+        } catch { /* body 非 JSON */ }
+        selectedEndpoint.headers?.forEach((r) => { if (envKeys.has(r.key)) count++; });
+        selectedEndpoint.parameters?.forEach((r) => { if (envKeys.has(r.key)) count++; });
+      }
+    } else {
+      if (values.variables) form.setFieldValue('variables', replaceKV(values.variables));
+      if (values.steps) {
+        const newSteps = values.steps.map((step: any) => ({
+          ...step, body: replaceBody(step.body),
+          headers: replaceKV(step.headers), parameters: replaceKV(step.parameters),
+        }));
+        form.setFieldValue('steps', newSteps);
+      }
+      if (selectedScenario) {
+        selectedScenario.variables?.forEach((r) => { if (envKeys.has(r.key)) count++; });
+        selectedScenario.steps?.forEach((step) => {
+          try {
+            const countJson = (obj: any): void => {
+              if (Array.isArray(obj)) { obj.forEach(countJson); return; }
+              if (obj && typeof obj === 'object') Object.entries(obj).forEach(([k, v]) => { if (envKeys.has(k)) count++; else countJson(v); });
+            };
+            countJson(JSON.parse(step.body || '{}'));
+          } catch { /* 非 JSON */ }
+          step.headers?.forEach((r) => { if (envKeys.has(r.key)) count++; });
+          step.parameters?.forEach((r) => { if (envKeys.has(r.key)) count++; });
+        });
+      }
+    }
+    message.success(count > 0 ? `已替换 ${count} 处（环境：${env.name}）` : `未找到匹配的字段（环境：${env.name}，变量：${[...envKeys].join('、')}）`);
+  };
+
+  const handleExport = (format: 'postman' | 'openapi') => {
+    if (!selectedProject) return;
+    if (format === 'postman') {
+      const collection = {
+        info: {
+          name: selectedProject.name,
+          schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+        },
+        item: endpoints.map((endpoint) => ({
+          name: endpoint.name,
+          request: {
+            method: endpoint.method,
+            header: endpoint.headers,
+            url: {
+              raw: `{{baseUrl}}${endpoint.path}`,
+              host: ['{{baseUrl}}'],
+              path: endpoint.path.split('/').filter(Boolean),
+              query: endpoint.parameters.filter((param) => param.in !== 'path').map((param) => ({ key: param.key, value: param.value })),
+            },
+            body: endpoint.body ? { mode: 'raw', raw: endpoint.body } : undefined,
+          },
+          event: [{
+            listen: 'test',
+            script: {
+              type: 'text/javascript',
+              exec: ['pm.test("status code is 2xx", function () { pm.expect(pm.response.code).to.be.within(200, 299); });'],
+            },
+          }],
+        })),
+        variable: [{ key: 'baseUrl', value: selectedProject.base_url }],
+      };
+      const blob = new Blob([JSON.stringify(collection, null, 2)], { type: 'application/json' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${selectedProject.name || 'api-collection'}.postman_collection.json`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } else if (format === 'openapi') {
+      const spec = {
+        openapi: '3.0.0',
+        info: { title: selectedProject.name, version: '1.0.0' },
+        servers: [{ url: selectedProject.base_url || '' }],
+        paths: Object.fromEntries(endpoints.map((ep) => {
+          const pathKey = ep.path || '/';
+          const method = ep.method?.toLowerCase() || 'get';
+          const parameters = ep.parameters.filter((p) => p.in === 'path' || p.in === 'query').map((p) => ({
+            name: p.key,
+            in: p.in,
+            required: p.required ?? false,
+            schema: { type: 'string' },
+          }));
+          const operation = {
+            summary: ep.name || '',
+            parameters: parameters.length ? parameters : undefined,
+            requestBody: ep.body ? {
+              content: { 'application/json': { schema: ep.request_schema || {} } },
+            } : undefined,
+            responses: { '200': { description: 'OK', content: { 'application/json': { schema: ep.response_schema || {} } } } },
+          };
+          return [pathKey, { [method]: operation }];
+        })),
+      };
+      const blob = new Blob([JSON.stringify(spec, null, 2)], { type: 'application/json' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${selectedProject.name || 'api-spec'}.openapi.json`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '300px 380px 1fr', gap: 12, height: 'calc(100vh - 76px)', minHeight: 0, overflow: 'hidden', padding: 12, background: '#f5f7fb' }}>
+    <div style={{ display: 'flex', gap: 12, height: 'calc(100vh - 76px)', minHeight: 0, overflow: 'hidden', padding: 12, background: 'var(--color-bg)', position: 'relative' }}>
+      {/* 左侧：接口项目 */}
+      {!projectSidebarCollapsed && (
       <Card
         title="接口项目"
         size="small"
-        style={fullHeightCardStyle}
-        styles={{ body: { ...scrollableCardBodyStyle, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' } }}
+        style={{ ...fullHeightCardStyle, width: 300, flexShrink: 0 }}
+        styles={{ body: { ...scrollableCardBodyStyle, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden', paddingBottom: 8 } }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input placeholder="项目名称" value={importName} onChange={(event) => setImportName(event.target.value)} />
@@ -1642,8 +1901,8 @@ const ApiScenarioTestTool: React.FC = () => {
               style={{
                 cursor: 'pointer',
                 padding: '8px 10px',
-                background: project.id === selectedProjectId ? '#e6f4ff' : undefined,
-                borderRadius: 6,
+                background: project.id === selectedProjectId ? 'var(--color-primary-bg)' : undefined,
+                borderRadius: 'var(--radius-md)',
               }}
               onClick={() => handleSelectProject(project)}
             >
@@ -1656,7 +1915,7 @@ const ApiScenarioTestTool: React.FC = () => {
                       {project.base_url || '未设置 Base URL'}
                     </span>
                     {project.source_url && (
-                      <span title={project.source_url} style={{ ...projectUrlTextStyle, fontSize: 12, color: '#8c8c8c' }}>
+                      <span title={project.source_url} style={{ ...projectUrlTextStyle, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
                         {project.source_url}
                       </span>
                     )}
@@ -1666,12 +1925,82 @@ const ApiScenarioTestTool: React.FC = () => {
             </List.Item>
           )}
         />
+        {/* 底部收起栏 */}
+        <div
+          onClick={() => setProjectSidebarCollapsed(true)}
+          style={{
+            flexShrink: 0,
+            height: 32,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            cursor: 'pointer',
+            borderTop: '1px solid var(--color-border-light)',
+            color: 'var(--color-text-tertiary)',
+            fontSize: 12,
+            transition: 'all 150ms ease',
+            margin: '4px -16px 0',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-border-light)'; e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-tertiary)'; }}
+        >
+          <MenuFoldOutlined style={{ fontSize: 12 }} />
+          <span>收起</span>
+        </div>
       </Card>
+      )}
+
+      {/* 收起状态下的展开按钮 */}
+      {projectSidebarCollapsed && (
+        <Tooltip title="展开接口项目" placement="right">
+          <div
+            onClick={() => setProjectSidebarCollapsed(false)}
+            style={{
+              width: 20,
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              background: 'var(--color-bg-elevated)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border-light)',
+              color: 'var(--color-text-tertiary)',
+              transition: 'all 150ms ease',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-primary)'; e.currentTarget.style.borderColor = 'var(--color-primary-border)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-text-tertiary)'; e.currentTarget.style.borderColor = 'var(--color-border-light)'; }}
+          >
+            <MenuUnfoldOutlined style={{ fontSize: 12 }} />
+          </div>
+        </Tooltip>
+      )}
+
+      {/* 中间+右侧用 grid 包裹 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 12, flex: 1, minHeight: 0, overflow: 'hidden' }}>
 
       <Card
         size="small"
         title={selectedProject ? selectedProject.name : '接口资产'}
-        extra={selectedProject && <Button size="small" icon={<DownloadOutlined />} onClick={handleDownloadCollection}>导出</Button>}
+        extra={selectedProject && (
+          <Space size={4}>
+            <Tooltip title="将接口和场景中的值替换为环境变量的 {{key}} 占位符">
+              <Button size="small" icon={<SwapOutlined />} onClick={handleBatchReplaceVariables}>批量替换</Button>
+            </Tooltip>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'postman', label: 'Postman Collection', icon: <DownloadOutlined /> },
+                  { key: 'openapi', label: 'OpenAPI Spec', icon: <DownloadOutlined /> },
+                ],
+                onClick: ({ key }) => handleExport(key as 'postman' | 'openapi'),
+              }}
+            >
+              <Button size="small" icon={<DownloadOutlined />} className="export-trigger">导出</Button>
+            </Dropdown>
+          </Space>
+        )}
         style={fullHeightCardStyle}
         styles={{ body: fixedCardBodyStyle }}
       >
@@ -1720,12 +2049,7 @@ const ApiScenarioTestTool: React.FC = () => {
                                     const removed = endpoint.tags?.includes(REMOVED_FROM_SPEC_TAG);
                                     return (
                                       <List.Item
-                                        style={{
-                                          cursor: 'pointer',
-                                          background: endpoint.id === selectedEndpoint?.id ? '#f0f5ff' : undefined,
-                                          padding: '8px',
-                                          borderRadius: 6,
-                                        }}
+                                        className={`asset-list-item ${endpoint.id === selectedEndpoint?.id ? 'asset-list-item-selected' : ''}`}
                                         onClick={() => {
                                           setSelectedEndpoint(endpoint);
                                           setSelectedScenario(null);
@@ -1762,25 +2086,32 @@ const ApiScenarioTestTool: React.FC = () => {
                         dataSource={scenarios}
                         renderItem={(scenario) => (
                           <List.Item
+                            className={`asset-list-item ${scenario.id === selectedScenario?.id ? 'asset-list-item-selected' : ''}`}
                             actions={[
-                              <Button
-                                key="copy"
-                                type="text"
-                                size="small"
-                                icon={<CopyOutlined />}
-                                loading={copyingScenarioId === scenario.id}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleCopyScenario(scenario);
-                                }}
-                              >
-                                复制
-                              </Button>,
+                              <Tooltip title="复制场景" key="copy">
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={<SnippetsOutlined />}
+                                  loading={copyingScenarioId === scenario.id}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleCopyScenario(scenario);
+                                  }}
+                                />
+                              </Tooltip>,
                             ]}
-                            style={{ cursor: 'pointer', background: scenario.id === selectedScenario?.id ? '#f0f5ff' : undefined, padding: '8px', borderRadius: 6 }}
                             onClick={() => selectScenario(scenario)}
                           >
-                            <List.Item.Meta title={scenario.name} description={`${scenario.steps?.length || 0} 个步骤`} />
+                            <List.Item.Meta
+                              title={scenario.name}
+                              description={
+                                <span className="scenario-item-steps">
+                                  <PlayCircleOutlined style={{ fontSize: 11 }} />
+                                  {scenario.steps?.length || 0} 个步骤
+                                </span>
+                              }
+                            />
                           </List.Item>
                         )}
                       />
@@ -1810,22 +2141,28 @@ const ApiScenarioTestTool: React.FC = () => {
             style={endpointEditorFormStyle}
             initialValues={endpointToFormValues(selectedEndpoint)}
           >
-            <Space style={{ width: '100%' }} align="start">
-              <Form.Item name="method" label="Method" style={{ width: 120 }}>
-                <Select options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((method) => ({ label: method, value: method }))} />
-              </Form.Item>
-              <Form.Item name="name" label="接口名称" style={{ flex: 1 }}>
-                <Input />
-              </Form.Item>
-              <Form.Item name="environment_id" label="环境" style={{ width: 180 }}>
-                <Select allowClear placeholder="可选" options={environmentOptions} />
-              </Form.Item>
-            </Space>
-            <Form.Item name="path" label="Path">
+            {/* Row 1: Name */}
+            <Form.Item name="name" label="接口名称">
               <Input />
             </Form.Item>
-            <Form.Item name="url" label="完整 URL 覆盖">
-              <Input placeholder="可选；填写后执行时不使用 BaseUrl + Path" />
+            {/* Row 2: Method + Path as a URL bar */}
+            <div className="endpoint-url-bar">
+              <Form.Item name="method" noStyle>
+                <Select
+                  className="endpoint-method-select"
+                  options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => ({ label: m, value: m }))}
+                  popupMatchSelectWidth={false}
+                />
+              </Form.Item>
+              <div className="endpoint-path-input">
+                <Form.Item name="path" noStyle>
+                  <Input placeholder="/api/v1/resource" />
+                </Form.Item>
+              </div>
+            </div>
+            {/* Row 3 (optional): Full URL override — collapsible */}
+            <Form.Item name="url" label="完整 URL 覆盖" className="endpoint-form-fullurl" tooltip="填写后执行时不使用 BaseUrl + Path">
+              <Input placeholder="https://example.com/api/v1/resource" />
             </Form.Item>
             <Tabs
               className="api-endpoint-editor-tabs"
@@ -1908,6 +2245,7 @@ const ApiScenarioTestTool: React.FC = () => {
             />
             <Space wrap style={scenarioActionsStyle}>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveEndpoint}>保存接口</Button>
+              <Button icon={<SwapOutlined />} onClick={() => handleReplaceVariables('endpoint')}>替换变量</Button>
               <Button icon={<PlayCircleOutlined />} loading={endpointRunning} onClick={handleRunEndpoint}>调试接口</Button>
               <Button icon={<ExperimentOutlined />} loading={scenarioGenerating} onClick={handleGenerateScenarioTests}>生成接口单测</Button>
               {selectedScenario && <Button onClick={() => handleAddStep(selectedEndpoint)}>加入当前场景</Button>}
@@ -1922,16 +2260,8 @@ const ApiScenarioTestTool: React.FC = () => {
             className="api-scenario-editor-form"
             style={scenarioEditorFormStyle}
           >
-            <Space style={{ width: '100%' }} align="start">
-              <Form.Item name="name" label="场景名称" style={{ flex: 1 }}>
-                <Input />
-              </Form.Item>
-              <Form.Item name="environment_id" label="环境" style={{ width: 180 }}>
-                <Select allowClear placeholder="可选" options={environmentOptions} />
-              </Form.Item>
-            </Space>
-            <Form.Item name="base_url" label="场景 BaseUrl">
-              <Input placeholder="为空时使用项目 BaseUrl" />
+            <Form.Item name="name" label="场景名称">
+              <Input />
             </Form.Item>
             <Form.Item label="添加接口步骤">
               <Select
@@ -1959,12 +2289,12 @@ const ApiScenarioTestTool: React.FC = () => {
                   children: (
                     <div style={scenarioTabPaneStyle}>
                       {result ? (
-                    <Space direction="vertical" style={{ width: '100%' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
                       {selectedScenarioResultRecords.length > 0 && (
-                        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                        <div className="result-toolbar">
                           <Select
                             size="small"
-                            style={{ minWidth: 280 }}
+                            className="result-record-select"
                             value={selectedScenarioResultRecordId || selectedScenarioResultRecords[0]?.id}
                             options={selectedScenarioResultRecords.map((record) => ({
                               label: formatScenarioResultRecordLabel(record),
@@ -1976,15 +2306,9 @@ const ApiScenarioTestTool: React.FC = () => {
                               setResult(record?.result || null);
                             }}
                           />
-                          <Tag>{selectedScenarioResultRecords.length}/{MAX_SCENARIO_RESULT_RECORDS}</Tag>
-                          <Button
-                            size="small"
-                            icon={<CopyOutlined />}
-                            onClick={handleCopyScenarioResult}
-                          >
-                            复制结果
-                          </Button>
-                        </Space>
+                          <Tag style={{ flexShrink: 0 }}>{selectedScenarioResultRecords.length}/{MAX_SCENARIO_RESULT_RECORDS}</Tag>
+                          <Button size="small" icon={<CopyOutlined />} onClick={handleCopyScenarioResult}>复制</Button>
+                        </div>
                       )}
                     <Table<any>
                       size="small"
@@ -1992,17 +2316,52 @@ const ApiScenarioTestTool: React.FC = () => {
                       pagination={false}
                       dataSource={result.steps || []}
                       columns={[
-                        { title: '#', dataIndex: 'index', width: 60 },
-                        { title: '步骤', dataIndex: 'name' },
-                        { title: '状态', dataIndex: 'status', render: (value: string) => <Tag color={value === 'passed' ? 'green' : 'red'}>{scenarioStepStatusLabels[value] || value || '-'}</Tag> },
-                        { title: '请求 URL', render: (_: unknown, row: any) => row.request?.url || '-' },
-                        { title: '状态码', render: (_: unknown, row: any) => row.response?.status_code || '-' },
-                        { title: '耗时', render: (_: unknown, row: any) => row.response?.elapsed_ms ? `${row.response.elapsed_ms}ms` : '-' },
-                        { title: '失败原因', render: (_: unknown, row: any) => formatScenarioFailureReason(row) },
+                        { title: '#', dataIndex: 'index', width: 40, align: 'center' },
+                        {
+                          title: '步骤',
+                          dataIndex: 'name',
+                          render: (name: string, row: any) => {
+                            const failed = row.status !== 'passed';
+                            const reason = failed ? formatScenarioFailureReason(row) : null;
+                            return (
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name || '-'}</div>
+                                {reason && <div style={{ fontSize: 11, color: 'var(--color-error)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reason}</div>}
+                              </div>
+                            );
+                          },
+                        },
+                        {
+                          title: '结果',
+                          width: 70,
+                          align: 'center',
+                          render: (_: unknown, row: any) => {
+                            const sc = row.response?.status_code;
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                                <Tag color={row.status === 'passed' ? 'green' : 'red'} style={{ margin: 0 }}>{row.status === 'passed' ? '通过' : '失败'}</Tag>
+                                {sc && <span style={{ fontSize: 11, color: sc >= 200 && sc < 400 ? 'var(--color-success)' : 'var(--color-error)' }}>{sc}</span>}
+                              </div>
+                            );
+                          },
+                        },
+                        {
+                          title: 'URL',
+                          render: (_: unknown, row: any) => {
+                            const url = row.request?.url || '-';
+                            return <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, maxWidth: 200, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={url}>{url}</span>;
+                          },
+                        },
+                        {
+                          title: '耗时',
+                          width: 70,
+                          align: 'right',
+                          render: (_: unknown, row: any) => row.response?.elapsed_ms != null ? <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{row.response.elapsed_ms}ms</span> : '-',
+                        },
                       ]}
                       expandable={{
                         expandedRowRender: (row) => (
-                          <div style={{ padding: 8, background: '#fbfcfe' }}>
+                          <div style={{ padding: 8, background: 'var(--color-bg)' }}>
                             {renderStepDebugResult(row, {
                               passed: row.status === 'passed',
                               title: row.status === 'passed' ? '步骤执行通过' : '步骤执行未通过',
@@ -2012,7 +2371,7 @@ const ApiScenarioTestTool: React.FC = () => {
                         ),
                       }}
                     />
-                    </Space>
+                    </div>
                       ) : <Alert type="info" message="运行场景后在这里查看每一步请求、响应、断言和提取变量。" />}
                     </div>
                   ),
@@ -2021,6 +2380,7 @@ const ApiScenarioTestTool: React.FC = () => {
             />
             <Space wrap style={scenarioActionsStyle}>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveScenario}>保存场景</Button>
+              <Button icon={<SwapOutlined />} onClick={() => handleReplaceVariables('scenario')}>替换变量</Button>
               <Button icon={<PlayCircleOutlined />} loading={running} onClick={handleRunScenario}>串行执行</Button>
               <Button
                 danger
@@ -2056,6 +2416,9 @@ const ApiScenarioTestTool: React.FC = () => {
             <Form.Item name="base_url" label="BaseUrl">
               <Input placeholder="https://api.example.com" />
             </Form.Item>
+            <Form.Item name="environment_id" label="执行环境">
+              <Select allowClear placeholder="选择项目默认环境" options={environmentOptions} />
+            </Form.Item>
             <Form.Item name="source_url" label="OpenAPI URL">
               <Input disabled={selectedProject.source_type !== 'url'} />
             </Form.Item>
@@ -2069,6 +2432,7 @@ const ApiScenarioTestTool: React.FC = () => {
           <Empty description="选择接口项目、接口或场景开始编辑" />
         )}
       </Card>
+      </div>
 
       <Modal
         title="AI 生成请求体预览"
@@ -2088,7 +2452,7 @@ const ApiScenarioTestTool: React.FC = () => {
         onCancel={() => setBodyPreviewVisible(false)}
       >
         {bodyPreviewMessage && <Alert type="info" showIcon message={bodyPreviewMessage} style={{ marginBottom: 12 }} />}
-        <pre style={{ maxHeight: 520, overflow: 'auto', background: '#f6f8fa', padding: 12, borderRadius: 6, fontSize: 12 }}>
+        <pre style={{ maxHeight: 520, overflow: 'auto', background: 'var(--color-bg)', padding: 12, borderRadius: 'var(--radius-md)', fontSize: 12 }}>
           {bodyPreview}
         </pre>
       </Modal>

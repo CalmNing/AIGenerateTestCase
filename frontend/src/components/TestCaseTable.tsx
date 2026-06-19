@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Table, Space, Button, PaginationProps, TableProps, message, Modal, Tag, Tooltip } from 'antd';
-import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Table, Button, PaginationProps, TableProps, message, Modal, Tooltip, Typography } from 'antd';
+import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../types';
+
+const { Text } = Typography;
 
 interface TestCaseTableProps {
   testcases: TestCase[];
@@ -15,8 +17,17 @@ interface TestCaseTableProps {
   onBatchMove: (ids: number[]) => void;
 }
 
-const onShowSizeChange: PaginationProps['onShowSizeChange'] = (current, pageSize) => {
-  console.log(current, pageSize);
+const levelConfig: Record<number, { label: string; color: string; bg: string }> = {
+  1: { label: 'P1', color: '#f43f5e', bg: '#fff1f2' },
+  2: { label: 'P2', color: '#f59e0b', bg: '#fffbeb' },
+  3: { label: 'P3', color: '#4f46e5', bg: '#eef2ff' },
+  4: { label: 'P4', color: '#94a3b8', bg: '#f8fafc' },
+};
+
+const statusConfig: Record<string, { label: string; color: string; dot: string }> = {
+  PASSED: { label: '已通过', color: '#10b981', dot: '#10b981' },
+  FAILED: { label: '未通过', color: '#f43f5e', dot: '#f43f5e' },
+  NOT_RUN: { label: '未执行', color: '#94a3b8', dot: '#cbd5e1' },
 };
 
 const TestCaseTable: React.FC<TestCaseTableProps> = ({
@@ -31,40 +42,53 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onBatchMove
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
-  const [executingId, setExecutingId] = useState<number | null>(null);
   const [isBatchDeleteModalVisible, setIsBatchDeleteModalVisible] = useState(false);
 
   const testcaseColumns = [
     {
-      title: '序号',
+      title: '#',
       dataIndex: 'index',
       key: 'index',
-      width: 60,
-      align: 'center' as 'center' | 'left' | 'right',
-      render: (_: any, __: any, idx: number) => idx + 1,
+      width: 48,
+      align: 'center' as const,
+      render: (_: any, __: any, idx: number) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>{idx + 1}</Text>
+      ),
     },
     {
       title: '用例名称',
       dataIndex: 'case_name',
       key: 'case_name',
       ellipsis: true,
-      width: 200,
-      // align: 'center',
+      render: (name: string) => (
+        <Text strong style={{ fontSize: 13 }}>{name}</Text>
+      ),
     },
     {
-      title: '用例级别',
+      title: '级别',
       dataIndex: 'case_level',
       key: 'case_level',
-      width: 70,
-      align: 'center' as 'center' | 'left' | 'right',
+      width: 64,
+      align: 'center' as const,
       render: (level: number) => {
-        const levelMap: Record<number, string> = {
-          1: 'P1',
-          2: 'P2',
-          3: 'P3',
-          4: 'P4'
-        };
-        return levelMap[level] ?? `P${level}`;
+        const cfg = levelConfig[level] || levelConfig[4];
+        return (
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 22,
+            padding: '0 8px',
+            borderRadius: 'var(--radius-full)',
+            fontSize: 12,
+            fontWeight: 600,
+            color: cfg.color,
+            background: cfg.bg,
+            letterSpacing: '0.02em',
+          }}>
+            {cfg.label}
+          </span>
+        );
       },
     },
     {
@@ -72,17 +96,21 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       dataIndex: 'status',
       key: 'status',
       width: 80,
-      align: 'center' as 'center' | 'left' | 'right',
+      align: 'center' as const,
       render: (status: TestCaseStatus) => {
-        switch (status) {
-          case TestCaseStatus.PASSED:
-            return <Tag color="success" style={{ margin: 0 }}>已通过</Tag>;
-          case TestCaseStatus.FAILED:
-            return <Tag color="error" style={{ margin: 0 }}>未通过</Tag>;
-          case TestCaseStatus.NOT_RUN:
-          default:
-            return <Tag color="warning" style={{ margin: 0 }}>未执行</Tag>;
-        }
+        const cfg = statusConfig[status] || statusConfig.NOT_RUN;
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <span style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: cfg.dot,
+              flexShrink: 0,
+            }} />
+            <span style={{ color: cfg.color }}>{cfg.label}</span>
+          </span>
+        );
       },
     },
     {
@@ -90,18 +118,22 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       dataIndex: 'created_at',
       key: 'created_at',
       width: 110,
-      align: 'center' as 'center' | 'left' | 'right',
+      align: 'center' as const,
       render: (time: string) => {
         const date = new Date(time);
-        return date.toLocaleString();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return <Text type="secondary" style={{ fontSize: 13 }}>{month}-{day} {hours}:{minutes}</Text>;
       },
     },
     {
       title: 'Bug',
       dataIndex: 'bug_id',
       key: 'bug_id',
-      width: 70,
-      align: 'center' as 'center' | 'left' | 'right',
+      width: 64,
+      align: 'center' as const,
       render: (bugId: number | undefined) => {
         if (bugId) {
           return (
@@ -109,85 +141,62 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
               href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: 'var(--color-primary)', display: 'inline-block', width: '100%', textAlign: 'center' }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: 22,
+                padding: '0 6px',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 12,
+                fontWeight: 500,
+                color: 'var(--color-danger)',
+                background: 'var(--color-danger-bg)',
+                textDecoration: 'none',
+                transition: 'opacity 150ms ease',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
             >
-              {`${bugId}`}
+              #{bugId}
             </a>
           );
-        } else {
-          return <span style={{ color: 'var(--color-text-disabled)', display: 'inline-block', width: '100%', textAlign: 'center' }}>无</span>;
         }
+        return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>—</span>;
       },
     },
     {
       title: '操作',
       key: 'action',
-      width: 180,
-      align: 'center' as 'center' | 'left' | 'right',
+      width: 160,
+      align: 'center' as const,
       render: (_: any, record: TestCase) => (
-        <div style={{ textAlign: 'center' }}>
-          <Space size={4}>
-            <Tooltip title="查看">
-              <Button
-                size="small"
-                type="text"
-                icon={<EyeOutlined />}
-                onClick={() => onView(record)}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
+        <div className="table-action-group" style={{ display: 'inline-flex', gap: 2 }}>
+          <Tooltip title="查看" placement="top">
+            <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => onView(record)} className="table-action-btn" />
+          </Tooltip>
+          <Tooltip title="编辑" placement="top">
+            <Button size="small" type="text" icon={<EditOutlined />} onClick={() => onEdit(record)} className="table-action-btn" />
+          </Tooltip>
+          <Tooltip title="执行" placement="top">
+            <Button size="small" type="text" icon={<CheckCircleOutlined />} onClick={() => onComplete(record)} className="table-action-btn table-action-btn-success" />
+          </Tooltip>
+          {onApiExecute && record.api_endpoint_id && (
+            <Tooltip title="API 执行" placement="top">
+              <Button size="small" type="text" icon={<ApiOutlined />} onClick={() => onApiExecute(record)} className="table-action-btn table-action-btn-primary" />
             </Tooltip>
-            <Tooltip title="编辑">
-              <Button
-                size="small"
-                type="text"
-                icon={<EditOutlined />}
-                onClick={() => onEdit(record)}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-            </Tooltip>
-            <Tooltip title="执行">
-              <Button
-                size="small"
-                type="text"
-                icon={<CheckCircleOutlined />}
-                onClick={() => onComplete(record)}
-                style={{ color: 'var(--color-success)' }}
-              />
-            </Tooltip>
-            {onApiExecute && record.api_endpoint_id && (
-              <Tooltip title="API 执行">
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<ApiOutlined />}
-                  onClick={() => onApiExecute(record)}
-                  style={{ color: 'var(--color-primary)' }}
-                />
-              </Tooltip>
-            )}
-            <Tooltip title="移动">
-              <Button
-                size="small"
-                type="text"
-                icon={<DragOutlined />}
-                onClick={() => onMove(record)}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-            </Tooltip>
-          </Space>
+          )}
+          <Tooltip title="移动" placement="top">
+            <Button size="small" type="text" icon={<DragOutlined />} onClick={() => onMove(record)} className="table-action-btn" />
+          </Tooltip>
         </div>
       ),
     },
   ];
+
   const rowSelection: TableProps<TestCase>['rowSelection'] = {
     selectedRowKeys,
-    onChange: (selectedRowKeys: React.Key[], selectedRows: TestCase[]) => {
-      console.log(`selectedRowKeys: ${selectedRowKeys}`, 'selectedRows: ', selectedRows);
-      setSelectedRowKeys(selectedRowKeys);
-    },
-    // getCheckboxProps: (record: TestCase) => ({
-    //   disabled: record.status !== TestCaseStatus.NOT_RUN,
-    // }),
+    onChange: (keys: React.Key[]) => setSelectedRowKeys(keys),
   };
 
   const handleBatchDelete = () => {
@@ -199,66 +208,53 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   };
 
   const handleConfirmBatchDelete = () => {
-    const selectedIds = selectedRowKeys.map(key => Number(key));
-    onBatchDelete(selectedIds);
+    onBatchDelete(selectedRowKeys.map(Number));
     setSelectedRowKeys([]);
-    setIsBatchDeleteModalVisible(false);
-  };
-
-  const handleCancelBatchDelete = () => {
     setIsBatchDeleteModalVisible(false);
   };
 
   return (
     <>
-     {selectedRowKeys.length > 0 && <Space style={{ marginBottom: 16, textAlign: 'left' }}>
-        <Button 
-          danger 
-          onClick={handleBatchDelete}
-          // disabled={selectedRowKeys.length === 0}
-        >
-          批量删除 ({selectedRowKeys.length})
-        </Button>
-        <Button 
-          onClick={() => {
-            const selectedIds = selectedRowKeys.map(key => Number(key));
-            onBatchMove(selectedIds);
-          }}
-        >
-          批量移动 ({selectedRowKeys.length})
-        </Button>
-      </Space>}
+      {selectedRowKeys.length > 0 && (
+        <div className="batch-action-bar">
+          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+            已选 <Text strong style={{ color: 'var(--color-primary)' }}>{selectedRowKeys.length}</Text> 项
+          </span>
+          <Button size="small" danger icon={<ExclamationCircleOutlined />} onClick={handleBatchDelete}>
+            批量删除
+          </Button>
+          <Button size="small" onClick={() => onBatchMove(selectedRowKeys.map(Number))}>
+            批量移动
+          </Button>
+        </div>
+      )}
       <Table
-        rowSelection={{ type: "checkbox", ...rowSelection }}
+        rowSelection={{ type: 'checkbox', ...rowSelection }}
         columns={testcaseColumns}
         dataSource={testcases}
         rowKey="id"
         pagination={{
           position: ['bottomRight'],
-          onShowSizeChange,
           defaultPageSize: 20,
+          size: 'small',
+          showTotal: (total) => <Text type="secondary" style={{ fontSize: 12 }}>共 {total} 条</Text>,
         }}
-        scroll={{ x: 800, y: '47vh' }}
-        // style={{ marginTop: 16, height: '100%' }}
+        scroll={{ x: 700, y: '47vh' }}
         tableLayout="fixed"
-        size="middle"
-        bordered
-        locale={{
-          emptyText: '暂无数据'
-        }}
+        size="small"
+        locale={{ emptyText: '暂无测试用例' }}
       />
-
       <Modal
         title="批量删除确认"
         open={isBatchDeleteModalVisible}
         onOk={handleConfirmBatchDelete}
-        onCancel={handleCancelBatchDelete}
+        onCancel={() => setIsBatchDeleteModalVisible(false)}
         okText="确认删除"
         cancelText="取消"
         okType="danger"
       >
-        <p>您确定要删除选中的 {selectedRowKeys.length} 个测试用例吗？</p>
-        <p style={{ color: 'var(--color-danger)' }}>此操作不可恢复，请谨慎操作！</p>
+        <p>确定要删除选中的 {selectedRowKeys.length} 个测试用例吗？</p>
+        <p style={{ color: 'var(--color-danger)', fontSize: 13 }}>此操作不可恢复</p>
       </Modal>
     </>
   );

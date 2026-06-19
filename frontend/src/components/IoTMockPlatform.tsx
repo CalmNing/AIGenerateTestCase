@@ -226,9 +226,9 @@ const IoTMockPlatform: React.FC = () => {
     {
       title: '操作', key: 'action', width: 200, render: (_: any, record: MockConfig) => (
         <Space size={0}>
-          <Button type="text" size="small" onClick={() => handleTest(record)} style={{ color: '#52c41a' }}>测试</Button>
-          <Button type="text" size="small" onClick={() => openEdit(record)} style={{ color: '#1890ff' }}>编辑</Button>
-          <Button type="text" size="small" onClick={() => handleCopy(record)} style={{ color: '#1890ff' }}>复制</Button>
+          <Button type="text" size="small" onClick={() => handleTest(record)} style={{ color: 'var(--color-success)' }}>测试</Button>
+          <Button type="text" size="small" onClick={() => openEdit(record)} style={{ color: 'var(--color-primary)' }}>编辑</Button>
+          <Button type="text" size="small" onClick={() => handleCopy(record)} style={{ color: 'var(--color-primary)' }}>复制</Button>
           <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
             <Button type="text" size="small" danger>删除</Button>
           </Popconfirm>
@@ -244,13 +244,18 @@ const IoTMockPlatform: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 88px)', background: '#f5f5f5' }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 88px)', background: 'var(--color-bg)' }}>
       {/* 左侧：配置列表 */}
-      <div style={{ width: '60%', padding: 16, overflow: 'auto' }}>
+      <div style={{ width: '60%', padding: 16, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div className="filter-bar">
+          <label>名称</label>
+          <Input.Search placeholder="搜索名称..." allowClear size="small" style={{ width: 200 }} onChange={(e) => setSearchConfig(e.target.value)} onSearch={(val) => setSearchConfig(val)} />
+          <div style={{ flex: 1 }} />
+          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>新建 Mock</Button>
+        </div>
         <Card
           title={<Space><ExperimentOutlined />Mock 接口配置</Space>}
-          extra={<Space><Input.Search placeholder="搜索名称..." allowClear style={{ width: 220 }} onChange={(e) => setSearchConfig(e.target.value)} onSearch={(val) => setSearchConfig(val)} /><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建 Mock</Button></Space>}
-          style={{ height: '100%' }}
+          style={{ flex: 1, minHeight: 0 }}
           bodyStyle={{ padding: 0, overflow: 'auto', height: 'calc(100% - 57px)' }}
         >
           <Table
@@ -258,9 +263,13 @@ const IoTMockPlatform: React.FC = () => {
             dataSource={configs.filter(c => !searchConfig || c.name.toLowerCase().includes(searchConfig.toLowerCase()))}
             rowKey="id"
             loading={loading}
-            // size="small"
-            pagination={false}
-            scroll={{ y: 'calc(100vh - 180px)' }}
+            size="small"
+            pagination={{
+              pageSize: 20,
+              size: 'small',
+              showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
+            }}
+            scroll={{ y: 'calc(100vh - 240px)' }}
           />
         </Card>
       </div>
@@ -268,13 +277,13 @@ const IoTMockPlatform: React.FC = () => {
       {/* 右侧：使用说明 */}
       <div style={{ width: '40%', padding: 16, overflow: 'auto' }}>
         <Card title="使用说明" style={{ marginBottom: 16 }}>
-          <div style={{ lineHeight: 2, color: '#555', fontSize: 14 }}>
+          <div style={{ lineHeight: 2, color: 'var(--color-text-secondary)', fontSize: 14 }}>
             <p>1. <strong>新建 Mock</strong>：配置 URL 路径、HTTP 方法和响应内容</p>
             <p>2. <strong>URL 路径</strong>：支持路径参数，如 <Text code>/users/{'{'}id{'}'}</Text>，访问 <Text code>/api/mock/users/123</Text> 时，<Text code>{'{{id}}'}</Text> 会被替换为 <Text code>123</Text></p>
             <p>3. <strong>分页功能</strong>：设置"返回数据条目数量"大于1时启用分页，通过 <Text code>?page=1&page_size=10</Text> 参数控制分页</p>
             <p>4. <strong>JSON 路径</strong>：指定响应体中哪个字段包含数组数据，如 <Text code>$.data.items</Text>，留空则自动检测</p>
             <p>5. <strong>参数化</strong>：在响应体中使用以下格式引用变量</p>
-            <p style={{ marginTop: 12, padding: '8px 12px', background: '#e6f7ff', borderRadius: 6, border: '1px solid #91d5ff' }}>
+            <p className="sub-platform-detail-block" style={{ marginTop: 12, background: 'var(--color-primary-bg)', borderColor: 'var(--color-primary)' }}>
               <strong>Mock 服务基础路径：</strong><Text code copyable>/api/mock</Text><br />
               例如配置路径 <Text code>/hello</Text>，访问地址为 <Text code copyable>/api/mock/hello</Text>
             </p>
@@ -282,15 +291,15 @@ const IoTMockPlatform: React.FC = () => {
         </Card>
 
         <Card title="参数化语法" style={{ marginBottom: 16 }}>
-          <div style={{ lineHeight: 1.8, color: '#555', fontSize: 13 }}>
+          <div style={{ lineHeight: 1.8, color: 'var(--color-text-secondary)', fontSize: 13 }}>
             <p><strong>1. 路径参数：</strong><Text code copyable>{'{{参数名}}'}</Text> 或 <Text code copyable>{'${参数名}'}</Text></p>
-            <p style={{ marginLeft: 16, color: '#666' }}>从 URL 路径中提取，如 <Text code>/users/{'{'}id{'}'}</Text> 匹配 <Text code>/users/123</Text>，则 <Text code>{'{{id}}'}</Text> = <Text code>123</Text></p>
+            <p style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>从 URL 路径中提取，如 <Text code>/users/{'{'}id{'}'}</Text> 匹配 <Text code>/users/123</Text>，则 <Text code>{'{{id}}'}</Text> = <Text code>123</Text></p>
 
             <p style={{ marginTop: 8 }}><strong>2. JS 表达式：</strong><Text code copyable>{'{{@表达式}}'}</Text></p>
-            <p style={{ marginLeft: 16, color: '#666' }}>示例：<Text code copyable>{'{{@Math.random().toFixed(2)}}'}</Text>、<Text code copyable>{'{{@new Date().toISOString()}}'}</Text></p>
+            <p style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>示例：<Text code copyable>{'{{@Math.random().toFixed(2)}}'}</Text>、<Text code copyable>{'{{@new Date().toISOString()}}'}</Text></p>
 
             <p style={{ marginTop: 8 }}><strong>3. 内置函数：</strong><Text code copyable>{'{{$函数}}'}</Text></p>
-            <div style={{ marginLeft: 16, color: '#666' }}>
+            <div style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>
               <p>• <Text code copyable>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
               <p>• <Text code copyable>{'{{$now}}'}</Text> - 秒级时间戳</p>
               <p>• <Text code copyable>{'{{$uuid}}'}</Text> - 生成 UUID</p>
@@ -301,7 +310,7 @@ const IoTMockPlatform: React.FC = () => {
             </div>
 
             <p style={{ marginTop: 8 }}><strong>4. 环境变量：</strong><Text code copyable>{'{{变量名}}'}</Text> 或 <Text code copyable>{'${变量名}'}</Text></p>
-            <p style={{ marginLeft: 16, color: '#666' }}>示例：<Text code copyable>{'{{baseUrl}}'}</Text>、<Text code copyable>{'${apiToken}'}</Text></p>
+            <p style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>示例：<Text code copyable>{'{{baseUrl}}'}</Text>、<Text code copyable>{'${apiToken}'}</Text></p>
           </div>
         </Card>
 
@@ -312,7 +321,7 @@ const IoTMockPlatform: React.FC = () => {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {configs.filter(c => c.enabled).map(c => (
-                  <div key={c.id} style={{ padding: '8px 12px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div key={c.id} style={{ padding: '8px 12px', background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                       <Tag color="blue">{c.method}</Tag>
                       <Text code style={{ fontSize: 13 }}>{c.url_path}</Text>
@@ -403,18 +412,18 @@ const IoTMockPlatform: React.FC = () => {
                 <Tooltip
                   title={
                     <div style={{ color: '#ffffff', lineHeight: 1.8 }}>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$now}}'}</Text> - 秒级时间戳</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$uuid}}'}</Text> - 生成 UUID</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$randomInt}}'}</Text> - 0~100 随机整数</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$randomInt(1,100)}}'}</Text> - 指定范围随机整数</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 3 }}>{'{{@[10,20,30][Math.floor(Math.random()*3)]}}'}</Text> - 随机指定列表中的数据</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$now}}'}</Text> - 秒级时间戳</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$uuid}}'}</Text> - 生成 UUID</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$randomInt}}'}</Text> - 0~100 随机整数</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$randomInt(1,100)}}'}</Text> - 指定范围随机整数</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
+                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{@[10,20,30][Math.floor(Math.random()*3)]}}'}</Text> - 随机指定列表中的数据</p>
                     </div>
                   }
                 >
-                  <QuestionCircleOutlined style={{ marginLeft: 6, color: '#999', fontSize: 13 }} />
+                  <QuestionCircleOutlined style={{ marginLeft: 6, color: 'var(--color-text-tertiary)', fontSize: 13 }} />
                 </Tooltip>
               </span>
               <Space size={4}>
@@ -505,7 +514,7 @@ const IoTMockPlatform: React.FC = () => {
       >
         {editingConfig && (
           <div>
-            <div style={{ marginBottom: 12, padding: 12, background: '#f5f5f5', borderRadius: 6 }}>
+            <div style={{ marginBottom: 12, padding: 12, background: 'var(--color-bg)', borderRadius: 'var(--radius-md)' }}>
               <Space>
                 <Tag color="blue">{editingConfig.method}</Tag>
                 <Text code copyable style={{ fontSize: 14 }}>{`/api/mock${editingConfig.url_path}`}</Text>
@@ -518,7 +527,7 @@ const IoTMockPlatform: React.FC = () => {
                     {testResult.status} {testResult.statusText}
                   </Tag>
                 </div>
-                <div style={{ background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6, padding: 12, maxHeight: 350, overflow: 'auto' }}>
+                <div style={{ background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', borderRadius: 'var(--radius-md)', padding: 12, maxHeight: 350, overflow: 'auto' }}>
                   <pre style={{ margin: 0, fontSize: 13, whiteSpace: 'pre-wrap' }}>
                     {typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body)}
                   </pre>
