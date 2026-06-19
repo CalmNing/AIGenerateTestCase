@@ -1,0 +1,602 @@
+/* ===== IoT Data Push Platform — Consistent with main platform theme ===== */
+
+/* --- Container --- */
+.iot-container {
+  padding: 8px 10px;
+  height: calc(100vh - 88px);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* --- Toolbar --- */
+.iot-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+}
+
+.iot-toolbar-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- Request Name Bar --- */
+.iot-request-name-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 6px;
+  flex-shrink: 0;
+}
+
+.iot-request-name-input {
+  flex: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  background: transparent;
+  outline: none;
+  transition: all 0.2s;
+  min-width: 0;
+}
+
+.iot-request-name-input::placeholder {
+  color: var(--color-text-disabled);
+  font-weight: 500;
+}
+
+.iot-request-name-input:hover {
+  background: var(--color-bg);
+  border-color: var(--color-border-light);
+}
+
+.iot-request-name-input:focus {
+  background: var(--color-bg);
+  border-color: var(--color-primary-border);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.08);
+}
+
+.iot-unsaved-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning);
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+}
+
+/* --- Send Button --- */
+.iot-btn-send.ant-btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.iot-btn-send.ant-btn-primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.iot-btn-send.ant-btn-primary.is-loading {
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
+}
+
+/* --- URL Bar --- */
+.iot-url-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 14px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.iot-url-bar .iot-form {
+  margin-bottom: 0;
+}
+
+.iot-url-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-top: 0;
+}
+
+/* --- Three-panel Layout --- */
+.iot-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/* --- Panels --- */
+.iot-panel {
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.iot-panel-left {
+  min-width: 250px;
+}
+
+.iot-panel-middle {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 250px;
+}
+
+.iot-panel-right {
+  min-width: 200px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+/* --- Panel Headers --- */
+.iot-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.iot-panel-header-title {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- Tabs --- */
+.iot-tabs .ant-tabs-nav {
+  margin-bottom: 0;
+  padding: 0 8px;
+}
+
+.iot-tabs .ant-tabs-tab {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 8px 12px;
+}
+
+.iot-tabs .ant-tabs-tab:hover {
+  color: var(--color-text);
+}
+
+.iot-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-primary) !important;
+}
+
+.iot-tabs .ant-tabs-ink-bar {
+  background: var(--color-primary);
+}
+
+.iot-tabs .ant-tabs-content {
+  height: 100%;
+}
+
+.iot-tabs .ant-tabs-tabpane {
+  height: 100%;
+  overflow: auto;
+}
+
+/* Tab close button */
+.iot-tab-close {
+  font-size: 14px;
+  min-width: 16px;
+  padding: 0 2px;
+  color: var(--color-text-disabled);
+  transition: color 0.15s;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.iot-tab-close:hover {
+  color: var(--color-danger) !important;
+}
+
+/* Unsaved dot */
+.iot-tab-unsaved::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warning);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* --- Method Badge --- */
+.iot-method-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  line-height: 1.4;
+}
+
+.iot-method-badge--get { background: var(--color-success-bg); color: var(--color-success); }
+.iot-method-badge--post { background: var(--color-warning-bg); color: var(--color-warning); }
+.iot-method-badge--put { background: var(--color-primary-bg); color: var(--color-primary); }
+.iot-method-badge--delete { background: var(--color-danger-bg); color: var(--color-danger); }
+.iot-method-badge--patch { background: #f5f3ff; color: #7c3aed; }
+
+/* --- Key-Value Section --- */
+.iot-kv-section {
+  padding: 8px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.iot-kv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* --- Parameter Type Toggle --- */
+.iot-param-type .ant-radio-button-wrapper {
+  font-size: 12px;
+  padding: 0 8px;
+  height: 28px;
+  line-height: 26px;
+}
+
+/* --- Add Button (dashed) --- */
+.iot-add-btn.ant-btn-dashed {
+  border-color: var(--color-border) !important;
+  color: var(--color-text-tertiary) !important;
+  font-size: 13px;
+}
+
+.iot-add-btn.ant-btn-dashed:hover {
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+}
+
+/* --- Delete Button --- */
+.iot-delete-btn.ant-btn {
+  flex-shrink: 0;
+}
+
+/* --- Drag Handle --- */
+.iot-drag-handle {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  flex-shrink: 0;
+  margin: 0 2px;
+  transition: background 0.2s;
+  z-index: 10;
+  border-radius: 3px;
+}
+
+.iot-drag-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 32px;
+  border-radius: 1px;
+  background: var(--color-border);
+  transition: all 0.2s;
+}
+
+.iot-drag-handle:hover::after,
+.iot-drag-handle.is-active::after {
+  background: var(--color-primary);
+  height: 48px;
+}
+
+/* --- CodeMirror --- */
+.iot-codemirror .cm-editor {
+  font-size: 13px !important;
+  height: 100%;
+}
+
+.iot-codemirror .cm-editor .cm-activeLine {
+  background: var(--color-primary-bg) !important;
+}
+
+.iot-codemirror .cm-editor .cm-selectionBackground {
+  background: var(--color-primary-border) !important;
+}
+
+/* --- Response Viewer --- */
+.iot-response-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.iot-response-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.iot-response-status {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--color-text-secondary);
+}
+
+.iot-response-status-code {
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.iot-response-status-code.is-success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.iot-response-status-code.is-error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.iot-response-status-code.is-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.iot-response-time {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.iot-response-time strong {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+/* Response body */
+.iot-response-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  background: var(--color-bg);
+}
+
+.iot-response-pre {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* JSON syntax colors */
+.iot-json-key { color: var(--color-primary); }
+.iot-json-string { color: var(--color-success); }
+.iot-json-number { color: var(--color-warning); }
+.iot-json-boolean { color: #7c3aed; }
+.iot-json-null { color: var(--color-text-tertiary); }
+.iot-json-bracket { color: var(--color-text-secondary); }
+.iot-json-colon { color: var(--color-text-tertiary); }
+
+/* Empty response state */
+.iot-response-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-disabled);
+  font-size: 14px;
+  gap: 8px;
+}
+
+/* --- Right Sidebar: Saved Requests --- */
+.iot-saved-table .ant-table {
+  background: transparent !important;
+  font-size: 13px;
+}
+
+.iot-saved-table .ant-table-thead > tr > th {
+  background: var(--color-bg) !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  color: var(--color-text-secondary) !important;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 8px 12px !important;
+}
+
+.iot-saved-table .ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--color-border-light) !important;
+  color: var(--color-text) !important;
+  padding: 8px 12px !important;
+}
+
+.iot-saved-table .ant-table-tbody > tr:hover > td {
+  background: var(--color-primary-bg) !important;
+}
+
+/* Saved request action buttons */
+.iot-saved-item-action {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.iot-saved-item-action:hover {
+  background: var(--color-primary-bg);
+}
+
+.iot-saved-item-action.is-danger {
+  color: var(--color-danger);
+}
+
+.iot-saved-item-action.is-danger:hover {
+  background: var(--color-danger-bg);
+}
+
+/* --- Collapse/Expand Toggle --- */
+.iot-collapse-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  width: 22px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.iot-collapse-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+
+/* --- Extraction Section --- */
+.iot-extraction-empty {
+  padding: 4px 8px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.iot-extraction-add-link {
+  padding: 0 !important;
+  margin-left: 8px;
+  font-size: 12px !important;
+  color: var(--color-primary) !important;
+}
+
+/* --- Environment Tags in Modal --- */
+.iot-env-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-light);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 12px;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.iot-env-tag:hover {
+  background: var(--color-primary-bg);
+}
+
+.iot-env-tag.is-active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+/* --- Format Button --- */
+.iot-format-btn.ant-btn {
+  color: var(--color-text-tertiary) !important;
+  font-size: 12px !important;
+}
+
+.iot-format-btn.ant-btn:hover {
+  color: var(--color-primary) !important;
+}
+
+/* --- Copy / Refresh Button --- */
+.iot-copy-btn.ant-btn,
+.iot-refresh-btn.ant-btn {
+  color: var(--color-text-tertiary) !important;
+  font-size: 12px !important;
+}
+
+.iot-copy-btn.ant-btn:hover,
+.iot-refresh-btn.ant-btn:hover {
+  color: var(--color-primary) !important;
+}
+
+/* --- Search Input --- */
+.iot-search-input .ant-input-search-button {
+  background: var(--color-bg-elevated) !important;
+  border-color: var(--color-border) !important;
+}
+
+/* --- Sending Animation --- */
+@keyframes iot-sending-pulse {
+  0% { box-shadow: var(--shadow-sm); }
+  50% { box-shadow: 0 0 0 2px var(--color-primary-border), var(--shadow-sm); }
+  100% { box-shadow: var(--shadow-sm); }
+}
+
+.iot-panel.is-sending {
+  animation: iot-sending-pulse 1.5s ease-in-out infinite;
+}
+
+/* --- Responsive --- */
+@media (max-width: 1200px) {
+  .iot-panel-right:not(.is-collapsed) {
+    width: 22% !important;
+  }
+}
