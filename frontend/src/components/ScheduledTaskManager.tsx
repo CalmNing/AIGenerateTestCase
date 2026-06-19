@@ -5,11 +5,9 @@ import {
   message,
   Modal,
   Card,
-  Descriptions,
   Tag,
   Space,
   Typography,
-  Divider,
   Popconfirm,
   Form,
   Input,
@@ -21,9 +19,10 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { scheduledTaskApi, savedRequestApi, globalParameterApi } from '../services/api';
 import type { ScheduledTask } from '../types';
 import FileUpload, { UploadedFileResult } from './FileUpload';
+import './ScheduledTaskManager.css';
 
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 const ScheduledTaskManager: React.FC = () => {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -298,57 +297,40 @@ const ScheduledTaskManager: React.FC = () => {
       title: '任务名称',
       dataIndex: 'name',
       key: 'name',
-      render: (text: string) => (
-        <Text strong ellipsis>{text}</Text>
+      render: (text: string, record: ScheduledTask) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className={`stm-status-dot ${record.enabled ? 'is-running' : 'is-disabled'}`} />
+          <Text strong ellipsis style={{ color: record.enabled ? 'var(--color-text)' : 'var(--color-text-tertiary)' }}>{text}</Text>
+        </div>
       ),
-      width: 120,
-      ellipsis: true
+      ellipsis: true,
     },
     {
-      title: '调度类型',
-      dataIndex: 'schedule_type',
-      key: 'schedule_type',
-      render: (text: string) => (
-        <Tag color={text === 'interval' ? 'blue' : 'green'}>
-          {text === 'interval' ? '间隔' : 'Cron'}
-        </Tag>
-      ),
-      width: 80
-    },
-    {
-      title: '执行频率',
-      dataIndex: ['schedule_type', 'interval_seconds', 'cron_expression'],
+      title: '调度规则',
       key: 'schedule',
-      render: (_:any, record: ScheduledTask) => {
-        if (record.schedule_type === 'interval') {
-          return `${record.interval_seconds}秒`;
-        } else {
-          return record.cron_expression || '-';
-        }
-      },
-      width: 100,
-      ellipsis: true
+      render: (_: any, record: ScheduledTask) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className={`stm-schedule-badge stm-schedule-badge--${record.schedule_type}`}>
+            {record.schedule_type === 'interval' ? '间隔' : 'Cron'}
+          </span>
+          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+            {record.schedule_type === 'interval'
+              ? `${record.interval_seconds}s`
+              : (record.cron_expression || '-')}
+          </span>
+        </div>
+      ),
+      width: 160,
     },
     {
       title: '执行环境',
       key: 'environment',
-      render: (_:any, record: ScheduledTask) => {
-        const environment = environments.find(env => env.id === record.environment_id);
-        return environment ? environment.name : '-';
+      render: (_: any, record: ScheduledTask) => {
+        const env = environments.find(e => e.id === record.environment_id);
+        return <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{env ? env.name : '-'}</span>;
       },
-      width: 90,
-      ellipsis: true
-    },
-    {
-      title: '状态',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      render: (enabled: boolean) => (
-        <Tag color={enabled ? 'success' : 'default'}>
-          {enabled ? '运行中' : '已禁用'}
-        </Tag>
-      ),
-      width: 70
+      width: 100,
+      ellipsis: true,
     },
     {
       title: '上次执行',
@@ -356,252 +338,228 @@ const ScheduledTaskManager: React.FC = () => {
       key: 'last_run_at',
       render: (last_run_at: string | null) => {
         if (last_run_at) {
-          return <Text ellipsis>{new Date(last_run_at).toLocaleString()}</Text>;
+          const d = new Date(last_run_at);
+          return (
+            <div>
+              <div className="stm-time">{d.toLocaleDateString()} {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+            </div>
+          );
         }
-        return <Text type="secondary">从未执行</Text>;
+        return <span style={{ fontSize: 12, color: 'var(--color-text-disabled)' }}>从未执行</span>;
       },
-      width: 120,
-      ellipsis: true
-    },
-    {
-      title: '下次执行',
-      key: 'next_execution',
-      render: (_:any, record: ScheduledTask) => {
-        const nextExecution = getNextExecutionTime(record);
-        return <Text ellipsis>{nextExecution}</Text>;
-      },
-      width: 120,
-      ellipsis: true
+      width: 130,
     },
     {
       title: '操作',
       key: 'action',
-      render: (_:any, record: ScheduledTask) => (
-        <Space size="small">
-          <Button
-            type="text"
-            onClick={() => handleRunTask(record.id)}
-            size="small"
-            style={{ color: 'var(--color-primary)' }}
-          >
-            执行
-          </Button>
-          <Button
-            type="text"
-            onClick={() => handleToggleTask(record)}
-            size="small"
-            style={{ color: record.enabled ? 'var(--color-danger)' : 'var(--color-success)' }}
-          >
+      render: (_: any, record: ScheduledTask) => (
+        <div className="stm-actions">
+          <button className="stm-action-btn stm-action-btn--primary" onClick={() => handleRunTask(record.id)}>执行</button>
+          <button className={`stm-action-btn stm-action-btn--toggle ${record.enabled ? 'is-enabled' : 'is-disabled'}`} onClick={() => handleToggleTask(record)}>
             {record.enabled ? '禁用' : '启用'}
-          </Button>
-          <Button
-            type="text"
-            onClick={() => handleViewLog(record)}
-            size="small"
-            style={{ color: 'var(--color-primary)' }}
-          >
-            日志
-          </Button>
-          <Button
-            type="text"
-            onClick={() => handleOpenEdit(record)}
-            size="small"
-            style={{ color: 'var(--color-primary)' }}
-          >
-            编辑
-          </Button>
-          <Button
-            type="text"
-            onClick={() => handleCopyTask(record)}
-            size="small"
-            style={{ color: 'var(--color-primary)' }}
-          >
-            复制
-          </Button>
+          </button>
+          <span className="stm-action-divider" />
+          <button className="stm-action-btn stm-action-btn--info" onClick={() => handleViewLog(record)}>日志</button>
+          <button className="stm-action-btn stm-action-btn--warning" onClick={() => handleOpenEdit(record)}>编辑</button>
+          <button className="stm-action-btn stm-action-btn--success" onClick={() => handleCopyTask(record)}>复制</button>
           <Popconfirm
             title="确定要删除这个任务吗？"
             onConfirm={() => handleDeleteTask(record.id)}
             okText="确定"
             cancelText="取消"
           >
-            <Button
-              type="text"
-              size="small"
-              danger
-            >
-              删除
-            </Button>
+            <button className="stm-action-btn stm-action-btn--danger">删除</button>
           </Popconfirm>
-        </Space>
+        </div>
       ),
-      width: 180
+      width: 280,
+      fixed: 'right' as const,
     }
   ];
 
   return (
-    <div style={{ height: 'calc(100vh - 100px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <Card title="定时任务管理" bordered={false} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-        bodyStyle={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 16, overflow: 'hidden' }}>
-        <div className="filter-bar">
+    <div className="stm-container">
+      <Card title="定时任务管理" bordered={false} className="stm-card"
+        bodyStyle={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px', overflow: 'hidden' }}>
+        <div className="stm-filter-bar">
           <label>任务名称</label>
           <Input.Search
             placeholder="搜索任务名称..."
             allowClear
             size="small"
-            style={{ width: 220 }}
             onChange={(e) => setSearchTask(e.target.value)}
             onSearch={(val) => setSearchTask(val)}
           />
           <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+            {tasks.filter(t => t.enabled).length}/{tasks.length} 运行中
+          </span>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleOpenCreate}>创建定时任务</Button>
         </div>
 
-        <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }} className="stm-table">
           <Table
             columns={columns}
             dataSource={tasks.filter(t => !searchTask || t.name.toLowerCase().includes(searchTask.toLowerCase()))}
             rowKey="id"
             loading={loading}
             size="small"
+            rowClassName={(record) => record.enabled ? '' : 'stm-row-disabled'}
             pagination={{
-              pageSize: 10,
+              pageSize: 15,
               size: 'small',
               showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
             }}
-            scroll={{ y: 'calc(100vh - 260px)' }}
+            scroll={{ y: 'calc(100vh - 320px)' }}
           />
         </div>
 
       <Modal
-        title={`${selectedTask?.name || ''} - 执行日志`}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span>执行日志</span>
+            {selectedTask && (
+              <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--color-text-secondary)' }}>
+                {selectedTask.name}
+              </span>
+            )}
+          </div>
+        }
         open={logModalVisible}
         onCancel={() => setLogModalVisible(false)}
-        footer={[
-          <Button key="close" onClick={() => setLogModalVisible(false)}>
-            关闭
-          </Button>
-        ]}
-        width={800}
-        bodyStyle={{ maxHeight: 600, overflowY: 'auto', paddingRight: '16px' }}
+        footer={null}
+        width={840}
+        styles={{ body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto', padding: '12px 20px' } }}
       >
         {parsedLog.length > 0 ? (
-          <div>
-            {parsedLog.map((entry, index) => (
-              <div key={index} style={{ marginBottom: 20 }}>
-                <Descriptions bordered size="small">
-                  <Descriptions.Item label="请求ID">{entry.request_id}</Descriptions.Item>
-                  <Descriptions.Item label="请求名称">{entry.request_name}</Descriptions.Item>
-                  <Descriptions.Item label="状态">
-                    <Tag color={entry.status === 'success' ? 'success' : 'error'}>
-                      {entry.status}
-                    </Tag>
-                  </Descriptions.Item>
-                  {entry.status_code && (
-                    <Descriptions.Item label="状态码">{entry.status_code}</Descriptions.Item>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {parsedLog.map((entry, index) => {
+              const isSuccess = entry.status === 'success';
+              const statusCode = entry.response?.status_code || entry.status_code;
+              const method = entry.request?.method;
+              const url = entry.request?.url;
+
+              return (
+                <div key={index} className={`stm-log-entry ${isSuccess ? 'is-success' : 'is-error'}`}>
+                  {/* Compact summary line */}
+                  <div className="stm-log-summary">
+                    <span className={`stm-log-status-dot ${isSuccess ? 'is-success' : 'is-error'}`} />
+                    <span className="stm-log-summary-name">{entry.request_name || `请求 #${entry.request_id}`}</span>
+                    {method && <span className="stm-log-method">{method}</span>}
+                    {statusCode && (
+                      <span className={`stm-log-status-code ${isSuccess ? 'is-success' : 'is-error'}`}>
+                        {statusCode}
+                      </span>
+                    )}
+                    {!isSuccess && entry.detail && (
+                      <span className="stm-log-error-hint">{entry.detail.slice(0, 60)}{entry.detail.length > 60 ? '...' : ''}</span>
+                    )}
+                  </div>
+
+                  {/* Request URL — always visible, compact */}
+                  {url && (
+                    <div className="stm-log-url">
+                      <span className="stm-log-url-text">{url}</span>
+                    </div>
                   )}
-                </Descriptions>
 
-                {entry.request && (
-                  <div className="sub-platform-detail-block">
-                    <Text strong style={{ fontSize: '14px', color: 'var(--color-text)' }}>请求详情</Text>
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>方法:</Text>
-                        <Text style={{ flex: 1, fontSize: '13px' }}>{entry.request.method}</Text>
+                  {/* Collapsible details */}
+                  {(entry.request?.headers || entry.request?.body || entry.request?.params || entry.response || entry.extracted) && (
+                    <details className="stm-log-details">
+                      <summary className="stm-log-details-toggle">查看详情</summary>
+                      <div className="stm-log-details-body">
+                        {/* Headers */}
+                        {entry.request?.headers && Object.keys(entry.request.headers).length > 0 && (
+                          <div className="stm-log-detail-section">
+                            <div className="stm-log-detail-label">请求头</div>
+                            <div className="stm-log-kv-list">
+                              {Object.entries(entry.request.headers).map(([key, value], idx) => (
+                                <div key={idx} className="stm-log-kv-item">
+                                  <span className="stm-log-kv-key">{key}</span>
+                                  <span className="stm-log-kv-value">{String(value)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Params */}
+                        {entry.request?.params && Object.keys(entry.request.params).length > 0 && (
+                          <div className="stm-log-detail-section">
+                            <div className="stm-log-detail-label">请求参数</div>
+                            <div className="stm-log-kv-list">
+                              {Object.entries(entry.request.params).map(([key, value], idx) => (
+                                <div key={idx} className="stm-log-kv-item">
+                                  <span className="stm-log-kv-key">{key}</span>
+                                  <span className="stm-log-kv-value">{String(value)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Request Body */}
+                        {entry.request?.body && (
+                          <div className="stm-log-detail-section">
+                            <div className="stm-log-detail-label">请求体</div>
+                            <pre className="stm-log-code-block">
+                              {typeof entry.request.body === 'object' ? JSON.stringify(entry.request.body, null, 2) : entry.request.body}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* Response */}
+                        {entry.response && (
+                          <div className="stm-log-detail-section">
+                            <div className="stm-log-detail-label" style={{ color: isSuccess ? 'var(--color-success)' : 'var(--color-danger)' }}>
+                              响应体 {statusCode && `(${statusCode})`}
+                            </div>
+                            {entry.response.body !== undefined && entry.response.body !== null && (
+                              <pre className="stm-log-code-block">
+                                {typeof entry.response.body === 'object'
+                                  ? JSON.stringify(entry.response.body, null, 2)
+                                  : String(entry.response.body)}
+                              </pre>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Extracted vars */}
+                        {entry.extracted && Object.keys(entry.extracted).length > 0 && (
+                          <div className="stm-log-detail-section">
+                            <div className="stm-log-detail-label">提取的变量</div>
+                            <div className="stm-log-kv-list">
+                              {Object.entries(entry.extracted).map(([key, value], idx) => (
+                                <div key={idx} className="stm-log-kv-item">
+                                  <span className="stm-log-kv-key">{key}</span>
+                                  <span className="stm-log-kv-value" style={{ color: 'var(--color-success)' }}>{String(value)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Error detail */}
+                        {entry.detail && (
+                          <div className="stm-log-detail-section">
+                            <div className="stm-log-detail-label" style={{ color: 'var(--color-danger)' }}>错误详情</div>
+                            <pre className="stm-log-code-block" style={{ borderColor: 'var(--color-danger)', background: 'var(--color-danger-bg)' }}>
+                              {entry.detail}
+                            </pre>
+                          </div>
+                        )}
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>URL:</Text>
-                        <Text style={{ flex: 1, fontSize: '13px', wordBreak: 'break-all' }}>{entry.request.url}</Text>
-                      </div>
-                      {entry.request.headers && Object.keys(entry.request.headers).length > 0 && (
-                        <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>Headers:</Text>
-                          <div style={{ flex: 1, fontSize: '12px' }}>
-                            {Object.entries(entry.request.headers).map(([key, value], idx) => (
-                              <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid var(--color-border-light)' }}>
-                                <Text style={{ color: 'var(--color-text-tertiary)' }}>{key}:</Text> <Text>{String(value)}</Text>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {entry.request.params && Object.keys(entry.request.params).length > 0 && (
-                        <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>Params:</Text>
-                          <div style={{ flex: 1, fontSize: '12px' }}>
-                            {Object.entries(entry.request.params).map(([key, value], idx) => (
-                              <div key={idx} style={{ padding: '2px 0', borderBottom: '1px solid var(--color-border-light)' }}>
-                                <Text style={{ color: 'var(--color-text-tertiary)' }}>{key}:</Text> <Text>{String(value)}</Text>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {entry.request.body && (
-                        <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>Body:</Text>
-                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: 'var(--color-border-light)', padding: 8, borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)' }}>
-                            {typeof entry.request.body === 'object' ? JSON.stringify(entry.request.body, null, 2) : entry.request.body}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {entry.response && (
-                  <div className="sub-platform-detail-block sub-platform-detail-block-success">
-                    <Text strong style={{ fontSize: '14px', color: 'var(--color-text)' }}>响应详情</Text>
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                        <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>状态码:</Text>
-                        <Text style={{ fontSize: '13px' }}>{entry.response.status_code}</Text>
-                      </div>
-                      {entry.response.body !== undefined && entry.response.body !== null && (
-                        <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-                          <Text style={{ width: 80, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500, flexShrink: 0 }}>响应体:</Text>
-                          <div style={{ flex: 1, fontSize: '12px', wordBreak: 'break-all', backgroundColor: 'var(--color-border-light)', padding: 8, borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border)', maxHeight: 300, overflow: 'auto' }}>
-                            <Paragraph style={{ margin: 0, fontSize: '12px', whiteSpace: 'pre-wrap' }}>
-                              {typeof entry.response.body === 'object'
-                                ? JSON.stringify(entry.response.body, null, 2)
-                                : String(entry.response.body)}
-                            </Paragraph>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {entry.extracted && Object.keys(entry.extracted).length > 0 && (
-                  <div className="sub-platform-detail-block">
-                    <Text strong style={{ fontSize: '14px', color: 'var(--color-text)' }}>提取的变量</Text>
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {Object.entries(entry.extracted).map(([key, value], idx) => (
-                        <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', padding: '2px 0', borderBottom: '1px solid var(--color-border-light)' }}>
-                          <Text style={{ width: 120, color: 'var(--color-text-secondary)', fontSize: '13px', fontWeight: 500 }}>{key}:</Text>
-                          <Text style={{ flex: 1, fontSize: '13px' }}>{String(value)}</Text>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {entry.detail && (
-                  <div className="sub-platform-detail-block sub-platform-detail-block-error">
-                    <Text strong style={{ fontSize: '14px', color: 'var(--color-danger)' }}>错误详情</Text>
-                    <div style={{ marginTop: 8 }}>
-                      <Paragraph style={{ margin: 0, color: 'var(--color-danger)', fontSize: '13px' }}>{entry.detail}</Paragraph>
-                    </div>
-                  </div>
-                )}
-
-                {index < parsedLog.length - 1 && <Divider />}
-              </div>
-            ))}
+                    </details>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
-          <Text type="secondary">暂无执行日志</Text>
+          <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--color-text-disabled)' }}>
+            <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>📋</div>
+            <div>暂无执行日志</div>
+          </div>
         )}
       </Modal>
 
@@ -610,20 +568,23 @@ const ScheduledTaskManager: React.FC = () => {
         open={isFormVisible}
         onOk={handleFormSubmit}
         onCancel={() => setIsFormVisible(false)}
-        width={600}
-        bodyStyle={{ maxHeight: 600, overflowY: 'auto', paddingRight: '16px' }}
+        width={640}
+        styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '16px 20px' } }}
+        destroyOnClose
       >
-        <Form form={form} layout="vertical">
-          <Form.Item name="name" label="任务名称" rules={[{ required: true, message: '请输入任务名称' }]}>
-            <Input placeholder="请输入任务名称" style={{ width: '100%' }} />
-          </Form.Item>
+        <Form form={form} layout="vertical" style={{ marginBottom: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+            <Form.Item name="name" label="任务名称" rules={[{ required: true, message: '请输入任务名称' }]}
+              style={{ gridColumn: '1 / -1' }} >
+              <Input placeholder="请输入任务名称" style={{ width: '100%' }} />
+            </Form.Item>
 
-          <Form.Item name="schedule_type" label="调度类型">
-            <Select style={{ width: '100%' }}>
-              <Select.Option value="interval">间隔执行</Select.Option>
-              <Select.Option value="cron">Cron 表达式</Select.Option>
-            </Select>
-          </Form.Item>
+            <Form.Item name="schedule_type" label="调度类型">
+              <Select style={{ width: '100%' }}>
+                <Select.Option value="interval">间隔执行</Select.Option>
+                <Select.Option value="cron">Cron 表达式</Select.Option>
+              </Select>
+            </Form.Item>
 
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.schedule_type !== cur.schedule_type}>
             {({ getFieldValue }) =>
@@ -640,8 +601,9 @@ const ScheduledTaskManager: React.FC = () => {
               )
             }
           </Form.Item>
+          </div>
 
-          <Form.Item label="关联请求" extra="请按顺序添加请求，执行时将按添加顺序串行执行">
+          <Form.Item label="关联请求" extra="请按顺序添加请求，执行时将按添加顺序串行执行" style={{ marginBottom: 12 }}>
             <div>
               {/* 已添加的请求列表 */}
               <Form.Item noStyle name="request_ids" rules={[{ required: true, message: '请选择至少一个请求' }]}>
@@ -674,14 +636,14 @@ const ScheduledTaskManager: React.FC = () => {
                     };
 
                     return (
-                      <div key={requestId} style={{ display: 'flex', alignItems: 'center', marginBottom: 8, padding: 8, border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--color-bg)' }}>
-                        <span style={{ marginRight: 12, fontWeight: 500, width: 24, textAlign: 'center' }}>{index + 1}</span>
-                        <span style={{ flex: 1 }}>{request?.name || `请求 ${requestId}`}</span>
-                        <Space size="small">
-                          {index > 0 && <Button size="small" onClick={moveUp}>↑</Button>}
-                          {index < requestIds.length - 1 && <Button size="small" onClick={moveDown}>↓</Button>}
-                          <Button danger size="small" onClick={remove}>删除</Button>
-                        </Space>
+                      <div key={requestId} className="stm-request-item">
+                        <span className="stm-request-item-index">{index + 1}</span>
+                        <span className="stm-request-item-name">{request?.name || `请求 ${requestId}`}</span>
+                        <div className="stm-request-item-actions">
+                          {index > 0 && <Button size="small" type="text" onClick={moveUp}>↑</Button>}
+                          {index < requestIds.length - 1 && <Button size="small" type="text" onClick={moveDown}>↓</Button>}
+                          <Button size="small" type="text" danger onClick={remove}>×</Button>
+                        </div>
                       </div>
                     );
                   })}
@@ -725,6 +687,7 @@ const ScheduledTaskManager: React.FC = () => {
 
           <Form.Item name="environment_id" label="执行环境"
             extra="执行时使用的环境参数，用于变量替换和后置提取"
+            style={{ marginBottom: 12 }}
           >
             <Select placeholder="选择环境" allowClear style={{ width: '100%' }}
               options={environments.map(e => ({ label: e.name, value: e.id || undefined }))}
@@ -733,11 +696,12 @@ const ScheduledTaskManager: React.FC = () => {
 
           <Form.Item
             label="任务参数"
-            extra="配置任务级参数，优先级高于执行环境中的同名参数；文件类型的值将作为 file_params 发送"
+            extra="配置任务级参数，优先级高于执行环境中的同名参数"
+            style={{ marginBottom: 0 }}
           >
-            <div>
+            <div style={{ background: 'var(--color-bg)', padding: 10, borderRadius: 'var(--radius-sm)', border: '1px solid var(--color-border-light)' }}>
               {taskParameters.map((param, index) => (
-                <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+                <div key={index} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginBottom: 6 }}>
                   <Radio.Group
                     value={param.type || 'text'}
                     size="small"

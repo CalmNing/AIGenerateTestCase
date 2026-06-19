@@ -169,7 +169,11 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
       onCancel={onCancel}
       okText="保存"
       cancelText="取消"
-      width={800}
+      width={720}
+      styles={{
+        body: { padding: '16px 24px' },
+      }}
+      destroyOnClose
       confirmLoading={loading}
       onOk={handleOk}
     >
@@ -261,66 +265,70 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
                 children: (
                   <div>
                     {!selectedTestcase.api_endpoint_id ? (
-                      <div style={{ textAlign: 'center', padding: '20px', color: '#999' }}>
-                        该测试用例未关联API接口，无法配置API调用参数
+                      <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--color-text-disabled)', fontSize: 13 }}>
+                        该测试用例未关联 API 接口，无法配置 API 调用参数
                       </div>
                     ) : (
                       <>
-                        <div style={{ marginBottom: 16 }}>
-                          <Space>
-                            <span>启用API调用:</span>
-                            <Switch
-                              checked={apiCallEnabled}
-                              onChange={setApiCallEnabled}
-                            />
-                          </Space>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border-light)' }}>
+                          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-secondary)' }}>启用 API 调用</span>
+                          <Switch
+                            checked={apiCallEnabled}
+                            onChange={setApiCallEnabled}
+                            size="small"
+                          />
                         </div>
 
                         {apiCallEnabled && (
                           <>
-                          <Card title="请求Headers" size="small">
-                            <div style={{ marginBottom: 8, color: '#666', fontSize: 12 }}>
-                              添加认证信息和其他请求头，例如: Authorization: Bearer your_token
-                            </div>
-                            {headers.map((header, index) => (
-                              <Space key={index} style={{ marginBottom: 8, display: 'flex' }}>
-                                <Input
-                                  placeholder="Header名称"
-                                  value={header.key}
-                                  onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
-                                  style={{ width: 200 }}
-                                />
-                                <Input
-                                  placeholder="Header值"
-                                  value={header.value}
-                                  onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
-                                  style={{ width: 300 }}
-                                />
-                                <Button
-                                  type="text"
-                                  danger
-                                  icon={<DeleteOutlined />}
-                                  onClick={() => handleRemoveHeader(index)}
-                                />
-                              </Space>
-                            ))}
-                            <Button
-                              type="dashed"
-                              onClick={handleAddHeader}
-                              icon={<PlusOutlined />}
-                              style={{ width: '100%' }}
-                            >
-                              添加Header
-                            </Button>
+                            {/* Headers */}
+                            <div style={{ marginBottom: 16, padding: '12px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border-light)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)' }}>请求 Headers</span>
+                                <button
+                                  type="button"
+                                  onClick={handleAddHeader}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', border: '1px dashed var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, cursor: 'pointer' }}
+                                >
+                                  <PlusOutlined style={{ fontSize: 10 }} /> 添加
+                                </button>
+                              </div>
+                              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
+                                添加认证信息和其他请求头，如 Authorization: Bearer token
+                              </div>
+                              {headers.map((header, index) => (
+                                <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                                  <Input
+                                    placeholder="Key"
+                                    value={header.key}
+                                    onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
+                                    style={{ flex: 1, fontFamily: 'Consolas, Monaco, monospace', fontSize: 12 }}
+                                  />
+                                  <Input
+                                    placeholder="Value"
+                                    value={header.value}
+                                    onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
+                                    style={{ flex: 2, fontFamily: 'Consolas, Monaco, monospace', fontSize: 12 }}
+                                  />
+                                  <Button
+                                    type="text"
+                                    danger
+                                    size="small"
+                                    icon={<DeleteOutlined />}
+                                    onClick={() => handleRemoveHeader(index)}
+                                    style={{ flexShrink: 0 }}
+                                  />
+                                </div>
+                              ))}
 
-                            <div style={{ marginTop: 16 }}>
-                              <Space>
-                                <span>使用环境变量:</span>
+                              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>环境变量</span>
                                 <Select
                                   placeholder="选择环境（可选）"
                                   value={environmentId}
                                   onChange={setEnvironmentId}
                                   allowClear
+                                  size="small"
                                   style={{ width: 200 }}
                                 >
                                   {environments.map(env => (
@@ -329,27 +337,28 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
                                     </Select.Option>
                                   ))}
                                 </Select>
-                              </Space>
+                              </div>
                               {environmentId && (
-                                <div style={{ marginTop: 8, color: '#666', fontSize: 12 }}>
-                                  提示：选择环境后，可以在Headers中使用 {'{{变量名}}'} 格式引用环境变量
+                                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                                  选择环境后，可在 Headers 中使用 {'{{变量名}}'} 格式引用环境变量
                                 </div>
                               )}
                             </div>
-                          </Card>
 
-                          <Card title="请求Body" size="small" style={{ marginTop: 16 }}>
-                            <div style={{ marginBottom: 8, color: '#666', fontSize: 12 }}>
-                              请求体内容（JSON 格式），留空则使用接口默认 Body
+                            {/* Body */}
+                            <div style={{ padding: '12px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border-light)' }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)', marginBottom: 8 }}>请求 Body</div>
+                              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
+                                JSON 格式，留空则使用接口默认 Body
+                              </div>
+                              <Input.TextArea
+                                value={body}
+                                onChange={(e) => setBody(e.target.value)}
+                                placeholder='{"key": "value"}'
+                                rows={6}
+                                style={{ fontFamily: 'Consolas, Monaco, monospace', fontSize: 13 }}
+                              />
                             </div>
-                            <Input.TextArea
-                              value={body}
-                              onChange={(e) => setBody(e.target.value)}
-                              placeholder='{"key": "value"}'
-                              rows={6}
-                              style={{ fontFamily: 'monospace' }}
-                            />
-                          </Card>
                           </>
                         )}
                       </>

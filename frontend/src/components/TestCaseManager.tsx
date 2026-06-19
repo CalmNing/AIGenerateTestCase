@@ -1,11 +1,10 @@
 import React from 'react';
-import { Card, Typography, Button, Input, Select, notification, Switch, Empty } from 'antd';
+import { Button, Input, Select, notification, Switch } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../types';
 import TestCaseTable from './TestCaseTable';
 import * as XLSX from 'xlsx';
-
-const { Text } = Typography;
+import './TestCaseManager.css';
 
 interface TestCaseManagerProps {
   selectedSession: Session | null;
@@ -89,44 +88,40 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   };
 
   return (
-    <Card variant="borderless" styles={{ body: { padding: 0 } }}>
+    <div className="tcm-container">
       {!selectedSession ? (
-        <Empty
-          image={<FileTextOutlined style={{ fontSize: 48, color: 'var(--color-text-disabled)' }} />}
-          description="请先从左侧选择一个会话"
-          style={{ padding: '60px 0' }}
-        />
+        <div className="tcm-empty">
+          <FileTextOutlined className="tcm-empty-icon" />
+          <span className="tcm-empty-text">请先从左侧选择一个会话</span>
+        </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <>
           {/* Stats bar */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 12, padding: '6px 8px', background: 'var(--color-bg)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border-light)' }}>
+          <div className="tcm-stats-bar">
             {statItems(testcasesResponse, filters).map(item => (
               <div
                 key={item.key}
+                className={`tcm-stat-pill ${item.active ? 'is-active' : ''}`}
                 onClick={() => setFilter(item.status, item.exist_bug)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '6px 14px', borderRadius: 'var(--radius-md)',
-                  cursor: 'pointer', transition: 'all 180ms ease',
                   background: item.active ? item.bg : 'transparent',
                   color: item.active ? item.color : 'var(--color-text-secondary)',
-                  fontWeight: item.active ? 600 : 400,
-                  fontSize: 13,
                 }}
-                onMouseEnter={(e) => { if (!item.active) e.currentTarget.style.background = 'rgba(0,0,0,0.03)'; }}
-                onMouseLeave={(e) => { if (!item.active) e.currentTarget.style.background = 'transparent'; }}
               >
                 <span>{item.label}</span>
-                <span style={{ fontWeight: 700, color: item.active ? item.color : 'var(--color-text)' }}>{item.value}</span>
+                <span className="tcm-stat-pill-count" style={{ color: item.active ? item.color : 'var(--color-text)' }}>
+                  {item.value}
+                </span>
               </div>
             ))}
-            <div style={{ flex: 1 }} />
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={onAdd}>新增</Button>
-            <Button size="small" icon={<DownloadOutlined />} onClick={handleExportExcel}>导出</Button>
+            <div className="tcm-stats-actions">
+              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={onAdd}>新增</Button>
+              <Button size="small" icon={<DownloadOutlined />} onClick={handleExportExcel}>导出</Button>
+            </div>
           </div>
 
           {/* Filter bar */}
-          <div className="filter-bar">
+          <div className="tcm-filter-bar">
             <label>名称</label>
             <Input
               size="small"
@@ -196,9 +191,9 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onApiExecute={onApiExecute}
             onBatchMove={onBatchMove}
           />
-        </div>
+        </>
       )}
-    </Card>
+    </div>
   );
 };
 

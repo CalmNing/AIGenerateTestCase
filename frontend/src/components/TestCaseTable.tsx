@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { Table, Button, PaginationProps, TableProps, message, Modal, Tooltip, Typography } from 'antd';
+import { Table, Button, TableProps, message, Modal, Tooltip } from 'antd';
 import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../types';
-
-const { Text } = Typography;
 
 interface TestCaseTableProps {
   testcases: TestCase[];
@@ -17,17 +15,10 @@ interface TestCaseTableProps {
   onBatchMove: (ids: number[]) => void;
 }
 
-const levelConfig: Record<number, { label: string; color: string; bg: string }> = {
-  1: { label: 'P1', color: '#f43f5e', bg: '#fff1f2' },
-  2: { label: 'P2', color: '#f59e0b', bg: '#fffbeb' },
-  3: { label: 'P3', color: '#4f46e5', bg: '#eef2ff' },
-  4: { label: 'P4', color: '#94a3b8', bg: '#f8fafc' },
-};
-
-const statusConfig: Record<string, { label: string; color: string; dot: string }> = {
-  PASSED: { label: '已通过', color: '#10b981', dot: '#10b981' },
-  FAILED: { label: '未通过', color: '#f43f5e', dot: '#f43f5e' },
-  NOT_RUN: { label: '未执行', color: '#94a3b8', dot: '#cbd5e1' },
+const statusConfig: Record<string, { label: string; dotClass: string; textClass: string }> = {
+  PASSED: { label: '已通过', dotClass: 'tcm-status-dot--passed', textClass: 'tcm-status-text--passed' },
+  FAILED: { label: '未通过', dotClass: 'tcm-status-dot--failed', textClass: 'tcm-status-text--failed' },
+  NOT_RUN: { label: '未执行', dotClass: 'tcm-status-dot--not_run', textClass: 'tcm-status-text--not_run' },
 };
 
 const TestCaseTable: React.FC<TestCaseTableProps> = ({
@@ -52,7 +43,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       width: 48,
       align: 'center' as const,
       render: (_: any, __: any, idx: number) => (
-        <Text type="secondary" style={{ fontSize: 12 }}>{idx + 1}</Text>
+        <span className="tcm-row-index">{idx + 1}</span>
       ),
     },
     {
@@ -61,7 +52,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       key: 'case_name',
       ellipsis: true,
       render: (name: string) => (
-        <Text strong style={{ fontSize: 13 }}>{name}</Text>
+        <span className="tcm-case-name">{name}</span>
       ),
     },
     {
@@ -71,24 +62,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       width: 64,
       align: 'center' as const,
       render: (level: number) => {
-        const cfg = levelConfig[level] || levelConfig[4];
-        return (
-          <span style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: 22,
-            padding: '0 8px',
-            borderRadius: 'var(--radius-full)',
-            fontSize: 12,
-            fontWeight: 600,
-            color: cfg.color,
-            background: cfg.bg,
-            letterSpacing: '0.02em',
-          }}>
-            {cfg.label}
-          </span>
-        );
+        const cls = `tcm-level-badge tcm-level-badge--${level || 4}`;
+        return <span className={cls}>P{level || 4}</span>;
       },
     },
     {
@@ -100,15 +75,9 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (status: TestCaseStatus) => {
         const cfg = statusConfig[status] || statusConfig.NOT_RUN;
         return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <span style={{
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              background: cfg.dot,
-              flexShrink: 0,
-            }} />
-            <span style={{ color: cfg.color }}>{cfg.label}</span>
+          <span className="tcm-status">
+            <span className={`tcm-status-dot ${cfg.dotClass}`} />
+            <span className={cfg.textClass}>{cfg.label}</span>
           </span>
         );
       },
@@ -125,7 +94,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
         const day = String(date.getDate()).padStart(2, '0');
         const hours = String(date.getHours()).padStart(2, '0');
         const minutes = String(date.getMinutes()).padStart(2, '0');
-        return <Text type="secondary" style={{ fontSize: 13 }}>{month}-{day} {hours}:{minutes}</Text>;
+        return <span className="tcm-created-time">{month}-{day} {hours}:{minutes}</span>;
       },
     },
     {
@@ -141,53 +110,48 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
               href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`}
               target="_blank"
               rel="noopener noreferrer"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: 22,
-                padding: '0 6px',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: 12,
-                fontWeight: 500,
-                color: 'var(--color-danger)',
-                background: 'var(--color-danger-bg)',
-                textDecoration: 'none',
-                transition: 'opacity 150ms ease',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+              className="tcm-bug-link"
             >
               #{bugId}
             </a>
           );
         }
-        return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>—</span>;
+        return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
       },
     },
     {
       title: '操作',
       key: 'action',
-      width: 160,
+      width: 170,
       align: 'center' as const,
       render: (_: any, record: TestCase) => (
-        <div className="table-action-group" style={{ display: 'inline-flex', gap: 2 }}>
+        <div className="tcm-actions">
           <Tooltip title="查看" placement="top">
-            <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => onView(record)} className="table-action-btn" />
+            <button className="tcm-action-btn tcm-action-btn--view" onClick={() => onView(record)}>
+              <EyeOutlined />
+            </button>
           </Tooltip>
           <Tooltip title="编辑" placement="top">
-            <Button size="small" type="text" icon={<EditOutlined />} onClick={() => onEdit(record)} className="table-action-btn" />
+            <button className="tcm-action-btn tcm-action-btn--edit" onClick={() => onEdit(record)}>
+              <EditOutlined />
+            </button>
           </Tooltip>
           <Tooltip title="执行" placement="top">
-            <Button size="small" type="text" icon={<CheckCircleOutlined />} onClick={() => onComplete(record)} className="table-action-btn table-action-btn-success" />
+            <button className="tcm-action-btn tcm-action-btn--execute" onClick={() => onComplete(record)}>
+              <CheckCircleOutlined />
+            </button>
           </Tooltip>
           {onApiExecute && record.api_endpoint_id && (
             <Tooltip title="API 执行" placement="top">
-              <Button size="small" type="text" icon={<ApiOutlined />} onClick={() => onApiExecute(record)} className="table-action-btn table-action-btn-primary" />
+              <button className="tcm-action-btn tcm-action-btn--api" onClick={() => onApiExecute(record)}>
+                <ApiOutlined />
+              </button>
             </Tooltip>
           )}
           <Tooltip title="移动" placement="top">
-            <Button size="small" type="text" icon={<DragOutlined />} onClick={() => onMove(record)} className="table-action-btn" />
+            <button className="tcm-action-btn tcm-action-btn--move" onClick={() => onMove(record)}>
+              <DragOutlined />
+            </button>
           </Tooltip>
         </div>
       ),
@@ -216,9 +180,9 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   return (
     <>
       {selectedRowKeys.length > 0 && (
-        <div className="batch-action-bar">
-          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-            已选 <Text strong style={{ color: 'var(--color-primary)' }}>{selectedRowKeys.length}</Text> 项
+        <div className="tcm-batch-bar">
+          <span className="tcm-batch-count">
+            已选 <strong>{selectedRowKeys.length}</strong> 项
           </span>
           <Button size="small" danger icon={<ExclamationCircleOutlined />} onClick={handleBatchDelete}>
             批量删除
@@ -228,22 +192,24 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
           </Button>
         </div>
       )}
-      <Table
-        rowSelection={{ type: 'checkbox', ...rowSelection }}
-        columns={testcaseColumns}
-        dataSource={testcases}
-        rowKey="id"
-        pagination={{
-          position: ['bottomRight'],
-          defaultPageSize: 20,
-          size: 'small',
-          showTotal: (total) => <Text type="secondary" style={{ fontSize: 12 }}>共 {total} 条</Text>,
-        }}
-        scroll={{ x: 700, y: '47vh' }}
-        tableLayout="fixed"
-        size="small"
-        locale={{ emptyText: '暂无测试用例' }}
-      />
+      <div className="tcm-table">
+        <Table
+          rowSelection={{ type: 'checkbox', ...rowSelection }}
+          columns={testcaseColumns}
+          dataSource={testcases}
+          rowKey="id"
+          pagination={{
+            position: ['bottomRight'],
+            defaultPageSize: 20,
+            size: 'small',
+            showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
+          }}
+          scroll={{ x: 700, y: '47vh' }}
+          tableLayout="fixed"
+          size="small"
+          locale={{ emptyText: '暂无测试用例' }}
+        />
+      </div>
       <Modal
         title="批量删除确认"
         open={isBatchDeleteModalVisible}

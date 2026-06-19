@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Form, Select, Input, Button, Space, Table, Tag, message, Modal, Switch, Tooltip, Card, Popconfirm, InputNumber, Typography } from 'antd';
-import { PlusOutlined, DeleteOutlined, ReloadOutlined, CopyOutlined, ExperimentOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Form, Select, Input, Button, Table, Tag, message, Modal, Switch, Tooltip, Popconfirm, InputNumber } from 'antd';
+import { PlusOutlined, DeleteOutlined, ReloadOutlined, CopyOutlined, ExperimentOutlined, QuestionCircleOutlined, FileTextOutlined, ApiOutlined, CodeOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { mockConfigApi, globalParameterApi } from '../services/api';
 import type { MockConfig, GlobalParameter } from '../types';
+import './IoTMockPlatform.css';
 
 /**
  * 格式化带模板表达式的 JSON
@@ -28,14 +29,26 @@ function formatJsonWithTemplates(input: string): string {
   return formatted;
 }
 
-const { Text } = Typography;
-
 interface HeaderItem {
   key: string;
   value: string;
 }
 
 const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'].map(m => ({ label: m, value: m }));
+
+const MethodBadge: React.FC<{ method: string }> = ({ method }) => {
+  const cls = `mock-method-badge mock-method-badge--${method.toLowerCase()}`;
+  return <span className={cls}>{method}</span>;
+};
+
+const StatusCodeBadge: React.FC<{ code: number }> = ({ code }) => {
+  let cls = 'mock-status-badge';
+  if (code >= 200 && code < 300) cls += ' mock-status-badge--success';
+  else if (code >= 300 && code < 400) cls += ' mock-status-badge--redirect';
+  else if (code >= 400 && code < 500) cls += ' mock-status-badge--client-error';
+  else cls += ' mock-status-badge--server-error';
+  return <span className={cls}>{code}</span>;
+};
 
 const IoTMockPlatform: React.FC = () => {
   const [configs, setConfigs] = useState<MockConfig[]>([]);
@@ -49,9 +62,33 @@ const IoTMockPlatform: React.FC = () => {
   const [testing, setTesting] = useState(false);
 
   const [form] = Form.useForm();
-
-  // 响应头列表（表单内部状态）
   const [responseHeaders, setResponseHeaders] = useState<HeaderItem[]>([]);
+
+  // Drag handle state for resizing panels
+  const [leftWidth, setLeftWidth] = useState(60);
+  const [rightCollapsed, setRightCollapsed] = useState(true);
+  const dragRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: leftWidth };
+    const handleDrag = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const container = (e.target as HTMLElement).closest('.mock-container');
+      if (!container) return;
+      const containerWidth = container.clientWidth;
+      const delta = ev.clientX - dragRef.current.startX;
+      const newWidth = ((dragRef.current.startWidth / 100) * containerWidth + delta) / containerWidth * 100;
+      setLeftWidth(Math.min(80, Math.max(40, newWidth)));
+    };
+    const handleDragEnd = () => {
+      dragRef.current = null;
+      document.removeEventListener('mousemove', handleDrag);
+      document.removeEventListener('mouseup', handleDragEnd);
+    };
+    document.addEventListener('mousemove', handleDrag);
+    document.addEventListener('mouseup', handleDragEnd);
+  }, [leftWidth]);
 
   const fetchConfigs = async () => {
     setLoading(true);
@@ -203,37 +240,90 @@ const IoTMockPlatform: React.FC = () => {
   };
 
   const columns = [
-    { title: '名称', dataIndex: 'name', key: 'name', width: 150, ellipsis: true, render: (t: string) => <Text strong ellipsis>{t}</Text> },
-    { title: '方法', dataIndex: 'method', key: 'method', width: 80, render: (m: string) => <Tag color="blue">{m}</Tag> },
-    { title: 'URL路径', dataIndex: 'url_path', key: 'url_path', width: 150, ellipsis: true, render: (t: string) => (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
-        <Text code ellipsis style={{ fontSize: 13, flex: 1, minWidth: 0 }}>
-          {t}
-        </Text>
-        <Button
-          type="text" size="small"
-          icon={<CopyOutlined style={{ fontSize: 12 }} />}
-          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`/api/mock${t}`); message.success('已复制'); }}
-          style={{ flexShrink: 0, padding: 0, height: 20, width: 20, opacity: 0.65 }}
-        />
-      </div>
-    ) },
-    { title: '状态码', dataIndex: 'status_code', key: 'status_code', width: 80 },
-    { title: '分页', key: 'pagination', width: 100, render: (_: any, r: MockConfig) => r.response_count > 1 ? <Tag color="green">{r.response_count}条/页</Tag> : '-' },
-    { title: 'JSON路径', dataIndex: 'json_path', key: 'json_path', width: 150, render: (t: string) => t ? <Text code style={{ fontSize: 13 }}>{t}</Text> : '-' },
-    { title: '环境', key: 'env', width: 90, render: (_: any, r: MockConfig) => { const env = environments.find(e => e.id === r.environment_id); return env ? <Text ellipsis>{env.name}</Text> : '-'; } },
-    { title: '启用', dataIndex: 'enabled', key: 'enabled', width: 70, render: (enabled: boolean, record: MockConfig) => <Switch size="small" checked={enabled} onChange={() => handleToggle(record)} /> },
     {
-      title: '操作', key: 'action', width: 200, render: (_: any, record: MockConfig) => (
-        <Space size={0}>
-          <Button type="text" size="small" onClick={() => handleTest(record)} style={{ color: 'var(--color-success)' }}>测试</Button>
-          <Button type="text" size="small" onClick={() => openEdit(record)} style={{ color: 'var(--color-primary)' }}>编辑</Button>
-          <Button type="text" size="small" onClick={() => handleCopy(record)} style={{ color: 'var(--color-primary)' }}>复制</Button>
-          <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
-            <Button type="text" size="small" danger>删除</Button>
+      title: '名称',
+      dataIndex: 'name',
+      key: 'name',
+      width: 140,
+      ellipsis: true,
+      render: (t: string, record: MockConfig) => (
+        <span style={{ fontWeight: 500, fontSize: 13, color: record.enabled ? 'var(--color-text)' : 'var(--color-text-disabled)' }}>{t}</span>
+      ),
+    },
+    {
+      title: '方法',
+      dataIndex: 'method',
+      key: 'method',
+      width: 80,
+      render: (m: string) => <MethodBadge method={m} />,
+    },
+    {
+      title: 'URL 路径',
+      dataIndex: 'url_path',
+      key: 'url_path',
+      width: 180,
+      ellipsis: true,
+      render: (t: string) => (
+        <div className="mock-url-cell">
+          <span className="mock-url-path">{t}</span>
+          <button
+            className="mock-url-copy"
+            onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`/api/mock${t}`); message.success('已复制'); }}
+            title="复制路径"
+          >
+            <CopyOutlined style={{ fontSize: 11 }} />
+          </button>
+        </div>
+      ),
+    },
+    {
+      title: '状态码',
+      dataIndex: 'status_code',
+      key: 'status_code',
+      width: 80,
+      render: (code: number) => <StatusCodeBadge code={code} />,
+    },
+    {
+      title: '分页',
+      key: 'pagination',
+      width: 90,
+      render: (_: any, r: MockConfig) => r.response_count > 1
+        ? <span className="mock-pagination-tag">{r.response_count}条/页</span>
+        : <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>,
+    },
+    {
+      title: '环境',
+      key: 'env',
+      width: 80,
+      ellipsis: true,
+      render: (_: any, r: MockConfig) => {
+        const env = environments.find(e => e.id === r.environment_id);
+        return <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{env ? env.name : '-'}</span>;
+      },
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 60,
+      render: (enabled: boolean, record: MockConfig) => (
+        <Switch size="small" checked={enabled} onChange={() => handleToggle(record)} />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 220,
+      render: (_: any, record: MockConfig) => (
+        <div className="mock-actions">
+          <button className="mock-action-btn mock-action-btn--success" onClick={() => handleTest(record)}>测试</button>
+          <button className="mock-action-btn mock-action-btn--warning" onClick={() => openEdit(record)}>编辑</button>
+          <button className="mock-action-btn mock-action-btn--info" onClick={() => handleCopy(record)}>复制</button>
+          <Popconfirm title="确定要删除这个 Mock 配置吗？" onConfirm={() => handleDelete(record.id)} okText="确定" cancelText="取消">
+            <button className="mock-action-btn mock-action-btn--danger">删除</button>
           </Popconfirm>
-        </Space>
-      )
+        </div>
+      ),
     },
   ];
 
@@ -244,26 +334,33 @@ const IoTMockPlatform: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 88px)', background: 'var(--color-bg)' }}>
+    <div className="mock-container">
       {/* 左侧：配置列表 */}
-      <div style={{ width: '60%', padding: 16, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-        <div className="filter-bar">
+      <div className="mock-panel-left" style={{ width: rightCollapsed ? '100%' : `${leftWidth}%` }}>
+        <div className="mock-filter-bar">
           <label>名称</label>
-          <Input.Search placeholder="搜索名称..." allowClear size="small" style={{ width: 200 }} onChange={(e) => setSearchConfig(e.target.value)} onSearch={(val) => setSearchConfig(val)} />
+          <Input.Search
+            placeholder="搜索名称..."
+            allowClear
+            size="small"
+            onChange={(e) => setSearchConfig(e.target.value)}
+            onSearch={(val) => setSearchConfig(val)}
+          />
           <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+            {configs.filter(c => c.enabled).length}/{configs.length} 已启用
+          </span>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>新建 Mock</Button>
         </div>
-        <Card
-          title={<Space><ExperimentOutlined />Mock 接口配置</Space>}
-          style={{ flex: 1, minHeight: 0 }}
-          bodyStyle={{ padding: 0, overflow: 'auto', height: 'calc(100% - 57px)' }}
-        >
+
+        <div className="mock-table-wrapper">
           <Table
             columns={columns}
             dataSource={configs.filter(c => !searchConfig || c.name.toLowerCase().includes(searchConfig.toLowerCase()))}
             rowKey="id"
             loading={loading}
             size="small"
+            rowClassName={(record) => record.enabled ? '' : 'mock-row-disabled'}
             pagination={{
               pageSize: 20,
               size: 'small',
@@ -271,70 +368,89 @@ const IoTMockPlatform: React.FC = () => {
             }}
             scroll={{ y: 'calc(100vh - 240px)' }}
           />
-        </Card>
+        </div>
+      </div>
+
+      {/* 拖拽分隔条 + 收起按钮 */}
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        <div className="mock-drag-handle" onMouseDown={handleDragStart} />
+        <button
+          className={`mock-collapse-btn ${rightCollapsed ? 'is-collapsed' : ''}`}
+          onClick={() => setRightCollapsed(!rightCollapsed)}
+          title={rightCollapsed ? '展开文档' : '收起文档'}
+        />
       </div>
 
       {/* 右侧：使用说明 */}
-      <div style={{ width: '40%', padding: 16, overflow: 'auto' }}>
-        <Card title="使用说明" style={{ marginBottom: 16 }}>
-          <div style={{ lineHeight: 2, color: 'var(--color-text-secondary)', fontSize: 14 }}>
-            <p>1. <strong>新建 Mock</strong>：配置 URL 路径、HTTP 方法和响应内容</p>
-            <p>2. <strong>URL 路径</strong>：支持路径参数，如 <Text code>/users/{'{'}id{'}'}</Text>，访问 <Text code>/api/mock/users/123</Text> 时，<Text code>{'{{id}}'}</Text> 会被替换为 <Text code>123</Text></p>
-            <p>3. <strong>分页功能</strong>：设置"返回数据条目数量"大于1时启用分页，通过 <Text code>?page=1&page_size=10</Text> 参数控制分页</p>
-            <p>4. <strong>JSON 路径</strong>：指定响应体中哪个字段包含数组数据，如 <Text code>$.data.items</Text>，留空则自动检测</p>
-            <p>5. <strong>参数化</strong>：在响应体中使用以下格式引用变量</p>
-            <p className="sub-platform-detail-block" style={{ marginTop: 12, background: 'var(--color-primary-bg)', borderColor: 'var(--color-primary)' }}>
-              <strong>Mock 服务基础路径：</strong><Text code copyable>/api/mock</Text><br />
-              例如配置路径 <Text code>/hello</Text>，访问地址为 <Text code copyable>/api/mock/hello</Text>
-            </p>
+      {!rightCollapsed && (
+      <div className="mock-panel-right" style={{ flex: 1 }}>
+        <div className="mock-doc-card">
+          <div className="mock-doc-card-header">
+            <FileTextOutlined style={{ color: 'var(--color-primary)' }} />
+            快速入门
           </div>
-        </Card>
-
-        <Card title="参数化语法" style={{ marginBottom: 16 }}>
-          <div style={{ lineHeight: 1.8, color: 'var(--color-text-secondary)', fontSize: 13 }}>
-            <p><strong>1. 路径参数：</strong><Text code copyable>{'{{参数名}}'}</Text> 或 <Text code copyable>{'${参数名}'}</Text></p>
-            <p style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>从 URL 路径中提取，如 <Text code>/users/{'{'}id{'}'}</Text> 匹配 <Text code>/users/123</Text>，则 <Text code>{'{{id}}'}</Text> = <Text code>123</Text></p>
-
-            <p style={{ marginTop: 8 }}><strong>2. JS 表达式：</strong><Text code copyable>{'{{@表达式}}'}</Text></p>
-            <p style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>示例：<Text code copyable>{'{{@Math.random().toFixed(2)}}'}</Text>、<Text code copyable>{'{{@new Date().toISOString()}}'}</Text></p>
-
-            <p style={{ marginTop: 8 }}><strong>3. 内置函数：</strong><Text code copyable>{'{{$函数}}'}</Text></p>
-            <div style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>
-              <p>• <Text code copyable>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
-              <p>• <Text code copyable>{'{{$now}}'}</Text> - 秒级时间戳</p>
-              <p>• <Text code copyable>{'{{$uuid}}'}</Text> - 生成 UUID</p>
-              <p>• <Text code copyable>{'{{$randomInt}}'}</Text> - 0~100 随机整数</p>
-              <p>• <Text code copyable>{'{{$randomInt(1,100)}}'}</Text> - 指定范围随机整数</p>
-              <p>• <Text code copyable>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
-              <p>• <Text code copyable>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
+          <div className="mock-doc-card-body">
+            <p><strong>1. 新建 Mock</strong> — 配置 URL 路径、HTTP 方法和响应内容</p>
+            <p><strong>2. URL 路径</strong> — 支持路径参数，如 <code>/users/{"{id}"}</code>，访问 <code>/api/mock/users/123</code> 时 <code>{"{{id}}"}</code> 替换为 <code>123</code></p>
+            <p><strong>3. 分页</strong> — 返回条目数 &gt; 1 时启用，通过 <code>?page=1&page_size=10</code> 控制</p>
+            <p><strong>4. JSON 路径</strong> — 指定数组数据字段，如 <code>$.data.items</code>，留空自动检测</p>
+            <div className="mock-highlight-box">
+              <strong>基础路径：</strong><code>/api/mock</code><br />
+              配置路径 <code>/hello</code>，访问 <code>/api/mock/hello</code>
             </div>
-
-            <p style={{ marginTop: 8 }}><strong>4. 环境变量：</strong><Text code copyable>{'{{变量名}}'}</Text> 或 <Text code copyable>{'${变量名}'}</Text></p>
-            <p style={{ marginLeft: 16, color: 'var(--color-text-secondary)' }}>示例：<Text code copyable>{'{{baseUrl}}'}</Text>、<Text code copyable>{'${apiToken}'}</Text></p>
           </div>
-        </Card>
+        </div>
 
-        {/* {configs.length > 0 && (
-          <Card title="已启用的 Mock 接口">
-            {configs.filter(c => c.enabled).length === 0 ? (
-              <Text type="secondary">暂无启用的 Mock 接口</Text>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {configs.filter(c => c.enabled).map(c => (
-                  <div key={c.id} style={{ padding: '8px 12px', background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <Tag color="blue">{c.method}</Tag>
-                      <Text code style={{ fontSize: 13 }}>{c.url_path}</Text>
-                      <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>({c.status_code})</Text>
-                    </div>
-                    <Text copyable={{ text: `/api/mock${c.url_path}` }} style={{ fontSize: 12 }} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        )} */}
+        <div className="mock-doc-card">
+          <div className="mock-doc-card-header">
+            <CodeOutlined style={{ color: 'var(--color-warning)' }} />
+            参数化语法
+          </div>
+          <div className="mock-doc-card-body">
+            <table className="mock-syntax-table">
+              <tbody>
+                <tr>
+                  <td>
+                    <span className="mock-syntax-label">路径参数</span><br />
+                    <code className="mock-syntax-code">{"{{参数名}}"}</code> 或 <code className="mock-syntax-code">{"${参数名}"}</code>
+                  </td>
+                  <td><span className="mock-syntax-desc">从 URL 路径提取，如 <code>/users/{"{id}"}</code> 匹配 <code>/users/123</code></span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <span className="mock-syntax-label">JS 表达式</span><br />
+                    <code className="mock-syntax-code">{"{{@表达式}}"}</code>
+                  </td>
+                  <td><span className="mock-syntax-desc">如 <code>{"{{@Math.random().toFixed(2)}}"}</code></span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <span className="mock-syntax-label">内置函数</span><br />
+                    <code className="mock-syntax-code">{"{{$函数}}"}</code>
+                  </td>
+                  <td>
+                    <span className="mock-syntax-desc">
+                      <code>{"{{$timestamp}}"}</code> 毫秒时间戳<br />
+                      <code>{"{{$uuid}}"}</code> UUID<br />
+                      <code>{"{{$randomInt(1,100)}}"}</code> 随机整数<br />
+                      <code>{"{{$date}}"}</code> 当前日期<br />
+                      <code>{"{{$date(YYYY-MM-DD HH:mm:ss)}}"}</code> 自定义格式
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <span className="mock-syntax-label">环境变量</span><br />
+                    <code className="mock-syntax-code">{"{{变量名}}"}</code>
+                  </td>
+                  <td><span className="mock-syntax-desc">如 <code>{"{{baseUrl}}"}</code>、<code>{"${apiToken}"}</code></span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
+      )}
 
       {/* 编辑/新建弹窗 */}
       <Modal
@@ -344,61 +460,58 @@ const IoTMockPlatform: React.FC = () => {
         onCancel={() => setModalVisible(false)}
         width={720}
         style={{ top: 20 }}
-        bodyStyle={{ maxHeight: 'calc(100vh - 250px)', overflowY: 'auto', overflowX: 'hidden', padding: '0 10px 1px 1px' }}
+        styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto', padding: '16px 20px' } }}
         destroyOnClose
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" className="mock-modal-form" style={{ marginBottom: 0 }}>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="如：获取用户信息 Mock" />
           </Form.Item>
 
-          <Space style={{ width: '100%' }} size="large">
-            <Form.Item name="method" label="HTTP 方法" rules={[{ required: true }]}>
-              <Select options={METHOD_OPTIONS} style={{ width: 130 }} />
-            </Form.Item>
+          <div className="mock-form-row--triple">
             <Form.Item name="url_path" label="URL 路径" rules={[{ required: true, message: '请输入URL路径' }]}>
-              <Input placeholder="如 /api/users/{id}，实际访问为 /api/mock/api/users/123" style={{ width: 380 }} />
+              <Input placeholder="/api/users/{id}" />
             </Form.Item>
-            <Form.Item name="status_code" label="响应状态码">
-              <InputNumber min={100} max={599} style={{ width: 100 }} />
+            <Form.Item name="method" label="HTTP 方法" rules={[{ required: true }]}>
+              <Select options={METHOD_OPTIONS} style={{ width: '100%' }} />
             </Form.Item>
-          </Space>
-          <Space style={{ width: '100%' }} size="large">
+            <Form.Item name="status_code" label="状态码">
+              <InputNumber min={100} max={599} style={{ width: '100%' }} />
+            </Form.Item>
+          </div>
+
+          <div className="mock-form-row">
             <Form.Item name="environment_id" label="参数化环境">
-              <Select placeholder="选择环境后，响应体中的 {{变量名}} 将被替换为环境参数值（可选）" allowClear style={{ width: '100%' }}
+              <Select placeholder="选择环境（可选）" allowClear style={{ width: '100%' }}
                 options={environments.map(e => ({ label: e.name, value: e.id }))} />
             </Form.Item>
-            <Form.Item name="enabled" label="启用" valuePropName="checked">
-              <Switch />
-            </Form.Item>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <Form.Item name="response_count" label="数据条目数" style={{ flex: 1 }}>
+                <InputNumber min={1} max={10000} style={{ width: '100%' }} placeholder="1" />
+              </Form.Item>
+              <Form.Item name="enabled" label="启用" valuePropName="checked" style={{ paddingTop: 4 }}>
+                <Switch />
+              </Form.Item>
+            </div>
+          </div>
 
-          </Space>
-
-          <Space style={{ width: '100%' }} size="large">
-            <Form.Item name="response_count" label="返回数据条目数量">
-              <InputNumber min={1} max={10000} style={{ width: 200 }} placeholder="1" />
-            </Form.Item>
-            {/* <Form.Item name="page_size" label="分页大小" extra="每页返回的数据条数，默认10">
-              <InputNumber min={1} max={1000} style={{ width: 200 }} placeholder="10" />
-            </Form.Item> */}
-            <Form.Item name="json_path" label="JSON 路径">
-              <Input placeholder="响应体中返回数据JSON路径, 如 $.data.items" style={{ width: '100%', minWidth: '350px' }} />
-            </Form.Item>
-          </Space>
-
-
+          <Form.Item name="json_path" label="JSON 路径">
+            <Input placeholder="响应体中数组数据的 JSON 路径，如 $.data.items" />
+          </Form.Item>
 
           {/* 响应头 */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontWeight: 500, fontSize: 14 }}>响应头</span>
+            <div className="mock-section-label">
+              <span className="mock-section-label-text">响应头</span>
               <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addHeader}>添加</Button>
             </div>
-            {responseHeaders.length === 0 && <Text type="secondary" style={{ fontSize: 13 }}>暂无自定义响应头</Text>}
+            {responseHeaders.length === 0 && (
+              <span style={{ fontSize: 12, color: 'var(--color-text-disabled)' }}>暂无自定义响应头</span>
+            )}
             {responseHeaders.map((h, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
-                <Input placeholder="Header Key" value={h.key} onChange={e => updateHeader(idx, 'key', e.target.value)} style={{ flex: 1 }} />
-                <Input placeholder="Header Value" value={h.value} onChange={e => updateHeader(idx, 'value', e.target.value)} style={{ flex: 1 }} />
+              <div key={idx} className="mock-header-row">
+                <Input placeholder="Key" value={h.key} onChange={e => updateHeader(idx, 'key', e.target.value)} style={{ flex: 1 }} />
+                <Input placeholder="Value" value={h.value} onChange={e => updateHeader(idx, 'value', e.target.value)} style={{ flex: 1 }} />
                 <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => removeHeader(idx)} />
               </div>
             ))}
@@ -406,104 +519,69 @@ const IoTMockPlatform: React.FC = () => {
 
           {/* 响应体 */}
           <div style={{ marginBottom: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 500, fontSize: 14 }}>
+            <div className="mock-section-label">
+              <span className="mock-section-label-text">
                 响应体
-                <Tooltip
-                  title={
-                    <div style={{ color: '#ffffff', lineHeight: 1.8 }}>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$timestamp}}'}</Text> - 毫秒时间戳</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$now}}'}</Text> - 秒级时间戳</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$uuid}}'}</Text> - 生成 UUID</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$randomInt}}'}</Text> - 0~100 随机整数</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$randomInt(1,100)}}'}</Text> - 指定范围随机整数</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$date}}'}</Text> - 当前日期 (YYYY-MM-DD)</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{$date(YYYY-MM-DD HH:mm:ss)}}'}</Text> - 自定义日期格式</p>
-                      <p>• <Text code copyable color="#000" style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: 'var(--radius-sm)' }}>{'{{@[10,20,30][Math.floor(Math.random()*3)]}}'}</Text> - 随机指定列表中的数据</p>
-                    </div>
-                  }
-                >
+                <Tooltip title={
+                  <div style={{ lineHeight: 2, fontSize: 12 }}>
+                    <div><code>{"{{$timestamp}}"}</code> 毫秒时间戳</div>
+                    <div><code>{"{{$uuid}}"}</code> UUID</div>
+                    <div><code>{"{{$randomInt(1,100)}}"}</code> 随机整数</div>
+                    <div><code>{"{{$date}}"}</code> 当前日期</div>
+                    <div><code>{"{{@[10,20,30][Math.floor(Math.random()*3)]}}"}</code> 随机选择</div>
+                  </div>
+                }>
                   <QuestionCircleOutlined style={{ marginLeft: 6, color: 'var(--color-text-tertiary)', fontSize: 13 }} />
                 </Tooltip>
               </span>
-              <Space size={4}>
-                <Button
-                  type="text" size="small" onClick={() => {
-                    const body = form.getFieldValue('response_body');
-                    if (body) {
-                      try {
-                        const formatted = formatJsonWithTemplates(body);
-                        form.setFieldsValue({ response_body: formatted });
-                        message.success('格式化成功');
-                      } catch { message.error('JSON 格式不正确'); }
-                    }
-                  }}
-                >格式化</Button>
-                <Button
-                  type="text" size="small" onClick={() => {
-                    form.setFieldsValue({
-                      response_body: JSON.stringify({
-                        code: 200,
-                        message: "success",
-                        data: {
-                          id: "{{id}}",
-                          userId: "{{userId}}",
-                          timestamp: "{{$timestamp}}",
-                          date: "{{$date(YYYY-MM-DD HH:mm:ss)}}",
-                          random: "{{$randomInt(1,1000)}}",
-                          randomFloat: "{{@Math.random().toFixed(4)}}",
-                          isoTime: "{{@new Date().toISOString()}}"
-                        }
-                      }, null, 2)
-                    });
-                  }}
-                >模板</Button>
-                <Button
-                  type="text" size="small" onClick={() => {
-                    form.setFieldsValue({
-                      response_body: JSON.stringify({
-                        code: 200,
-                        message: "success",
-                        data: {
-                          items: [
-                            {
-                              id: "{{id}}",
-                              userId: "{{userId}}",
-                              timestamp: "{{$timestamp}}",
-                              date: "{{$date(YYYY-MM-DD HH:mm:ss)}}",
-                              random: "{{$randomInt(1,1000)}}",
-                              randomFloat: "{{@Math.random().toFixed(4)}}",
-                              isoTime: "{{@new Date().toISOString()}}"
-                            }
-                          ]
-                        }
-                      }, null, 2)
-                    });
-                    form.setFieldsValue({ response_count: 100, page_size: 10, json_path: '$.data.items' });
-                  }}
-                >分页模板</Button>
-              </Space>
+              <div className="mock-body-toolbar">
+                <button className="mock-body-btn" onClick={() => {
+                  const body = form.getFieldValue('response_body');
+                  if (body) {
+                    try {
+                      form.setFieldsValue({ response_body: formatJsonWithTemplates(body) });
+                      message.success('格式化成功');
+                    } catch { message.error('JSON 格式不正确'); }
+                  }
+                }}>格式化</button>
+                <button className="mock-body-btn" onClick={() => {
+                  form.setFieldsValue({
+                    response_body: JSON.stringify({
+                      code: 200, message: "success",
+                      data: { id: "{{id}}", userId: "{{userId}}", timestamp: "{{$timestamp}}", date: "{{$date(YYYY-MM-DD HH:mm:ss)}}", random: "{{$randomInt(1,1000)}}", randomFloat: "{{@Math.random().toFixed(4)}}", isoTime: "{{@new Date().toISOString()}}" }
+                    }, null, 2)
+                  });
+                }}>模板</button>
+                <button className="mock-body-btn" onClick={() => {
+                  form.setFieldsValue({
+                    response_body: JSON.stringify({
+                      code: 200, message: "success",
+                      data: { items: [{ id: "{{id}}", userId: "{{userId}}", timestamp: "{{$timestamp}}", date: "{{$date(YYYY-MM-DD HH:mm:ss)}}", random: "{{$randomInt(1,1000)}}", randomFloat: "{{@Math.random().toFixed(4)}}", isoTime: "{{@new Date().toISOString()}}" }] }
+                    }, null, 2)
+                  });
+                  form.setFieldsValue({ response_count: 100, page_size: 10, json_path: '$.data.items' });
+                }}>分页模板</button>
+              </div>
             </div>
           </div>
-          <Form.Item name="response_body">
-            <CodeMirror
-              value={form.getFieldValue('response_body') || ''}
-              height="450px"
-              extensions={jsonExtensions}
-              onChange={(val) => form.setFieldsValue({ response_body: val })}
-              placeholder="输入响应体 JSON"
-              style={{ fontSize: '14px' }}
-              basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true }}
-            />
+          <Form.Item name="response_body" style={{ marginBottom: 0 }}>
+            <div className="mock-codemirror">
+              <CodeMirror
+                value={form.getFieldValue('response_body') || ''}
+                height="380px"
+                extensions={jsonExtensions}
+                onChange={(val) => form.setFieldsValue({ response_body: val })}
+                placeholder="输入响应体 JSON"
+                basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true }}
+              />
+            </div>
           </Form.Item>
-
-
         </Form>
       </Modal>
 
       {/* 测试弹窗 */}
       <Modal
-        title={`测试 Mock - ${editingConfig?.name || ''}`}
+        title={`测试 Mock — ${editingConfig?.name || ''}`}
         open={testModalVisible}
         onCancel={() => setTestModalVisible(false)}
         footer={[
@@ -511,26 +589,22 @@ const IoTMockPlatform: React.FC = () => {
           <Button key="test" type="primary" loading={testing} icon={<ReloadOutlined />} onClick={executeTest}>发送测试</Button>,
         ]}
         width={700}
+        styles={{ body: { padding: '16px 20px' } }}
       >
         {editingConfig && (
           <div>
-            <div style={{ marginBottom: 12, padding: 12, background: 'var(--color-bg)', borderRadius: 'var(--radius-md)' }}>
-              <Space>
-                <Tag color="blue">{editingConfig.method}</Tag>
-                <Text code copyable style={{ fontSize: 14 }}>{`/api/mock${editingConfig.url_path}`}</Text>
-              </Space>
+            <div className="mock-test-url-bar">
+              <MethodBadge method={editingConfig.method} />
+              <span className="mock-test-url-text">{`/api/mock${editingConfig.url_path}`}</span>
             </div>
             {testResult && (
               <div>
-                <div style={{ marginBottom: 8 }}>
-                  <Tag color={testResult.status >= 200 && testResult.status < 300 ? 'success' : 'error'}>
-                    {testResult.status} {testResult.statusText}
-                  </Tag>
+                <div className="mock-test-result-header">
+                  <StatusCodeBadge code={testResult.status} />
+                  <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{testResult.statusText}</span>
                 </div>
-                <div style={{ background: 'var(--color-success-bg)', border: '1px solid var(--color-success)', borderRadius: 'var(--radius-md)', padding: 12, maxHeight: 350, overflow: 'auto' }}>
-                  <pre style={{ margin: 0, fontSize: 13, whiteSpace: 'pre-wrap' }}>
-                    {typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body)}
-                  </pre>
+                <div className="mock-test-result-body">
+                  <pre>{typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body)}</pre>
                 </div>
               </div>
             )}

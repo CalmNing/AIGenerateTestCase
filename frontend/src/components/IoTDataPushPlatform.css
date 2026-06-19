@@ -444,52 +444,141 @@
 }
 
 /* --- Right Sidebar: Saved Requests --- */
-.iot-saved-table .ant-table {
-  background: transparent !important;
+.iot-saved-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px;
+}
+
+.iot-saved-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 0;
+  color: var(--color-text-disabled);
   font-size: 13px;
 }
 
-.iot-saved-table .ant-table-thead > tr > th {
-  background: var(--color-bg) !important;
-  border-bottom: 1px solid var(--color-border) !important;
-  color: var(--color-text-secondary) !important;
-  font-size: 12px;
+.iot-saved-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: all 0.15s;
+  cursor: default;
+}
+
+.iot-saved-card:hover {
+  background: var(--color-bg);
+  border-color: var(--color-border-light);
+}
+
+.iot-saved-card-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+}
+
+.iot-saved-card-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.iot-saved-card-name {
+  font-size: 13px;
   font-weight: 500;
-  padding: 8px 12px !important;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.iot-saved-table .ant-table-tbody > tr > td {
-  border-bottom: 1px solid var(--color-border-light) !important;
-  color: var(--color-text) !important;
-  padding: 8px 12px !important;
+.iot-saved-card-url {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: 'Consolas', 'Monaco', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.iot-saved-table .ant-table-tbody > tr:hover > td {
-  background: var(--color-primary-bg) !important;
+.iot-saved-card-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.iot-saved-card:hover .iot-saved-card-actions {
+  opacity: 1;
 }
 
 /* Saved request action buttons */
 .iot-saved-item-action {
   font-size: 12px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--color-primary-bg);
   color: var(--color-primary);
-  background: transparent;
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s;
+  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .iot-saved-item-action:hover {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.25);
+}
+
+.iot-saved-item-action--success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.iot-saved-item-action--success:hover {
+  background: var(--color-success);
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.25);
+}
+
+.iot-saved-item-action--info {
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-light);
+}
+
+.iot-saved-item-action--info:hover {
   background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
 }
 
-.iot-saved-item-action.is-danger {
-  color: var(--color-danger);
+.iot-saved-item-action--danger {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  border-color: transparent;
 }
 
-.iot-saved-item-action.is-danger:hover {
+.iot-saved-item-action--danger:hover {
   background: var(--color-danger-bg);
+  color: var(--color-danger);
 }
 
 /* --- Collapse/Expand Toggle --- */

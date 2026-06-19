@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Form, Select, Input, Button, Tabs, Space, Table, message, Modal, Tooltip, Radio } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined } from '@ant-design/icons';
+import { Form, Select, Input, Button, Tabs, Space, message, Modal, Tooltip, Radio } from 'antd';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { savedRequestApi, globalParameterApi, proxyApi } from '../services/api';
@@ -951,34 +951,11 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     }
   }, [response?.data]);
 
-  // --- Saved Requests Columns ---
-
-  const savedRequestsColumns = [
-    {
-      title: '请求',
-      key: 'request',
-      render: (_: any, record: SavedRequest) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <MethodBadge method={record.method} />
-          <span style={{ fontSize: 13, color: 'var(--color-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {record.name}
-          </span>
-        </div>
-      ),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 150,
-      render: (_: any, record: SavedRequest) => (
-        <Space size={2}>
-          <button className="iot-saved-item-action" onClick={() => createTabFromSavedRequest(record)}>打开</button>
-          <button className="iot-saved-item-action" onClick={() => handleCopySavedRequest(record)}>复制</button>
-          <button className="iot-saved-item-action is-danger" onClick={() => handleDeleteSavedRequest(record.id)}>删除</button>
-        </Space>
-      ),
-    },
-  ];
+  // --- Saved Requests Filtered ---
+  const filteredSavedRequests = useMemo(() =>
+    savedRequests.filter(r => !searchRequests || r.name.toLowerCase().includes(searchRequests.toLowerCase())),
+    [savedRequests, searchRequests]
+  );
 
   // --- Render ---
 
@@ -1471,21 +1448,29 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   onSearch={(val) => setSearchRequests(val)}
                 />
               </div>
-              <div style={{ flex: 1, overflow: 'auto' }} className="iot-saved-table">
-                <Table
-                  columns={savedRequestsColumns}
-                  dataSource={savedRequests.filter(r => !searchRequests || r.name.toLowerCase().includes(searchRequests.toLowerCase()))}
-                  rowKey="id"
-                  size="small"
-                  pagination={{
-                    pageSize: 20,
-                    showSizeChanger: false,
-                    size: 'small',
-                    className: 'iot-pagination',
-                    showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
-                  }}
-                  sticky
-                />
+              <div className="iot-saved-list">
+                {filteredSavedRequests.length === 0 ? (
+                  <div className="iot-saved-empty">
+                    <InboxOutlined style={{ fontSize: 24, opacity: 0.3 }} />
+                    <span>暂无保存的请求</span>
+                  </div>
+                ) : (
+                  filteredSavedRequests.map(record => (
+                    <div key={record.id} className="iot-saved-card">
+                      <div className="iot-saved-card-main" onClick={() => createTabFromSavedRequest(record)}>
+                        <MethodBadge method={record.method} />
+                        <div className="iot-saved-card-info">
+                          <span className="iot-saved-card-name">{record.name}</span>
+                          {record.url && <span className="iot-saved-card-url">{record.url}</span>}
+                        </div>
+                      </div>
+                      <div className="iot-saved-card-actions">
+                        <button className="iot-saved-item-action iot-saved-item-action--info" onClick={() => handleCopySavedRequest(record)}>复制</button>
+                        <button className="iot-saved-item-action iot-saved-item-action--danger" onClick={() => handleDeleteSavedRequest(record.id)}>删除</button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
