@@ -5,6 +5,7 @@
 /*/.idea/
 __pycache__/
 .idea
+backend/data/testcases.db
 
 # Local environment files
 .env
