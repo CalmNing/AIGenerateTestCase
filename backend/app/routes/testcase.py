@@ -9,8 +9,11 @@ from sqlmodel import select, desc, func
 
 from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
-from db.models import TestCase, StatusValue, McpServer
+from db.models import Session, TestCase, StatusValue, McpServer
 from utils.base_response import Response
+import traceback
+from app.services.api_test_tool import run_endpoint
+from db.models import ApiEndpoint, ApiProject
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
@@ -123,6 +126,8 @@ async def generate_testcases(
         module_id: Optional[int|str] = Form(""),
         mcp_servers: Optional[str] = Form(""),
         selected_skills: Optional[str] = Form(""),
+        api_endpoint_id: Optional[str] = Form(""),
+        api_project_id: Optional[str] = Form(""),
 ):
     """生成测试用例"""
     from utils.model_utils import ModelServiceUnavailableError, generate_testcases
@@ -192,10 +197,56 @@ async def generate_testcases(
         except json.JSONDecodeError:
             logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
 
+    # ?? API ???? Schema ???????
+        api_context = ""
+    api_endpoint_ids = []
+    if api_endpoint_id:
+        for part in api_endpoint_id.split(','):
+            part = part.strip()
+            if part:
+                try:
+                    api_endpoint_ids.append(int(part))
+                except ValueError:
+                    pass
+
+    if api_endpoint_ids:
+        api_sections = []
+        for eid in api_endpoint_ids:
+            try:
+                endpoint_db = session.get(ApiEndpoint, eid)
+                if not endpoint_db:
+                    continue
+                project_db = session.get(ApiProject, api_project_id and int(api_project_id) or endpoint_db.project_id)
+                ep_lines = []
+                ep_lines.append('===== ' + endpoint_db.name + ' =====')
+                ep_lines.append('??: ' + (project_db.name if project_db else '??'))
+                ep_lines.append('??: ' + endpoint_db.method)
+                ep_lines.append('??: ' + endpoint_db.path)
+                if endpoint_db.headers:
+                    ep_lines.append('???: ' + json.dumps(endpoint_db.headers, ensure_ascii=False, indent=2))
+                if endpoint_db.parameters:
+                    ep_lines.append('??: ' + json.dumps(endpoint_db.parameters, ensure_ascii=False, indent=2))
+                if endpoint_db.request_schema:
+                    ep_lines.append('请求 Schema:\n' + json.dumps(endpoint_db.request_schema, ensure_ascii=False, indent=2))
+                if endpoint_db.response_schema:
+                    ep_lines.append('响应 Schema:\n' + json.dumps(endpoint_db.response_schema, ensure_ascii=False, indent=2))
+                api_sections.append('\n'.join(ep_lines))
+                logger.info('已加载 API 端点: ' + endpoint_db.name + ' (' + endpoint_db.method + ' ' + endpoint_db.path + ')')
+            except Exception as e:
+                logger.warning('加载端点 ' + str(eid) + ' 失败: ' + str(e))
+
+        if api_sections:
+            all_api_info = '\n\n'.join(api_sections)
+            api_context = '\n\n===== 以下 API 接口信息 =====\n' + all_api_info
+
+    effective_requirement = requirement
+    if api_context:
+        effective_requirement = requirement + api_context
+
     try:
         testcases, effective_req = await generate_testcases(
             db_session=session,
-            requirement=requirement,
+            requirement=effective_requirement,
             session_id=session_id,
             module_id=module_id,
             model_type=model_type,
@@ -223,6 +274,14 @@ async def generate_testcases(
     # 自动填充 user_id
     for tc in testcases:
         tc.user_id = user.user_id
+        if api_endpoint_id:
+            # Save as comma-separated string for multi-endpoint support
+            tc.api_endpoint_id = api_endpoint_id
+        if api_project_id:
+            try:
+                tc.api_project_id = int(api_project_id)
+            except (ValueError, TypeError):
+                pass
     session.add_all(testcases)
     session.commit()
     return Response(message="生成测试用例成功")
@@ -373,3 +432,85 @@ def create_testcase(
     session.commit()
     session.refresh(testcase_db)
     return Response(data=testcase_db, message="创建测试用例成功")
+
+
+@router.post("/{session_id}/testcases/{testcase_id}/execute", response_model=Response)
+async def execute_testcase(
+    session: SessionDep,
+    user: CurrentUser,
+    session_id: int,
+    testcase_id: int,
+):
+    """?????? API ??????"""
+    testcase = session.get(TestCase, testcase_id)
+    if not testcase or testcase.session_id != session_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+
+    if not testcase.api_endpoint_id:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="\u8be5\u6d4b\u8bd5\u7528\u4f8b\u672a\u5173\u8054 API \u63a5\u53e3")
+
+    # Support comma-separated multiple endpoint IDs; use first for execution
+    first_id = testcase.api_endpoint_id
+    if isinstance(first_id, str) and "," in first_id:
+        first_id = first_id.split(",")[0].strip()
+    endpoint = session.get(ApiEndpoint, int(first_id))
+    if not endpoint:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="\u5173\u8054\u7684 API \u63a5\u53e3\u4e0d\u5b58\u5728")
+
+    project = session.get(ApiProject, testcase.api_project_id or endpoint.project_id)
+    if not project:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="关联的 API 项目不存在")
+
+    # 从 steps 中提取 api_call 配置作为 overrides
+    # 如果测试用例没有自己的 api_call 配置，则使用会话级别的配置
+    overrides = {}
+    has_testcase_api_config = False
+
+    # 首先检查测试用例自己的 api_call 配置
+    for step in testcase.steps:
+        if isinstance(step, dict) and step.get("type") == "api_call":
+            overrides = {
+                "headers": step.get("headers"),
+                "parameters": step.get("parameters"),
+                "body": step.get("body"),
+                "variables": step.get("variables", []),
+                "environment_id": step.get("environment_id"),
+                "base_url": step.get("base_url"),
+            }
+            has_testcase_api_config = True
+            # 只取第一个 api_call 配置
+            break
+
+    # 如果测试用例没有自己的配置，使用会话级别的配置
+    if not has_testcase_api_config:
+        session_db = session.get(Session, session_id)
+        if session_db and session_db.api_config:
+            api_config = session_db.api_config
+            overrides = {
+                "headers": api_config.get("headers"),
+                "environment_id": api_config.get("environment_id"),
+            }
+
+    try:
+        result = await run_endpoint(session, project, endpoint, overrides)
+    except Exception as e:
+        logger = __import__("logging").getLogger(__name__)
+        logger.error(f"执行测试用例 {testcase_id} 失败: {e}\n{traceback.format_exc()}")
+        return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"执行失败: {str(e)}")
+
+    # 根据执行结果更新用例状态??????
+    passed = result.get("passed", False)
+    testcase.status = "PASSED" if passed else "FAILED"
+    session.add(testcase)
+    session.commit()
+    session.refresh(testcase)
+
+    return Response(
+        data={
+            "passed": passed,
+            "status": testcase.status,
+            "result": result,
+        },
+        message="执行通过" if passed else "执行失败",
+    )
+

@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ class CreateSessionRequest(BaseModel):
 
 
 class UpdateSessionRequest(CreateSessionRequest):
-    ...
+    api_config: Optional[dict] = None
 
 
 router = APIRouter(prefix="/sessions", tags=["session"])
@@ -28,6 +28,15 @@ def get_sessions(session: SessionDep, user: CurrentUser):
     """获取当前用户的所有会话"""
     sessions = session.exec(select(Session)).all()
     return Response(data=sessions)
+
+
+@router.get("/{session_id}", response_model=Response[Session])
+def get_session(session_id: int, session: SessionDep, user: CurrentUser):
+    """获取单个会话"""
+    session_db = session.get(Session, session_id)
+    if not session_db:
+        return Response(code=status.HTTP_404_NOT_FOUND, message='会话不存在！')
+    return Response(data=session_db)
 
 
 @router.post("/", response_model=Response)

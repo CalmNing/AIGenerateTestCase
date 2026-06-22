@@ -1,4 +1,5 @@
 import keycloak from './keycloak';
+import { appConfig } from '../config';
 
 export const Permission = {
   TESTCASE_READ: 'testcase:read',
@@ -59,8 +60,8 @@ const rolePermissions: Record<string, Set<PermissionCode>> = {
 
 export const getCurrentRoles = (): string[] => {
   const parsed = keycloak.tokenParsed as any;
-  const backendClientId = import.meta.env.VITE_KEYCLOAK_BACKEND_CLIENT_ID || 'backend';
-  const frontendClientId = import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'frontend';
+  const backendClientId = appConfig.keycloakBackendClientId;
+  const frontendClientId = appConfig.keycloakClientId;
   const realmRoles = parsed?.realm_access?.roles || [];
   const frontendRoles = parsed?.resource_access?.[frontendClientId]?.roles || [];
   const backendRoles = parsed?.resource_access?.[backendClientId]?.roles || [];

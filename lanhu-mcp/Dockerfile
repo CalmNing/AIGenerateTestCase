@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+﻿FROM python:3.11-slim
 
 # deb.debian.org CDN 返回 404, 改用 direct mirror
 RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
@@ -17,6 +17,12 @@ ARG HTTPS_PROXY
 ENV HTTP_PROXY=${HTTP_PROXY}
 ENV HTTPS_PROXY=${HTTPS_PROXY}
 ENV PYTHONUNBUFFERED=1
+
+# 替换 Debian 国内源
+RUN echo "deb https://mirrors.ustc.edu.cn/debian trixie main contrib non-free non-free-firmware" > /etc/apt/sources.list \
+    && echo "deb https://mirrors.ustc.edu.cn/debian trixie-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list \
+    && echo "deb https://mirrors.ustc.edu.cn/debian-security trixie-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \

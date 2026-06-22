@@ -1,21 +1,23 @@
-import React, { useRef } from 'react';
-import { Card, Typography, Input, Button } from 'antd';
-import { Session, Module } from '../types';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { Input, Select, Spin, Tag, Tooltip, message as antMessage } from 'antd';
+import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Session, Module, ApiProject, ApiEndpoint } from '../types';
 import HistoryPromptSidebar from './HistoryPromptSidebar';
-
-const { Text } = Typography;
+import './TestCaseGenerator.css';
 
 interface TestCaseGeneratorProps {
   selectedSession: Session | null;
-  modules: Module[]; // 模块列表
-  selectedModule: number | string; // 当前选中的模块
+  modules: Module[];
+  selectedModule: number | string;
   requirement: string;
   loading: boolean;
   onRequirementChange: (value: string) => void;
   onGenerate: () => void;
-  // imageBase64?: string | null;
-  // onImageChange: (imageBase64: string | null) => void;
-  historyPromptRefreshKey?: number; // 用于刷新历史提示词列表
+  historyPromptRefreshKey?: number;
+  selectedApiEndpointId?: number[];
+  onApiEndpointChange?: (ids: number[]) => void;
+  selectedApiProjectId?: number | null;
+  onApiProjectChange?: (id: number | null) => void;
 }
 
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
@@ -26,242 +28,246 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   loading,
   onRequirementChange,
   onGenerate,
-  // imageBase64,
-  // onImageChange,
-  historyPromptRefreshKey
+  historyPromptRefreshKey,
+  selectedApiEndpointId,
+  onApiEndpointChange,
+  selectedApiProjectId,
+  onApiProjectChange,
 }) => {
-  // 图片状态管理
-  // const [previewImage, setPreviewImage] = useState<string | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const [apiProjects, setApiProjects] = useState<ApiProject[]>([]);
+  const [apiEndpoints, setApiEndpoints] = useState<ApiEndpoint[]>([]);
+  const [loadingApis, setLoadingApis] = useState(false);
+  const [smartMatching, setSmartMatching] = useState(false);
 
-  // 监听外部imageBase64变化，同步更新内部预览状态
-  // useEffect(() => {
-  //   if (imageBase64 === null) {
-  //     setPreviewImage(null);
-  //   }
-  // }, [imageBase64]);
+  const loadApiProjects = useCallback(async () => {
+    try {
+      const { apiTestApi } = await import('../services/api');
+      const res = await apiTestApi.getProjects();
+      if (res.code === 200 && res.data) {
+        setApiProjects(res.data);
+      }
+    } catch (e) {
+      console.error('Load API projects failed:', e);
+    }
+  }, []);
 
+  const loadApiEndpoints = useCallback(async (projectId: number) => {
+    setLoadingApis(true);
+    try {
+      const { apiTestApi } = await import('../services/api');
+      const res = await apiTestApi.getEndpoints(projectId);
+      if (res.code === 200 && res.data) {
+        setApiEndpoints(res.data);
+      }
+    } catch (e) {
+      console.error('Load API endpoints failed:', e);
+    } finally {
+      setLoadingApis(false);
+    }
+  }, []);
 
-  // 将图片转换为base64
-  // const imageToBase64 = (file: File): Promise<string> => {
-  //   return new Promise((resolve, reject) => {
-  //     const reader = new FileReader();
-  //     reader.onload = () => {
-  //       // 只保留base64数据部分，去掉前缀
-  //       const result = reader.result as string;
-  //       resolve(result.split(',')[1]);
-  //     };
-  //     reader.onerror = reject;
-  //     reader.readAsDataURL(file);
-  //   });
-  // };
+  useEffect(() => {
+    loadApiProjects();
+  }, [loadApiProjects]);
 
-  // 处理图片文件
-  // const processImageFile = async (file: File) => {
-  //   console.log('开始处理图片文件');
-  //   try {
-  //     // 检查文件类型
-  //     if (!file.type.startsWith('image/')) {
-  //       message.error('请上传图片文件！');
-  //       return;
-  //     }
-
-  //     // 检查文件大小（限制为5MB）
-  //     const maxSize = 5 * 1024 * 1024;
-  //     if (file.size > maxSize) {
-  //       message.error('图片大小不能超过5MB！');
-  //       return;
-  //     }
-
-  //     // 转换为base64
-  //     const base64 = await imageToBase64(file);
-  //     console.log('图片转换为base64成功，长度:', base64.length);
-
-  //     // 更新父组件状态
-  //     onImageChange(base64);
-  //     console.log('调用onImageChange更新父组件状态');
-
-  //     // 生成预览URL
-  //     const previewUrl = URL.createObjectURL(file);
-  //     setPreviewImage(previewUrl);
-  //     console.log('生成预览URL成功');
-
-  //     message.success('图片粘贴成功！');
-  //   } catch (error) {
-  //     console.error('图片处理失败:', error);
-  //     message.error('图片处理失败！');
-  //   }
-  // };
-
-  // 处理剪贴板粘贴 - 兼容React的onPaste事件
-  // const handlePaste = (e: React.ClipboardEvent) => {
-  //   console.log('检测到粘贴事件');
-  //   // 提取剪贴板中的文件
-  //   const items = e.clipboardData?.items || [];
-  //   console.log('剪贴板中的项目数量:', items.length);
-  //   for (const item of items) {
-  //     console.log('剪贴板项目类型:', item.type);
-  //     if (item.type.startsWith('image/')) {
-  //       const file = item.getAsFile();
-  //       if (file) {
-  //         console.log('提取到图片文件:', file.name, file.size, file.type);
-  //         // 阻止默认行为，避免粘贴到文本框中
-  //         e.preventDefault();
-  //         processImageFile(file);
-  //         break;
-  //       }
-  //     }
-  //   }
-  // };
-
-  // 移除手动事件监听，使用组件自带的onPaste属性
-  // 避免重复的事件处理和类型不匹配问题
-
-  // 处理图片移除
-  // const handleImageRemove = () => {
-  //   setPreviewImage(null);
-  //   onImageChange(null);
-  //   message.success('图片已移除！');
-  // };
-
-  // 处理选择提示词
   const handleSelectPrompt = (content: string) => {
     onRequirementChange(content);
   };
 
-  // 处理侧边栏刷新
-  const handlePromptsChange = () => {
-    // 可以在这里添加刷新逻辑，如果需要的话
+  const handlePromptsChange = () => {};
+
+  const handleProjectChange = (val: number | null) => {
+    if (onApiProjectChange) onApiProjectChange(val);
+    if (onApiEndpointChange) onApiEndpointChange([]);
+    setApiEndpoints([]);
+    if (val) loadApiEndpoints(val);
+  };
+
+  const handleEndpointChange = (vals: number[]) => {
+    if (onApiEndpointChange) onApiEndpointChange(vals);
+  };
+
+  const handleSmartMatch = async () => {
+    if (!requirement.trim()) {
+      antMessage.warning('请先输入需求文本');
+      return;
+    }
+    setSmartMatching(true);
+    try {
+      const { apiTestApi } = await import('../services/api');
+      const res = await apiTestApi.matchEndpoint({
+        requirement: requirement.trim(),
+        project_id: selectedApiProjectId || undefined,
+      });
+      if (res.code === 200 && res.data?.matches) {
+        const matchedIds = res.data.matches.map((m: any) => m.endpoint_id);
+        if (matchedIds.length === 0) {
+          antMessage.info('未找到匹配的API接口');
+          return;
+        }
+        if (onApiEndpointChange) onApiEndpointChange(matchedIds);
+        if (!selectedApiProjectId && res.data.matches.length > 0) {
+          const projId = res.data.matches[0].project_id;
+          if (onApiProjectChange) onApiProjectChange(projId);
+          if (!apiEndpoints.length) loadApiEndpoints(projId);
+        }
+        antMessage.success('智能匹配到 ' + matchedIds.length + ' 个API接口');
+      } else {
+        antMessage.info('未找到匹配的API接口');
+      }
+    } catch (e: any) {
+      console.error('Smart match failed:', e);
+      antMessage.error('智能匹配失败: ' + (e?.response?.data?.message || e.message));
+    } finally {
+      setSmartMatching(false);
+    }
+  };
+
+  const endpointLabel = (ep: ApiEndpoint) => {
+    const tag = ep.tags && ep.tags.length > 0 ? ep.tags[0] + ' ' : '';
+    return tag + ep.method?.toUpperCase() + ' ' + ep.path;
+  };
+
+  const moduleName = selectedModule
+    ? modules.find(m => m.id === selectedModule)?.module_name || '无'
+    : '无';
+
+  const methodColorMap: Record<string, string> = {
+    GET: 'green', POST: 'blue', PUT: 'orange', DELETE: 'red', PATCH: 'purple',
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        <Card title="生成测试用例" variant="borderless">
-          {!selectedSession ? (
-            <div style={{ textAlign: 'center', padding: '40px 0' }}>
-              <Text type="secondary">请先从左侧选择或创建一个会话</Text>
+    <div className="tcg-container">
+      <div className="tcg-main">
+        {!selectedSession ? (
+          <div className="tcg-card">
+            <div className="tcg-empty">
+              <MessageOutlined className="tcg-empty-icon" />
+              <span className="tcg-empty-text">请先选择或创建会话</span>
             </div>
-          ) : (
-            <div>
-              <div style={{ marginBottom: '16px' }}>
-                <Text strong>当前会话:</Text> <Text>{selectedSession.name}</Text>
+          </div>
+        ) : (
+          <div className="tcg-card">
+            <div className="tcg-card-header">
+              <BulbOutlined style={{ color: 'var(--color-primary)' }} />
+              生成测试用例
+            </div>
+            <div className="tcg-card-body" style={{ display: 'flex', flexDirection: 'column' }}>
+              {/* Context Info */}
+              <div className="tcg-context-bar">
+                <div className="tcg-context-item">
+                  <span className="tcg-context-label">会话</span>
+                  <span className="tcg-context-value">{selectedSession.name}</span>
+                </div>
+                <div className="tcg-context-divider" />
+                <div className="tcg-context-item">
+                  <span className="tcg-context-label">模块</span>
+                  <span className="tcg-context-value">{moduleName}</span>
+                </div>
               </div>
-              {!selectedModule ? (
-                <div style={{ marginBottom: '16px' }}>
-                  <Text strong>当前模块:</Text> <Text>无</Text>
+
+              {/* API Section */}
+              <div className="tcg-api-section">
+                <div className="tcg-api-header">
+                  <span className="tcg-api-label">
+                    <span className="tcg-api-label-icon">
+                      <ApiOutlined />
+                    </span>
+                    关联 API 接口
+                  </span>
+                  <Tooltip title="根据需求文本自动匹配API接口">
+                    <button
+                      className={`tcg-smart-btn ${smartMatching ? 'is-loading' : ''}`}
+                      onClick={handleSmartMatch}
+                      disabled={!requirement.trim() || smartMatching}
+                    >
+                      <ThunderboltOutlined style={{ fontSize: 12 }} />
+                      {smartMatching ? '匹配中...' : '智能匹配'}
+                    </button>
+                  </Tooltip>
                 </div>
-              ) : (
-                <div style={{ marginBottom: '16px' }}>
-                  <Text strong>当前模块:</Text> <Text>{modules.find(m => m.id === selectedModule)?.module_name || '无'}</Text>
-                </div>
-              )}
-
-
-              {/* 需求输入区域 */}
-              <div style={{ marginBottom: '16px' }}>
-                <Text strong>输入需求描述:</Text>
-
-                {/* 图片显示区域 - 显示在文本框上方 */}
-                {/* {previewImage && (
-                  <div style={{
-                    marginBottom: '12px',
-                    padding: '12px',
-                    border: '1px solid #d9d9d9',
-                    borderRadius: '8px',
-                    backgroundColor: '#fafafa',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px'
-                  }}>
-                    <div style={{ flex: '0 0 auto', position: 'relative' }}>
-                      <img
-                        src={previewImage}
-                        alt="Preview"
-                        style={{
-                          maxWidth: '200px',
-                          maxHeight: '150px',
-                          objectFit: 'contain',
-                          borderRadius: '4px',
-                          border: '1px solid #e8e8e8'
-                        }}
-                      />
-                      <Button
-                        icon={<DeleteOutlined />}
-                        size="small"
-                        type="text"
-                        danger
-                        onClick={handleImageRemove}
-                        style={{
-                          position: 'absolute',
-                          top: '-8px',
-                          right: '-8px',
-                          background: '#fff',
-                          borderRadius: '50%',
-                          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
-                          width: '24px',
-                          height: '24px',
-                          padding: '0',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: '1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#333' }}>已上传图片</div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>图片将与需求一起发送，用于生成测试用例</div>
-                    </div>
-                  </div>
-                )} */}
-
-                {/* 文本输入框 */}
-                <div style={{ marginTop: '8px' }}>
-                  <Input.TextArea
-                    ref={textAreaRef}
-                    rows={16}
-                    placeholder="请输入测试用例设计需求，例如：设计一个登录功能的测试用例，包括正常登录、异常登录等场景... 提示：您可以直接粘贴图片到此处"
-                    value={requirement}
-                    onChange={(e) => onRequirementChange(e.target.value)}
-                    // onPaste={handlePaste}
-                    style={{
-                      border: '1px solid #d9d9d9',
-                      borderRadius: '8px',
-                      fontSize: '14px'
+                <div className="tcg-api-selects">
+                  <Select
+                    style={{ flex: 1 }}
+                    placeholder="选择 API 项目"
+                    allowClear
+                    value={selectedApiProjectId}
+                    onChange={handleProjectChange}
+                    options={apiProjects.map(p => ({ label: p.name, value: p.id }))}
+                    size="middle"
+                  />
+                  <Select
+                    mode="multiple"
+                    style={{ flex: 2 }}
+                    placeholder="选择接口（可多选）"
+                    value={selectedApiEndpointId || []}
+                    onChange={handleEndpointChange}
+                    options={apiEndpoints.map(e => ({
+                      label: endpointLabel(e),
+                      value: e.id,
+                    }))}
+                    notFoundContent={loadingApis ? <Spin size="small" /> : '暂无API接口'}
+                    loading={loadingApis}
+                    maxTagCount={3}
+                    maxTagTextLength={20}
+                    tagRender={(props) => {
+                      const ep = apiEndpoints.find(e => e.id === props.value);
+                      const method = ep?.method?.toUpperCase() || '';
+                      const color = methodColorMap[method] || 'default';
+                      return (
+                        <Tag color={color} closable={props.closable} onClose={props.onClose} style={{ margin: 2, fontSize: 12 }}>
+                          {method} {ep?.path || props.value}
+                        </Tag>
+                      );
                     }}
                   />
-                  <div style={{
-                    marginTop: '8px',
-                    fontSize: '12px',
-                    color: '#666',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}>
-                    {/* <span>📋 支持直接粘贴图片</span>
-                    <span>💡 粘贴后图片将显示在此输入框上方</span> */}
-                  </div>
+                </div>
+                <div className="tcg-api-hint">
+                  AI 会将接口 Schema 注入提示词，生成可执行的 api_call 测试步骤
                 </div>
               </div>
 
-              {/* 生成按钮 */}
-              <Button
-                type="primary"
-                size="large"
+              {/* Requirement Input */}
+              <div className="tcg-requirement-section">
+                <div className="tcg-requirement-label">
+                  <FileTextOutlined style={{ color: 'var(--color-text-tertiary)' }} />
+                  需求描述
+                </div>
+                <div className="tcg-textarea-wrapper">
+                  <Input.TextArea
+                    ref={textAreaRef}
+                    placeholder="请输入需求描述... 已关联的 API 接口将作为参考，生成包含可执行 api_call 步骤的测试用例。"
+                    value={requirement}
+                    onChange={(e) => onRequirementChange(e.target.value)}
+                    className="tcg-textarea"
+                  />
+                </div>
+              </div>
+
+              {/* Generate Button */}
+              <button
+                className={`tcg-generate-btn ${loading ? 'is-loading' : ''}`}
                 onClick={onGenerate}
-                loading={loading}
-                disabled={!requirement.trim()}
-                block
-                style={{ borderRadius: '8px', fontSize: '16px', height: '48px' }}
+                disabled={!requirement.trim() || loading}
               >
-                生成测试用例
-              </Button>
+                {loading ? (
+                  <>
+                    <Spin size="small" style={{ color: 'var(--color-primary)' }} />
+                    AI 正在生成中...
+                  </>
+                ) : (
+                  <>
+                    <ThunderboltOutlined />
+                    AI 生成测试用例
+                  </>
+                )}
+              </button>
             </div>
-          )}
-        </Card>
+          </div>
+        )}
       </div>
 
-      {/* 右侧历史提示词侧边栏 */}
       <HistoryPromptSidebar
         moduleId={selectedModule}
         onSelectPrompt={handleSelectPrompt}

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
 # deb.debian.org CDN 返回 404, 改用 direct mirror

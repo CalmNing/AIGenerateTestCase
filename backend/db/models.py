@@ -6,6 +6,7 @@ from typing import List, Optional
 from pydantic import field_validator, model_validator
 from sqlmodel import Field, SQLModel, Relationship
 from pydantic.config import ConfigDict
+from sqlalchemy.dialects.sqlite import JSON
 
 cn_tz = zoneinfo.ZoneInfo("Asia/Shanghai")
 
@@ -62,13 +63,11 @@ class Session(BaseModel, table=True):
     """会话数据模型"""
     name: str
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+    api_config: Optional[dict] = Field(default=None, sa_type=JSON, description="会话级API调用配置（headers、environment_id等）")
     # 定义与测试用例的一对多关系
     test_cases: List["TestCase"] = Relationship(back_populates="session")
     # 定义与模块的一对多关系
     modules: List["Module"] = Relationship(back_populates="session")
-
-
-from sqlalchemy.dialects.sqlite import JSON
 
 
 class TestCase(BaseModel, table=True):
@@ -76,13 +75,15 @@ class TestCase(BaseModel, table=True):
     case_name: str = Field(default="")
     case_level: Optional[int] = Field(default=4, ge=1, le=4)  # 使用整数类型，添加范围约束
     preset_conditions: List[str] = Field(default_factory=list, sa_type=JSON)
-    steps: List[str] = Field(default_factory=list, sa_type=JSON)
-    expected_results: List[str] = Field(default_factory=list, sa_type=JSON)
+    steps: List = Field(default_factory=list, sa_type=JSON)
+    expected_results: List = Field(default_factory=list, sa_type=JSON)
     session_id: Optional[int] = Field(default=None, foreign_key="session.id")
     status: str = Field(default="NOT_RUN")  # 使用字符串类型，直接设置默认值created_at
     bug_id: Optional[int] = Field(default=None)
     module_id: Optional[int] = Field(default=None)
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+    api_endpoint_id: Optional[int] = Field(default=None, description="关联的 API Endpoint ID（逗号分隔）")
+    api_project_id: Optional[int] = Field(default=None, description="关联的 API Project ID")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
@@ -194,6 +195,7 @@ class ApiProject(BaseModel, table=True):
     name: str = Field(default="", description="项目名称")
     base_url: str = Field(default="", description="默认 Base URL")
     headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="项目级请求头")
+    environment_id: Optional[int] = Field(default=None, description="项目默认执行环境ID")
     source_type: str = Field(default="manual", description="来源: upload | url | manual")
     source_url: Optional[str] = Field(default=None, description="OpenAPI/Swagger 来源 URL")
     raw_spec: Optional[str] = Field(default=None, description="原始 OpenAPI/Swagger 文档")

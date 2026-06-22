@@ -20,14 +20,16 @@ export interface TestCase {
   case_name: string;
   case_level: number;
   preset_conditions: string[];
-  steps: string[];
-  expected_results: string[];
   created_at: string;
   status?: TestCaseStatus; // 测试用例状态：NOT_RUN（未运行）、PASSED（通过）、FAILED（未通过）
   bug_id?: number;
   session_id: number;
   module_id?: number | null;
   user_id?: string;
+  api_endpoint_id?: number | null;
+  api_project_id?: number | null;
+  steps: (string | Record<string, any>)[];
+  expected_results: (string | Record<string, any>)[];
 }
 
 // 测试用例类型
@@ -44,6 +46,10 @@ export interface TestCaseResponse {
 // 更新会话请求类型
 export interface UpdateSessionRequest {
   name: string;
+  api_config?: {
+    headers?: Array<{ key: string; value: string }>;
+    environment_id?: number;
+  } | null;
 }
 
 // API响应类型
@@ -213,6 +219,7 @@ export interface ApiProject {
   name: string;
   base_url: string;
   headers: Array<{ key: string; value: string }>;
+  environment_id?: number | null;
   source_type: string;
   source_url?: string | null;
   raw_spec?: string;
@@ -271,7 +278,6 @@ export interface ApiScenario {
   project_id: number;
   name: string;
   description: string;
-  base_url?: string | null;
   environment_id?: number | null;
   variables: Array<{ key: string; value: string }>;
   steps: ApiScenarioStep[];

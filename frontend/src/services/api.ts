@@ -68,6 +68,9 @@ export const sessionApi = {
   // 获取所有会话
   getSessions: (): Promise<ApiResponse<Session[]>> => api.get('/sessions/'),
 
+  // 获取单个会话
+  getSession: (id: number): Promise<ApiResponse<Session>> => api.get(`/sessions/${id}`),
+
   // 创建会话
   createSession: (name: string): Promise<ApiResponse<Session>> => api.post('/sessions/', { name }),
 
@@ -101,7 +104,9 @@ export const testcaseApi = {
     ollama_model?: string;
   }, imageBase64?: string | null,
     moduleId?: number | null,
-    selectedSkills?: string[]): Promise<ApiResponse<TestCase[]>> => {
+    selectedSkills?: string[],
+    apiEndpointId?: number[] | number | null,
+    apiProjectId?: number | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -178,6 +183,17 @@ export const testcaseApi = {
 
     // 发送请求，axios会自动设置正确的Content-Type头
     // 包括multipart/form-data和边界信息
+    // ?????API??ID?????????ID?
+    if (apiEndpointId !== null && apiEndpointId !== undefined) {
+      const endpointStr = Array.isArray(apiEndpointId) ? apiEndpointId.join(",") : String(apiEndpointId);
+      if (endpointStr) {
+        formData.append("api_endpoint_id", endpointStr);
+      }
+    }
+    if (apiProjectId !== null && apiProjectId !== undefined) {
+      formData.append("api_project_id", String(apiProjectId));
+    }
+
     return api.post(`/testcases/${sessionId}/testcases`, formData);
   },
 
@@ -198,7 +214,11 @@ export const testcaseApi = {
 
   // 批量移动测试用例
   batchMoveTestcase: (testcaseIds: number[], sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
-    api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId })
+    api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId }),
+
+  /** ?????????? API ?? */
+  executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any }>> =>
+    api.post(`/testcases/${sessionId}/testcases/${testcaseId}/execute`),
 };
 
 // 模块管理API
@@ -386,5 +406,7 @@ export const apiTestApi = {
   deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
   getScenarioResults: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
     api.get(`/api-test/scenarios/${scenarioId}/results`),
-  runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`)
+  runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`),
+  matchEndpoint: (data: { requirement: string; project_id?: number }): Promise<ApiResponse<{ matches: any[]; total_matches: number }>> =>
+    api.post("/api-test/match-endpoint", data),
 };

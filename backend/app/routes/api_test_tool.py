@@ -62,6 +62,95 @@ class GenerateBodyRequest(BaseModel):
     ollama_model: str = ""
 
 
+
+class MatchEndpointRequest(BaseModel):
+    requirement: str
+    project_id: Optional[int] = None
+
+
+def _calculate_match_score(requirement: str, endpoint: ApiEndpoint) -> float:
+    """Calculate a relevance score between requirement text and an API endpoint."""
+    score = 0.0
+    req_lower = requirement.lower()
+
+    # Exact match on endpoint name (highest)
+    if endpoint.name and endpoint.name.lower() in req_lower:
+        score += 50.0
+
+    # Match on path segments
+    if endpoint.path:
+        path_segments = endpoint.path.strip("/").replace("-", " ").replace("_", " ").split("/")
+        for seg in path_segments:
+            if seg and seg in req_lower:
+                score += 10.0
+
+    # Match on method
+    if endpoint.method and endpoint.method.lower() in req_lower:
+        score += 5.0
+
+    # Match on tags
+    if endpoint.tags:
+        for tag in endpoint.tags:
+            if tag.lower() in req_lower:
+                score += 15.0
+
+    # Match on summary/description
+    summary = endpoint.summary or endpoint.description or ""
+    if summary:
+        summary_lower = summary.lower()
+        req_words = set(req_lower.split())
+        summary_words = set(summary_lower.split())
+        common = req_words & summary_words
+        score += len(common) * 3.0
+
+    return score
+
+
+@router.post("/match-endpoint", response_model=Response)
+def match_endpoint(
+    session: SessionDep,
+    user: CurrentUser,
+    request: MatchEndpointRequest,
+):
+    """Smart-match requirement text to API endpoints using keyword scoring."""
+    query = select(ApiEndpoint)
+    if request.project_id:
+        project = session.get(ApiProject, request.project_id)
+        if not project or project.user_id != user.user_id:
+            return Response(code=status.HTTP_404_NOT_FOUND, message="???????")
+        query = query.where(ApiEndpoint.project_id == request.project_id)
+    else:
+        projects = session.exec(
+            select(ApiProject).where(ApiProject.user_id == user.user_id)
+        ).all()
+        project_ids = [p.id for p in projects]
+        if not project_ids:
+            return Response(data={"matches": []})
+        query = query.where(ApiEndpoint.project_id.in_(project_ids))
+
+    endpoints = session.exec(query).all()
+    scored = []
+    for ep in endpoints:
+        score = _calculate_match_score(request.requirement, ep)
+        if score > 0:
+            scored.append({
+                "endpoint_id": ep.id,
+                "project_id": ep.project_id,
+                "score": round(score, 1),
+                "name": ep.name,
+                "method": ep.method,
+                "path": ep.path,
+                "tags": ep.tags,
+            })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return Response(data={
+        "matches": scored[:50],
+        "total_matches": len(scored),
+    })
+
+
+
 @router.get("/projects", response_model=Response[List[ApiProject]])
 def list_projects(session: SessionDep, user: CurrentUser):
     projects = session.exec(

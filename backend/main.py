@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Body  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from pydantic import BaseModel

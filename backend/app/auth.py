@@ -1,4 +1,4 @@
-"""Keycloak JWT 认证模块
+﻿"""Keycloak JWT 认证模块
 
 实现基于 Keycloak JWKS 公钥的本地 JWT 验证，无需每次请求回调 Keycloak introspect 端点。
 """
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Keycloak 配置（从环境变量读取）
 # KEYCLOAK_SERVER_URL: 内部网络地址（用于获取 JWKS 公钥，Docker 内用 http://keycloak:8080）
 # KEYCLOAK_EXTERNAL_URL: 外部访问地址（用于验证 JWT issuer，浏览器看到的地址）
-KEYCLOAK_SERVER_URL = os.getenv("KEYCLOAK_SERVER_URL", "http://localhost:8080")
+KEYCLOAK_SERVER_URL = os.getenv("KEYCLOAK_SERVER_URL", "http://localhost:8090")
 KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", KEYCLOAK_SERVER_URL)
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ai-testcase")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "backend")
