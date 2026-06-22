@@ -1,6 +1,18 @@
 /frontend/dist/
 /frontend/node_modules/
 /backend/data/testcases.db
+/backend/data/config.json
 /*/.idea/
 __pycache__/
 .idea
+
+# Local environment files
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example

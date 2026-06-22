@@ -12,6 +12,12 @@ venv/
 
 # Data (DB 文件不入镜像)
 data/*.db
+data/config.json
+
+# Environment files
+.env
+.env.*
+!.env.example
 
 # Git
 .git/

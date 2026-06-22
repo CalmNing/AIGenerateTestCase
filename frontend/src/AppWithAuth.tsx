@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ConfigProvider, Spin, Result, Button } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import type { KeycloakPkceMethod } from 'keycloak-js';
+import { appConfig } from './config';
 import keycloak from './services/keycloak';
 
 // Keycloak 认证状态
@@ -11,7 +12,7 @@ interface AuthState {
 }
 
 const getPkceMethod = (): KeycloakPkceMethod => {
-  const configured = (import.meta.env.VITE_KEYCLOAK_PKCE_METHOD || 'S256').toLowerCase();
+  const configured = appConfig.keycloakPkceMethod.toLowerCase();
   if (['false', 'none', 'disabled', 'off'].includes(configured)) {
     return false;
   }

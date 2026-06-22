@@ -15,5 +15,7 @@ RUN npm run build
 FROM nginx:stable-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker-entrypoint.d/10-generate-config.sh /docker-entrypoint.d/10-generate-config.sh
+RUN chmod +x /docker-entrypoint.d/10-generate-config.sh
 EXPOSE 8001
 CMD ["nginx", "-g", "daemon off;"]
