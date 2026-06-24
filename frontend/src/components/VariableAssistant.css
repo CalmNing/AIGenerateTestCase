@@ -1,0 +1,113 @@
+/* ===== Variable Assistant ===== */
+
+/* Popover container */
+.variable-assistant-popover {
+  width: 400px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.variable-assistant-popover .ant-popover-inner {
+  padding: 0;
+}
+
+/* Tabs */
+.variable-assistant-tabs {
+  padding: 0;
+}
+
+.variable-assistant-tabs .ant-tabs-nav {
+  margin-bottom: 0;
+  padding: 0 var(--space-3);
+}
+
+.variable-assistant-tabs .ant-tabs-content-holder {
+  padding: var(--space-3);
+}
+
+/* Variable list */
+.variable-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Variable item row */
+.variable-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.variable-item:hover {
+  border-color: var(--color-primary-border);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Variable syntax text */
+.variable-syntax {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+  cursor: pointer;
+  word-break: break-all;
+  user-select: all;
+}
+
+.variable-syntax:hover {
+  text-decoration: underline;
+}
+
+/* Variable description */
+.variable-description {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-normal);
+}
+
+/* Action buttons row */
+.variable-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* Test result display */
+.variable-test-result {
+  font-size: var(--font-size-xs);
+  color: var(--color-success);
+  background: var(--color-success-bg);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-1);
+  word-break: break-all;
+}
+
+/* Test error display */
+.variable-test-error {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-1);
+  word-break: break-all;
+}
+
+/* Float button custom styles */
+.variable-assistant-float-btn .ant-float-btn-body {
+  background-color: var(--color-primary);
+}
+
+.variable-assistant-float-btn .ant-float-btn-icon {
+  color: #ffffff;
+}
+
+.variable-assistant-float-btn:hover .ant-float-btn-body {
+  background-color: var(--color-primary-hover);
+}
