@@ -284,6 +284,12 @@ def try_mock_response(db: Session, method: str, url: str, param_map: dict, unres
 
 
 
+class TestVariableRequest(BaseModel):
+    """测试变量请求模型"""
+    expression: str
+    environment_id: Optional[int] = None
+
+
 @router.post("/forward")
 async def forward_request(
     request: ProxyRequest,
@@ -351,3 +357,29 @@ async def forward_request(
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+
+
+@router.post("/test-variable")
+async def test_variable(
+    request: TestVariableRequest,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """测试变量表达式，返回替换后的值"""
+    # 构建参数映射表
+    environment_id = request.environment_id
+    if environment_id and Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user):
+        environment_id = None
+    param_map = build_param_map(db, environment_id, [])
+
+    # 收集未解析的变量
+    unresolved: set[str] = set()
+
+    # 执行变量替换
+    result = substitute_variables(request.expression, param_map, unresolved)
+
+    return {
+        "expression": request.expression,
+        "result": result,
+        "unresolved": list(unresolved) if unresolved else [],
+    }
