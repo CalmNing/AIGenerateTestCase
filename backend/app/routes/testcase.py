@@ -370,8 +370,8 @@ async def generate_testcases(
         except json.JSONDecodeError:
             logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
 
-    # ?? API ???? Schema ???????
-        api_context = ""
+    # 解析 API 端点 Schema 和定义
+    api_context = ""
     api_endpoint_ids = []
     if api_endpoint_id:
         for part in api_endpoint_id.split(','):
@@ -437,9 +437,10 @@ async def generate_testcases(
             all_api_info = '\n\n'.join(api_sections)
             api_context = '\n\n===== 以下 API 接口信息（每个接口前的[数字]为接口编号）=====\n' + all_api_info
 
-    effective_requirement = requirement
     if api_context:
-        effective_requirement = requirement + api_context
+        effective_requirement = api_context + "\n\n## 用户需求\n\n" + requirement
+    else:
+        effective_requirement = requirement
 
     try:
         testcases, effective_req = await generate_testcases(
