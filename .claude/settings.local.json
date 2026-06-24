@@ -1,6 +1,24 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
+      "Read",
+      "read",
+      "Write",
+      "write",
+      "Edit",
+      "Edits",
+      "Edit(*)",
+      "edit",
+      "edits",
+      "edit(*)",
+      "edits(*)",
+      "Bash(*)",
+      "WebFetch",
+      "WebFetch(*)",
+      "McpAll",
+      "PowerShell(*)",
+      "WebFetch(*)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('utils/model_utils.py'\\).read\\(\\)\\); print\\('model_utils.py: OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('app/routes/testcase.py'\\).read\\(\\)\\); print\\('testcase.py: OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('utils/model_utils.py', encoding='utf-8'\\).read\\(\\)\\); print\\('model_utils.py: OK'\\)\")",
@@ -119,7 +137,8 @@
       "Bash(dir /s /b backend\\\\*.py)",
       "Bash(findstr /v \"venv __pycache__\")",
       "Bash(dir /s /b frontend\\\\src\\\\*.tsx frontend\\\\src\\\\*.ts)",
-      "Bash(echo \"Exit code: $?\")"
+      "Bash(echo \"Exit code: $?\")",
+      "PowerShell(git *)"
     ]
   },
   "enableAllProjectMcpServers": true,

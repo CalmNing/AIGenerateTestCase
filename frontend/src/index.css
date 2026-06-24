@@ -1114,6 +1114,171 @@ body {
   color: var(--color-text-tertiary);
 }
 
+/* ===== Scenario List Item Enhancement ===== */
+.scenario-list-item {
+  padding: 10px 12px !important;
+  position: relative;
+  background: var(--color-bg-container);
+  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Left color status indicator bar */
+.scenario-list-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 55%;
+  border-radius: 0 2px 2px 0;
+  background: var(--color-border);
+  transition: all 200ms ease;
+}
+
+.scenario-list-item:hover {
+  background: var(--color-bg-text-hover) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.scenario-list-item:hover::before {
+  background: var(--color-primary);
+  height: 65%;
+}
+
+.scenario-list-item-selected {
+  background: var(--color-primary-bg) !important;
+  border-color: var(--color-primary-border) !important;
+  box-shadow: 0 2px 12px rgba(79, 70, 229, 0.12);
+}
+
+.scenario-list-item-selected::before {
+  background: var(--color-primary) !important;
+  height: 75%;
+}
+
+/* Status indicator colors */
+.scenario-status-passed::before {
+  background: var(--color-success) !important;
+}
+
+.scenario-status-failed::before {
+  background: var(--color-danger) !important;
+}
+
+.scenario-status-unknown::before {
+  background: var(--color-text-disabled) !important;
+}
+
+/* Scenario batch toolbar */
+.scenario-batch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: linear-gradient(to bottom, var(--color-bg-container), var(--color-bg));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.scenario-batch-toolbar-left,
+.scenario-batch-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Selection count badge */
+.scenario-selection-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--color-primary);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  animation: badge-pop 200ms ease-out;
+}
+
+@keyframes badge-pop {
+  0% { transform: scale(0.8); opacity: 0; }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Scenario status tags */
+.scenario-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  transition: all 150ms ease;
+}
+
+.scenario-status-tag-passed {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.scenario-status-tag-failed {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border: 1px solid rgba(244, 63, 94, 0.2);
+}
+
+.scenario-status-tag-unknown {
+  background: var(--color-bg);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--color-border);
+}
+
+.scenario-status-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+/* List item enter animation */
+@keyframes scenario-item-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.scenario-list-item {
+  animation: scenario-item-enter 200ms ease-out;
+}
+
+/* Selected state pulse animation */
+.scenario-list-item-selected {
+  animation: select-pulse 300ms ease-out;
+}
+
+@keyframes select-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.3); }
+  50% { box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1); }
+  100% { box-shadow: 0 2px 12px rgba(79, 70, 229, 0.12); }
+}
+
 /* ===== Modal Global Fixes ===== */
 body.ant-scrolling-effect {
   overflow: hidden !important;

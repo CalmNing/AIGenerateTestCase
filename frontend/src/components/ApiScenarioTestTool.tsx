@@ -26,6 +26,8 @@ import {
   ArrowUpOutlined,
   ArrowDownOutlined,
   BranchesOutlined,
+  CheckSquareOutlined,
+  CloseSquareOutlined,
   CopyOutlined,
   SnippetsOutlined,
   DeleteOutlined,
@@ -718,6 +720,13 @@ const ApiScenarioTestTool: React.FC = () => {
 
   const clearScenarioSelection = () => {
     setSelectedScenarioIds([]);
+  };
+
+  // Get scenario status CSS class for visual indicator
+  const getScenarioStatusClass = (scenario: ApiScenario): string => {
+    const latestRecord = scenarioResultHistory[scenario.id]?.[0];
+    if (!latestRecord) return 'scenario-status-unknown';
+    return latestRecord.passed ? 'scenario-status-passed' : 'scenario-status-failed';
   };
 
   const handleImport = async () => {
@@ -2256,21 +2265,13 @@ const ApiScenarioTestTool: React.FC = () => {
                     <div style={assetTabPaneStyle}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <Button icon={<PlusOutlined />} onClick={handleCreateScenario} block>新建场景</Button>
-                        <div style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '6px 10px',
-                          background: 'var(--color-bg-container)',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--color-border-secondary)',
-                        }}>
-                          <Space size={4}>
+                        <div className="scenario-batch-toolbar">
+                          <div className="scenario-batch-toolbar-left">
                             <Tooltip title="全选">
                               <Button
                                 type="text"
                                 size="small"
-                                icon={<SnippetsOutlined />}
+                                icon={<CheckSquareOutlined />}
                                 onClick={selectAllScenarios}
                                 disabled={scenarios.length === 0 || selectedScenarioIds.length === scenarios.length}
                               />
@@ -2279,16 +2280,16 @@ const ApiScenarioTestTool: React.FC = () => {
                               <Button
                                 type="text"
                                 size="small"
-                                icon={<DeleteOutlined />}
+                                icon={<CloseSquareOutlined />}
                                 onClick={clearScenarioSelection}
                                 disabled={selectedScenarioIds.length === 0}
                               />
                             </Tooltip>
                             {selectedScenarioIds.length > 0 && (
-                              <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>{selectedScenarioIds.length} 项</Tag>
+                              <span className="scenario-selection-badge">{selectedScenarioIds.length}</span>
                             )}
-                          </Space>
-                          <Space size={4}>
+                          </div>
+                          <div className="scenario-batch-toolbar-right">
                             <Tooltip title="批量执行选中场景">
                               <Button
                                 type="primary"
@@ -2312,7 +2313,7 @@ const ApiScenarioTestTool: React.FC = () => {
                                 全部
                               </Button>
                             </Tooltip>
-                          </Space>
+                          </div>
                         </div>
                       </div>
                       <List
@@ -2320,7 +2321,9 @@ const ApiScenarioTestTool: React.FC = () => {
                         dataSource={scenarios}
                         renderItem={(scenario) => (
                           <List.Item
-                            className={`asset-list-item ${scenario.id === selectedScenario?.id ? 'asset-list-item-selected' : ''}`}
+                            className={`asset-list-item scenario-list-item ${
+                              scenario.id === selectedScenario?.id ? 'asset-list-item-selected scenario-list-item-selected' : ''
+                            } ${getScenarioStatusClass(scenario)}`}
                             actions={[
                               <Tooltip title="复制场景" key="copy">
                                 <Button
@@ -2346,7 +2349,7 @@ const ApiScenarioTestTool: React.FC = () => {
                             <List.Item.Meta
                               title={scenario.name}
                               description={
-                                <Space direction="vertical" size={2}>
+                                <Space direction="vertical" size={4}>
                                   <span className="scenario-item-steps">
                                     <PlayCircleOutlined style={{ fontSize: 11 }} />
                                     {scenario.steps?.length || 0} 个步骤
@@ -2355,10 +2358,16 @@ const ApiScenarioTestTool: React.FC = () => {
                                     const latestRecord = scenarioResultHistory[scenario.id]?.[0];
                                     return (
                                       <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                                        <Tag color={latestScenarioResultColor(latestRecord)} style={{ margin: 0 }}>
+                                        <span className={`scenario-status-tag ${
+                                          latestRecord?.passed ? 'scenario-status-tag-passed' :
+                                          latestRecord ? 'scenario-status-tag-failed' : 'scenario-status-tag-unknown'
+                                        }`}>
+                                          <span className="scenario-status-icon">
+                                            {latestRecord?.passed ? '✓' : latestRecord ? '✗' : '○'}
+                                          </span>
                                           {latestScenarioResultLabel(latestRecord)}
-                                        </Tag>
-                                        {latestRecord && <span style={{ color: 'var(--color-text-tertiary)' }}>{formatScenarioResultTime(latestRecord)}</span>}
+                                        </span>
+                                        {latestRecord && <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>{formatScenarioResultTime(latestRecord)}</span>}
                                       </span>
                                     );
                                   })()}
