@@ -2254,33 +2254,67 @@ const ApiScenarioTestTool: React.FC = () => {
                   label: `场景 ${scenarios.length}`,
                   children: (
                     <div style={assetTabPaneStyle}>
-                      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <Button icon={<PlusOutlined />} onClick={handleCreateScenario} block>新建场景</Button>
-                        <Space wrap size={6}>
-                          <Button size="small" onClick={selectAllScenarios} disabled={scenarios.length === 0}>全选</Button>
-                          <Button size="small" onClick={clearScenarioSelection} disabled={selectedScenarioIds.length === 0}>取消选择</Button>
-                          <Tag style={{ margin: 0 }}>已选 {selectedScenarioIds.length}</Tag>
-                          <Button
-                            size="small"
-                            type="primary"
-                            icon={<PlayCircleOutlined />}
-                            loading={batchRunning}
-                            disabled={selectedScenarioIds.length === 0}
-                            onClick={() => handleRunScenarioBatch(false)}
-                          >
-                            批量执行
-                          </Button>
-                          <Button
-                            size="small"
-                            icon={<SyncOutlined />}
-                            loading={batchRunning}
-                            disabled={scenarios.length === 0}
-                            onClick={() => handleRunScenarioBatch(true)}
-                          >
-                            执行全部
-                          </Button>
-                        </Space>
-                      </Space>
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '6px 10px',
+                          background: 'var(--color-bg-container)',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--color-border-secondary)',
+                        }}>
+                          <Space size={4}>
+                            <Tooltip title="全选">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<SnippetsOutlined />}
+                                onClick={selectAllScenarios}
+                                disabled={scenarios.length === 0 || selectedScenarioIds.length === scenarios.length}
+                              />
+                            </Tooltip>
+                            <Tooltip title="取消选择">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<DeleteOutlined />}
+                                onClick={clearScenarioSelection}
+                                disabled={selectedScenarioIds.length === 0}
+                              />
+                            </Tooltip>
+                            {selectedScenarioIds.length > 0 && (
+                              <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>{selectedScenarioIds.length} 项</Tag>
+                            )}
+                          </Space>
+                          <Space size={4}>
+                            <Tooltip title="批量执行选中场景">
+                              <Button
+                                type="primary"
+                                size="small"
+                                icon={<PlayCircleOutlined />}
+                                loading={batchRunning}
+                                disabled={selectedScenarioIds.length === 0}
+                                onClick={() => handleRunScenarioBatch(false)}
+                              >
+                                批量
+                              </Button>
+                            </Tooltip>
+                            <Tooltip title="执行项目下全部场景">
+                              <Button
+                                size="small"
+                                icon={<SyncOutlined />}
+                                loading={batchRunning}
+                                disabled={scenarios.length === 0}
+                                onClick={() => handleRunScenarioBatch(true)}
+                              >
+                                全部
+                              </Button>
+                            </Tooltip>
+                          </Space>
+                        </div>
+                      </div>
                       <List
                         style={assetListScrollStyle}
                         dataSource={scenarios}
