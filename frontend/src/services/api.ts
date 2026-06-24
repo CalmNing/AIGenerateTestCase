@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiImportResult, ApiSyncResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -404,9 +404,11 @@ export const apiTestApi = {
   updateScenario: (scenarioId: number, scenario: Partial<ApiScenario>): Promise<ApiResponse<ApiScenario>> =>
     api.put(`/api-test/scenarios/${scenarioId}`, scenario),
   deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
-  getScenarioResults: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
-    api.get(`/api-test/scenarios/${scenarioId}/results`),
+  getScenarioResults: (scenarioId: number, limit?: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
+    api.get(`/api-test/scenarios/${scenarioId}/results${limit ? `?limit=${limit}` : ''}`),
   runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`),
+  runScenarios: (projectId: number, payload: ApiScenarioBatchRunRequest): Promise<ApiResponse<ApiScenarioBatchRunResult>> =>
+    api.post(`/api-test/projects/${projectId}/scenarios/run-batch`, payload),
   matchEndpoint: (data: { requirement: string; project_id?: number }): Promise<ApiResponse<{ matches: any[]; total_matches: number }>> =>
     api.post("/api-test/match-endpoint", data),
 };

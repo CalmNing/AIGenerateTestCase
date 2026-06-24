@@ -298,6 +298,27 @@ export interface ApiScenarioResult {
   updated_at: string;
 }
 
+export interface ApiScenarioBatchRunRequest {
+  scenario_ids?: number[];
+  run_all: boolean;
+}
+
+export interface ApiScenarioBatchRunItem {
+  scenario_id: number;
+  scenario_name: string;
+  record_id: number;
+  passed: boolean;
+  created_at: string;
+  result: Record<string, any>;
+}
+
+export interface ApiScenarioBatchRunResult {
+  total: number;
+  passed: number;
+  failed: number;
+  results: ApiScenarioBatchRunItem[];
+}
+
 export interface ApiImportResult {
   project: ApiProject;
   endpoints: ApiEndpoint[];
