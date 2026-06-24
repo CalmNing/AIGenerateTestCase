@@ -95,7 +95,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 
 
 def get_user_permissions(user: UserInfo) -> set[str]:
-    permissions: set[str] = {role for role in user.roles if role in ALL_PERMISSIONS}
+    permissions: set[str] = set()
     for role in user.roles:
         permissions.update(ROLE_PERMISSIONS.get(role, set()))
     return permissions

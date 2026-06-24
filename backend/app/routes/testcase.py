@@ -235,9 +235,6 @@ def get_testcases(
         query = query.where(TestCase.bug_id != None)
 
     testcases_db = session.exec(query.offset(offset).limit(limit)).all()
-    for testcase in testcases_db:
-        testcase.session_id = int(testcase.session_id) if testcase.session_id else None
-
     # 构建基础查询条件
     count_query_base = [TestCase.session_id == session_id]
     if module_id is not None:

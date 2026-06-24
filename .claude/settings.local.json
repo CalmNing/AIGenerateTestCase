@@ -115,7 +115,10 @@
       "Bash(kill %1)",
       "WebFetch(domain:api-docs.deepseek.com)",
       "PowerShell(python -c \"import py_compile; py_compile.compile\\('backend/utils/model_utils.py', doraise=True\\); print\\('OK'\\)\")",
-      "PowerShell(python -c \"import py_compile; py_compile.compile\\('backend/utils/model_utils.py', doraise=True\\); print\\('Syntax OK'\\)\")"
+      "PowerShell(python -c \"import py_compile; py_compile.compile\\('backend/utils/model_utils.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(dir /s /b backend\\\\*.py)",
+      "Bash(findstr /v \"venv __pycache__\")",
+      "Bash(dir /s /b frontend\\\\src\\\\*.tsx frontend\\\\src\\\\*.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,
