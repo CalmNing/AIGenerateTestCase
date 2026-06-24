@@ -1,7 +1,6 @@
-import base64
 from typing import List, Annotated, Optional
 
-from fastapi import APIRouter, Query, status, File, Form, UploadFile
+from fastapi import APIRouter, Query, status, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete
@@ -9,22 +8,21 @@ from sqlmodel import select, desc, func
 
 from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
-from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog
+from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog, ApiEndpoint, ApiProject
 from utils.base_response import Response
 import traceback
-from app.services.api_test_tool import run_endpoint, run_endpoint_steps
-from db.models import ApiEndpoint, ApiProject
+from app.services.api_test_tool import run_endpoint_steps
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
 
 class TestCasePage(BaseModel):
     items: List[TestCase]
-    totalNumber: int = Field(int, description="总条数")
-    passed: int = Field(int, description="已通过的用例数")
-    failed: int = Field(int, description="未通过的用例数")
-    not_run: int = Field(int, description="未执行的用例数")
-    totalBugs: int = Field(int, description="Bug数")
+    totalNumber: int = Field(0, description="总条数")
+    passed: int = Field(0, description="已通过的用例数")
+    failed: int = Field(0, description="未通过的用例数")
+    not_run: int = Field(0, description="未执行的用例数")
+    totalBugs: int = Field(0, description="Bug数")
     model_config = {
         "arbitrary_types_allowed": True,
     }
@@ -59,6 +57,132 @@ def _save_execution_log(db_session, testcase: TestCase, result: dict, passed: bo
     db_session.refresh(log)
     return log
 
+
+
+def _parse_endpoint_ids(endpoint_id_str: str | int | None) -> list[int]:
+    """Parse comma-separated endpoint IDs string into int list."""
+    if not endpoint_id_str:
+        return []
+    if isinstance(endpoint_id_str, int):
+        return [endpoint_id_str]
+    ids = []
+    for part in endpoint_id_str.split(","):
+        part = part.strip()
+        if part:
+            try:
+                ids.append(int(part))
+            except ValueError:
+                pass
+    return ids
+
+
+def _session_api_overrides(db_session, session_id: int) -> dict:
+    """Get session-level API config overrides."""
+    session_db = db_session.get(Session, session_id)
+    if session_db and session_db.api_config:
+        api_config = session_db.api_config
+        return {
+            "headers": api_config.get("headers"),
+            "environment_id": api_config.get("environment_id"),
+        }
+    return {}
+
+
+def _testcase_step_snapshot(step: dict, index: int) -> dict:
+    """Create a snapshot dict for a step."""
+    return {"index": index, "type": step.get("type") or "api_endpoint",
+            "name": step.get("name") or step.get("description") or "", "content": step.get("body")}
+
+
+def _api_call_overrides(step: dict, fallback: dict, test_case_assertions) -> dict:
+    """Extract API call overrides from a step dict, merged with session fallback."""
+    overrides = {
+        "headers": step.get("headers", fallback.get("headers")),
+        "parameters": step.get("parameters"),
+        "body": step.get("body"),
+        "variables": step.get("variables", []),
+        "pre_actions": step.get("pre_actions"),
+        "post_actions": step.get("post_actions"),
+        "assertions": step.get("assertions") or test_case_assertions,
+        "environment_id": step.get("environment_id") or fallback.get("environment_id"),
+    }
+    return overrides
+
+
+def _endpoint_plan_item(db_session, testcase, endpoint_id: int, overrides: dict, snapshot: dict) -> tuple[dict | None, dict | None]:
+    """Build a single plan item for an endpoint."""
+    endpoint = db_session.get(ApiEndpoint, endpoint_id)
+    if not endpoint:
+        return None, {"index": snapshot.get("index"), "status": "error", "detail": f"API 接口 {endpoint_id} 不存在"}
+    project = db_session.get(ApiProject, testcase.api_project_id or endpoint.project_id)
+    if not project:
+        return None, {"index": snapshot.get("index"), "status": "error", "detail": f"API 项目不存在"}
+    return {
+        "endpoint": endpoint,
+        "project": project,
+        "overrides": overrides,
+        "testcase_step": snapshot,
+    }, None
+
+
+def _build_testcase_execution_plan(db_session, testcase, session_id):
+    """Build execution plan from test case steps and preset_conditions."""
+    endpoint_ids = _parse_endpoint_ids(testcase.api_endpoint_id)
+    fallback = _session_api_overrides(db_session, session_id)
+    plan: list[dict] = []
+    errors: list[dict] = []
+    fallback_endpoint_index = 0
+
+    def _process_api_step(step: dict, index: int) -> None:
+        nonlocal fallback_endpoint_index
+        explicit_ids = _parse_endpoint_ids(step.get("endpoint_id") or step.get("api_endpoint_id"))
+        endpoint_id = explicit_ids[0] if explicit_ids else None
+        if endpoint_id is None and fallback_endpoint_index < len(endpoint_ids):
+            endpoint_id = endpoint_ids[fallback_endpoint_index]
+            fallback_endpoint_index += 1
+        snapshot = _testcase_step_snapshot(step, index)
+        if endpoint_id is None:
+            errors.append({"index": index, "status": "error", "detail": "API 调用步骤未关联接口", "testcase_step": snapshot})
+            return
+        item, error = _endpoint_plan_item(db_session, testcase, endpoint_id,
+                                          _api_call_overrides(step, fallback, testcase.assertions), snapshot)
+        if error:
+            errors.append(error)
+        else:
+            plan.append(item)
+
+    next_index = 1
+
+    # Phase 1: preset_conditions api_call steps
+    for cond in (testcase.preset_conditions or []):
+        if isinstance(cond, dict) and cond.get("type") == "api_call":
+            _process_api_step(cond, next_index)
+            next_index += 1
+
+    # Phase 2: main steps api_call steps
+    api_steps = [step for step in (testcase.steps or [])
+                 if isinstance(step, dict) and step.get("type") == "api_call"]
+
+    if api_steps:
+        for step in api_steps:
+            _process_api_step(step, next_index)
+            next_index += 1
+        return plan, errors
+
+    # Legacy: no api_call steps, generate one step per endpoint_id
+    if not plan:
+        tc_overrides = dict(fallback)
+        if testcase.assertions:
+            tc_overrides["assertions"] = testcase.assertions
+        for index, eid in enumerate(endpoint_ids, 1):
+            snapshot = {"index": index, "type": "api_endpoint", "name": f"API 接口 {eid}", "content": None}
+            item, error = _endpoint_plan_item(db_session, testcase, eid, dict(tc_overrides), snapshot)
+            if error:
+                errors.append(error)
+            else:
+                plan.append(item)
+
+    return plan, errors
 
 @router.get("/{session_id}/testcases/{testcase_id}/execution-logs", response_model=Response[List[TestCaseExecutionLog]])
 async def get_execution_logs(
@@ -519,76 +643,54 @@ async def execute_testcase(
     session_id: int,
     testcase_id: int,
 ):
-    """?????? API ??????"""
+    """执行测试用例关联的 API 接口并保存执行日志。"""
     testcase = session.get(TestCase, testcase_id)
-    if not testcase or testcase.session_id != session_id:
+    if not testcase or testcase.session_id != session_id or (testcase.user_id and testcase.user_id != user.user_id):
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
-    if not testcase.api_endpoint_id:
-        return Response(code=status.HTTP_400_BAD_REQUEST, message="\u8be5\u6d4b\u8bd5\u7528\u4f8b\u672a\u5173\u8054 API \u63a5\u53e3")
+    has_api_presets = any(
+        isinstance(c, dict) and c.get("type") == "api_call"
+        for c in (testcase.preset_conditions or [])
+    )
+    has_api_steps = any(
+        isinstance(s, dict) and s.get("type") == "api_call"
+        for s in (testcase.steps or [])
+    )
+    if not testcase.api_endpoint_id and not has_api_presets and not has_api_steps:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="该测试用例未关联 API 接口")
 
-    # Support comma-separated multiple endpoint IDs; use first for execution
-    first_id = testcase.api_endpoint_id
-    if isinstance(first_id, str) and "," in first_id:
-        first_id = first_id.split(",")[0].strip()
-    endpoint = session.get(ApiEndpoint, int(first_id))
-    if not endpoint:
-        return Response(code=status.HTTP_404_NOT_FOUND, message="\u5173\u8054\u7684 API \u63a5\u53e3\u4e0d\u5b58\u5728")
-
-    project = session.get(ApiProject, testcase.api_project_id or endpoint.project_id)
-    if not project:
-        return Response(code=status.HTTP_404_NOT_FOUND, message="关联的 API 项目不存在")
-
-    # 从 steps 中提取 api_call 配置作为 overrides
-    # 如果测试用例没有自己的 api_call 配置，则使用会话级别的配置
-    overrides = {}
-    has_testcase_api_config = False
-
-    # 首先检查测试用例自己的 api_call 配置
-    for step in testcase.steps:
-        if isinstance(step, dict) and step.get("type") == "api_call":
-            overrides = {
-                "headers": step.get("headers"),
-                "parameters": step.get("parameters"),
-                "body": step.get("body"),
-                "variables": step.get("variables", []),
-                "environment_id": step.get("environment_id"),
-                "base_url": step.get("base_url"),
-            }
-            has_testcase_api_config = True
-            # 只取第一个 api_call 配置
-            break
-
-    # 如果测试用例没有自己的配置，使用会话级别的配置
-    if not has_testcase_api_config:
-        session_db = session.get(Session, session_id)
-        if session_db and session_db.api_config:
-            api_config = session_db.api_config
-            overrides = {
-                "headers": api_config.get("headers"),
-                "environment_id": api_config.get("environment_id"),
-            }
+    plan, preflight_errors = _build_testcase_execution_plan(session, testcase, session_id)
 
     try:
-        result = await run_endpoint(session, project, endpoint, overrides)
-    except Exception as e:
-        logger = __import__("logging").getLogger(__name__)
-        logger.error(f"执行测试用例 {testcase_id} 失败: {e}\n{traceback.format_exc()}")
-        return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"执行失败: {str(e)}")
+        if plan:
+            result = await run_endpoint_steps(session, plan)
+            if preflight_errors:
+                result["steps"] = preflight_errors + result.get("steps", [])
+                result["passed"] = False
+        else:
+            result = {"passed": False, "variables": {}, "steps": list(preflight_errors)}
 
-    # 根据执行结果更新用例状态??????
-    passed = result.get("passed", False)
-    testcase.status = "PASSED" if passed else "FAILED"
-    session.add(testcase)
-    session.commit()
-    session.refresh(testcase)
+        passed = result.get("passed", False)
+        testcase.status = "PASSED" if passed else "FAILED"
+        session.add(testcase)
+        session.commit()
 
-    return Response(
-        data={
+        log = _save_execution_log(session, testcase, result, passed, testcase.status)
+
+        return Response(data={
             "passed": passed,
             "status": testcase.status,
             "result": result,
-        },
-        message="执行通过" if passed else "执行失败",
-    )
+            "log_id": log.id,
+        })
+    except Exception as e:
+        logger = __import__("logging").getLogger(__name__)
+        logger.error(f"执行测试用例 {testcase_id} 失败: {e}\n{traceback.format_exc()}")
 
+        error_result = {"steps": [{"index": 1, "status": "error", "detail": str(e)}]}
+        try:
+            _save_execution_log(session, testcase, error_result, False, "FAILED")
+        except Exception:
+            pass
+
+        return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"执行失败: {str(e)}")
