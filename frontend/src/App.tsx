@@ -24,6 +24,7 @@ import TestCaseManager from './components/TestCaseManager';
 import SessionApiConfig from './components/SessionApiConfig';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
 import ApiScenarioTestTool from './components/ApiScenarioTestTool';
+import VariableAssistant from './components/VariableAssistant';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
 import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
@@ -2025,6 +2026,12 @@ const App: React.FC = () => {
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>
+
+      {/* 变量助手 - 全局渲染 */}
+      <VariableAssistant
+        environmentId={currentEnvironmentId ? parseInt(currentEnvironmentId) || undefined : undefined}
+        environmentVariables={getCurrentEnvironment().parameters.filter(p => p.key).map(p => ({ key: p.key, value: p.value }))}
+      />
     </ConfigProvider>
   );
 };

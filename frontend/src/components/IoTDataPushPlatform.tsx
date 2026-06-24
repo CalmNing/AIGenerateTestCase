@@ -6,7 +6,6 @@ import { json } from '@codemirror/lang-json';
 import { savedRequestApi, globalParameterApi, proxyApi } from '../services/api';
 import { SavedRequest as SavedRequestType } from '../types';
 import FileUpload, { UploadedFileResult } from './FileUpload';
-import VariableAssistant from './VariableAssistant';
 import './IoTDataPushPlatform.css';
 
 interface HeaderItem {
@@ -1565,11 +1564,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>
-
-      <VariableAssistant
-        environmentId={currentEnvironmentId ? parseInt(currentEnvironmentId) || undefined : undefined}
-        environmentVariables={getCurrentEnvironment().parameters.filter(p => p.key).map(p => ({ key: p.key, value: p.value }))}
-      />
     </div>
   );
 };
