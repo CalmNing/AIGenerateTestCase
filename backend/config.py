@@ -13,6 +13,8 @@ default_model_type: Literal["api", "ollama"] = "api"
 default_config = {
     "model_type": default_model_type,
     "api_key": "",
+    "api_base_url": "https://api.deepseek.com",
+    "api_model": "deepseek-v4-flash",
     "ollama_model": "llama3",
     "ollama_base_url": "http://localhost:11434",
     "ollama_url": "http://localhost:11434",

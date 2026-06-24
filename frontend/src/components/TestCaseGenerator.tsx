@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Input, Select, Spin, Tag, Tooltip, message as antMessage } from 'antd';
-import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal } from 'antd';
+import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined, EditOutlined } from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../types';
 import HistoryPromptSidebar from './HistoryPromptSidebar';
 import './TestCaseGenerator.css';
@@ -18,6 +18,8 @@ interface TestCaseGeneratorProps {
   onApiEndpointChange?: (ids: number[]) => void;
   selectedApiProjectId?: number | null;
   onApiProjectChange?: (id: number | null) => void;
+  apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
+  onApiEndpointOverridesChange?: (overrides: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>) => void;
 }
 
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
@@ -33,12 +35,16 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   onApiEndpointChange,
   selectedApiProjectId,
   onApiProjectChange,
+  apiEndpointOverrides,
+  onApiEndpointOverridesChange,
 }) => {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const [apiProjects, setApiProjects] = useState<ApiProject[]>([]);
   const [apiEndpoints, setApiEndpoints] = useState<ApiEndpoint[]>([]);
   const [loadingApis, setLoadingApis] = useState(false);
   const [smartMatching, setSmartMatching] = useState(false);
+  const [overrideEditorVisible, setOverrideEditorVisible] = useState(false);
+  const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
 
   const loadApiProjects = useCallback(async () => {
     try {
@@ -126,7 +132,15 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
 
   const endpointLabel = (ep: ApiEndpoint) => {
     const tag = ep.tags && ep.tags.length > 0 ? ep.tags[0] + ' ' : '';
-    return tag + ep.method?.toUpperCase() + ' ' + ep.path;
+    const namePart = ep.name ? ` - ${ep.name}` : '';
+    return tag + ep.method?.toUpperCase() + ' ' + ep.path + namePart;
+  };
+
+  const endpointSearchText = (ep: ApiEndpoint) => {
+    return [ep.name, ep.path, ep.method, ...(ep.tags || [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
   };
 
   const moduleName = selectedModule
@@ -203,6 +217,13 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                     placeholder="选择接口（可多选）"
                     value={selectedApiEndpointId || []}
                     onChange={handleEndpointChange}
+                    showSearch
+                    autoClearSearchValue={false}
+                    filterOption={(inputValue, option) => {
+                      const ep = apiEndpoints.find(e => e.id === option?.value);
+                      if (!ep) return false;
+                      return endpointSearchText(ep).includes(inputValue.toLowerCase());
+                    }}
                     options={apiEndpoints.map(e => ({
                       label: endpointLabel(e),
                       value: e.id,
@@ -226,6 +247,36 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 <div className="tcg-api-hint">
                   AI 会将接口 Schema 注入提示词，生成可执行的 api_call 测试步骤
                 </div>
+                {selectedApiEndpointId && selectedApiEndpointId.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      className="tcg-smart-btn"
+                      onClick={() => {
+                        // Initialize editing overrides with current values or DB defaults
+                        const initial: Record<number, any> = {};
+                        for (const eid of selectedApiEndpointId) {
+                          const ep = apiEndpoints.find(e => e.id === eid);
+                          const saved = apiEndpointOverrides?.[eid];
+                          initial[eid] = {
+                            body: saved?.body ?? ep?.body ?? '',
+                            headers: saved?.headers ?? ep?.headers ?? [],
+                            parameters: saved?.parameters ?? ep?.parameters ?? [],
+                          };
+                        }
+                        setEditingOverrides(initial);
+                        setOverrideEditorVisible(true);
+                      }}
+                    >
+                      <EditOutlined style={{ fontSize: 12 }} />
+                      编辑接口参数
+                    </button>
+                    {apiEndpointOverrides && Object.keys(apiEndpointOverrides).length > 0 && (
+                      <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                        已自定义 {Object.keys(apiEndpointOverrides).length} 个接口
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Requirement Input */}
@@ -266,6 +317,134 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
             </div>
           </div>
         )}
+
+        {/* API Endpoint Override Editor Modal */}
+        <Modal
+          title="编辑接口参数"
+          open={overrideEditorVisible}
+          onCancel={() => setOverrideEditorVisible(false)}
+          width={800}
+          footer={[
+            <button key="cancel" className="tcg-smart-btn" onClick={() => setOverrideEditorVisible(false)}>
+              取消
+            </button>,
+            <button
+              key="save"
+              className="tcg-smart-btn"
+              style={{ background: 'var(--color-primary)', color: '#fff', border: 'none' }}
+              onClick={() => {
+                if (onApiEndpointOverridesChange) {
+                  onApiEndpointOverridesChange(editingOverrides);
+                }
+                setOverrideEditorVisible(false);
+                antMessage.success('接口参数已保存');
+              }}
+            >
+              确定
+            </button>,
+          ]}
+        >
+          {selectedApiEndpointId?.map((eid) => {
+            const ep = apiEndpoints.find(e => e.id === eid);
+            if (!ep) return null;
+            const override = editingOverrides[eid] || {};
+            const methodColor = methodColorMap[ep.method?.toUpperCase()] || 'default';
+            return (
+              <div key={eid} style={{ marginBottom: 24, borderBottom: '1px solid var(--color-border-secondary)', paddingBottom: 16 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>
+                  <Tag color={methodColor}>{ep.method?.toUpperCase()}</Tag>
+                  {ep.path} - {ep.name}
+                </div>
+
+                {/* Headers */}
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 4 }}>请求头 (Headers)</div>
+                  {(override.headers || []).map((h: any, hi: number) => (
+                    <div key={hi} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                      <Input
+                        size="small"
+                        style={{ width: 120 }}
+                        placeholder="Key"
+                        value={h.key}
+                        onChange={(e) => {
+                          const newOverrides = { ...editingOverrides };
+                          const epOverrides = { ...(newOverrides[eid] || {}) };
+                          const headers = [...(epOverrides.headers || [])];
+                          headers[hi] = { ...headers[hi], key: e.target.value };
+                          epOverrides.headers = headers;
+                          newOverrides[eid] = epOverrides;
+                          setEditingOverrides(newOverrides);
+                        }}
+                      />
+                      <Input
+                        size="small"
+                        style={{ flex: 1 }}
+                        placeholder="Value"
+                        value={h.value}
+                        onChange={(e) => {
+                          const newOverrides = { ...editingOverrides };
+                          const epOverrides = { ...(newOverrides[eid] || {}) };
+                          const headers = [...(epOverrides.headers || [])];
+                          headers[hi] = { ...headers[hi], value: e.target.value };
+                          epOverrides.headers = headers;
+                          newOverrides[eid] = epOverrides;
+                          setEditingOverrides(newOverrides);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Parameters */}
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 4 }}>请求参数 (Parameters)</div>
+                  {(override.parameters || []).map((p: any, pi: number) => (
+                    <div key={pi} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                      <Input
+                        size="small"
+                        style={{ width: 100 }}
+                        placeholder="Key"
+                        value={p.key}
+                      />
+                      <Input
+                        size="small"
+                        style={{ flex: 1 }}
+                        placeholder="Value"
+                        value={p.value}
+                        onChange={(e) => {
+                          const newOverrides = { ...editingOverrides };
+                          const epOverrides = { ...(newOverrides[eid] || {}) };
+                          const params = [...(epOverrides.parameters || [])];
+                          params[pi] = { ...params[pi], value: e.target.value };
+                          epOverrides.parameters = params;
+                          newOverrides[eid] = epOverrides;
+                          setEditingOverrides(newOverrides);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Body */}
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 4 }}>请求体 (Body)</div>
+                  <Input.TextArea
+                    rows={4}
+                    value={override.body || ''}
+                    onChange={(e) => {
+                      const newOverrides = { ...editingOverrides };
+                      const epOverrides = { ...(newOverrides[eid] || {}) };
+                      epOverrides.body = e.target.value;
+                      newOverrides[eid] = epOverrides;
+                      setEditingOverrides(newOverrides);
+                    }}
+                    placeholder="JSON 格式的请求体"
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </Modal>
       </div>
 
       <HistoryPromptSidebar

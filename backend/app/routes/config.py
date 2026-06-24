@@ -1,7 +1,7 @@
 import logging
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
 
 from config import config_manager
@@ -71,3 +71,51 @@ async def set_lanhu_cookie(req: LanhuCookieRequest):
         return Response(message="蓝湖 Cookie 已更新并同步到 MCP 服务")
     else:
         return Response(message="蓝湖 Cookie 已保存（MCP 服务未运行，重启后生效）")
+
+
+@router.get("/models")
+async def list_api_models(
+    api_key: str = Query(..., description="API Key"),
+    api_base_url: str = Query("https://api.deepseek.com", description="OpenAI 兼容 API 地址"),
+):
+    """从 OpenAI 兼容接口获取可用模型列表"""
+    api_key = api_key.strip()
+    api_base_url = api_base_url.strip().rstrip("/")
+    if not api_base_url:
+        api_base_url = "https://api.deepseek.com"
+    if not api_key:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="api_key 不能为空")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{api_base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("data", [])
+                result = [
+                    {"id": m.get("id", ""), "owned_by": m.get("owned_by", "")}
+                    for m in models
+                ]
+                # 按 ID 排序，chat 类模型优先
+                result.sort(key=lambda m: (not m["id"].startswith(("gpt", "claude", "deepseek", "chat")), m["id"]))
+                return Response(data=result)
+            else:
+                logger.warning(f"获取模型列表失败: status={resp.status_code} body={resp.text[:300]}")
+                return Response(
+                    code=status.HTTP_502_BAD_GATEWAY,
+                    message=f"获取模型列表失败 ({resp.status_code})，请检查 API Key 和 Base URL 是否正确",
+                )
+    except httpx.ConnectError:
+        return Response(
+            code=status.HTTP_502_BAD_GATEWAY,
+            message=f"无法连接到 {api_base_url}，请检查 Base URL 和网络连接",
+        )
+    except Exception as e:
+        logger.error(f"获取模型列表异常: {e}")
+        return Response(
+            code=status.HTTP_502_BAD_GATEWAY,
+            message=f"获取模型列表时出错: {str(e)}",
+        )

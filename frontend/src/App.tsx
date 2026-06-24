@@ -4,7 +4,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
 import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
-import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
+import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, TestCaseExecutionLog } from './types';
 import { sessionApi, testcaseApi, moduleApi, globalParameterApi, configApi } from './services/api';
 
 // 环境类型定义
@@ -34,6 +34,7 @@ import McpConfigModal from './components/modals/McpConfigModal';
 import SkillsHubModal from './components/modals/SkillsHubModal';
 import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
 import AddTestcaseModal from './components/modals/AddTestcaseModal';
+import TestCaseExecutionLogModal from './components/modals/TestCaseExecutionLogModal';
 import ModuleSidebar from './components/ModuleSidebar';
 import { Permission, hasPermission } from './services/permissions';
 
@@ -82,6 +83,10 @@ const App: React.FC = () => {
   const [editingEnvironment, setEditingEnvironment] = useState<Environment | null>(null);
   const [editEnvironmentName, setEditEnvironmentName] = useState('');
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
+  const [executionLogTestcase, setExecutionLogTestcase] = useState<TestCase | null>(null);
+  const [executionLogs, setExecutionLogs] = useState<TestCaseExecutionLog[]>([]);
+  const [executionLogsLoading, setExecutionLogsLoading] = useState(false);
+  const [isExecutionLogModalVisible, setIsExecutionLogModalVisible] = useState(false);
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isEditSessionModalVisible, setIsEditSessionModalVisible] = useState(false);
@@ -723,6 +728,53 @@ const App: React.FC = () => {
 
   // 打开批量移动测试用例对话框
 
+  const loadExecutionLogs = async (testcase: TestCase, openModal = true) => {
+    if (!selectedSession) return;
+    if (openModal) {
+      setExecutionLogTestcase(testcase);
+      setIsExecutionLogModalVisible(true);
+    }
+    setExecutionLogsLoading(true);
+    try {
+      const res = await testcaseApi.getExecutionLogs(selectedSession.id, testcase.id);
+      if (res.code === 200 && res.data) {
+        setExecutionLogs(res.data);
+      } else {
+        setExecutionLogs([]);
+        notification.error({ message: '加载执行日志失败', description: res.message || '加载执行日志失败', placement: 'topRight' });
+      }
+    } catch (error: any) {
+      setExecutionLogs([]);
+      notification.error({ message: '加载执行日志失败', description: error?.response?.data?.message || error.message || '加载执行日志失败', placement: 'topRight' });
+    } finally {
+      setExecutionLogsLoading(false);
+    }
+  };
+
+  const handleViewExecutionLogs = (testcase: TestCase) => {
+    loadExecutionLogs(testcase, true);
+  };
+
+  const handleInferTestcaseDependencies = async (testcase: TestCase) => {
+    if (!selectedSession) return;
+    try {
+      const res = await testcaseApi.inferDependencies(selectedSession.id, testcase.id);
+      if (res.code === 200) {
+        const data = res.data || {};
+        notification.success({
+          message: '依赖推断完成',
+          description: `新增提取 ${data.added_post_actions || 0} 个，替换字段 ${data.replaced_fields || 0} 个`,
+          placement: 'topRight',
+        });
+        loadTestcases(selectedSession.id, filters);
+      } else {
+        notification.error({ message: '依赖推断失败', description: res.message || '依赖推断失败', placement: 'topRight' });
+      }
+    } catch (error: any) {
+      notification.error({ message: '依赖推断失败', description: error?.response?.data?.message || error.message || '依赖推断失败', placement: 'topRight' });
+    }
+  };
+
   // 执行测试用例 API 执行
   const handleApiExecuteTestcase = async (testcase: TestCase) => {
     if (!selectedSession) return;
@@ -786,9 +838,13 @@ const App: React.FC = () => {
             width: 600,
             okText: '确定',
           });
+          await loadExecutionLogs(testcase, true);
         }
         // 重新加载测试用例
         loadTestcases(selectedSession.id, filters);
+        if (result.passed && isExecutionLogModalVisible && executionLogTestcase?.id === testcase.id) {
+          await loadExecutionLogs(testcase, false);
+        }
       } else {
         notification.error({ message: '执行失败', description: res.message || '执行失败', placement: 'topRight' });
       }
@@ -839,9 +895,12 @@ const App: React.FC = () => {
 
   const [selectedApiEndpointId, setSelectedApiEndpointId] = useState<number[]>([]);
   const [selectedApiProjectId, setSelectedApiProjectId] = useState<number | null>(null);
+  const [apiEndpointOverrides, setApiEndpointOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
   const [settingType, setSettingType] = useState<'api' | 'ollama'>('api');
+  const [modelList, setModelList] = useState<string[]>([]);
+  const [modelListLoading, setModelListLoading] = useState(false);
 
   // 打开设置模态框
   const handleOpenSettingModal = () => {
@@ -854,6 +913,7 @@ const App: React.FC = () => {
         setting_type: 'api',
         api_key: '',
         api_base_url: 'https://api.deepseek.com',
+        api_model: 'deepseek-v4-flash',
         api_proxy_url: '',
         ollama_url: 'http://localhost:11434',
         ollama_model: 'gpt-oss:120b-cloud'
@@ -870,6 +930,7 @@ const App: React.FC = () => {
     if (value === 'api') {
       settingForm.setFieldsValue({
         api_base_url: settingForm.getFieldValue('api_base_url') || 'https://api.deepseek.com',
+        api_model: settingForm.getFieldValue('api_model') || 'deepseek-v4-flash',
         ollama_url: '',
         ollama_model: ''
       });
@@ -892,6 +953,9 @@ const App: React.FC = () => {
       }
       if (typeof localValues.api_base_url === 'string') {
         localValues.api_base_url = localValues.api_base_url.trim();
+      }
+      if (typeof localValues.api_model === 'string') {
+        localValues.api_model = localValues.api_model.trim();
       }
       if (typeof localValues.api_proxy_url === 'string') {
         localValues.api_proxy_url = localValues.api_proxy_url.trim();
@@ -947,6 +1011,41 @@ const App: React.FC = () => {
     }
   };
 
+  // 获取模型列表
+  const fetchModelList = async () => {
+    const fields = settingForm.getFieldsValue();
+    const apiKey = (fields.api_key || '').trim();
+    const apiBaseUrl = (fields.api_base_url || 'https://api.deepseek.com').trim();
+    if (!apiKey) {
+      notification.warning({ message: '请先填写 API Key', placement: 'topRight' });
+      return;
+    }
+    setModelListLoading(true);
+    try {
+      const res = await configApi.listModels(apiKey, apiBaseUrl);
+      if (res.code === 200 && res.data) {
+        const ids = (res.data as { id: string }[]).map(m => m.id);
+        setModelList(ids);
+        if (ids.length === 0) {
+          notification.info({ message: '该服务未返回模型列表，您可以手动输入模型名称', placement: 'topRight' });
+        } else {
+          notification.success({ message: `已获取 ${ids.length} 个模型`, placement: 'topRight' });
+        }
+      } else {
+        notification.error({ message: '获取模型列表失败', description: (res as any).message, placement: 'topRight' });
+      }
+    } catch (e: any) {
+      console.error('获取模型列表失败:', e);
+      notification.error({
+        message: '获取模型列表失败',
+        description: e?.response?.data?.message || e?.message || '网络错误',
+        placement: 'topRight',
+      });
+    } finally {
+      setModelListLoading(false);
+    }
+  };
+
   // 生成测试用例
   const handleGenerateTestcases = async () => {
     if (!selectedSession || (!requirement.trim()) && !imageBase64) return;
@@ -972,6 +1071,7 @@ const App: React.FC = () => {
         api_key: (settings.api_key || '').trim(),
         api_base_url: (settings.api_base_url || '').trim(),
         api_proxy_url: (settings.api_proxy_url || '').trim(),
+        api_model: (settings.api_model || 'deepseek-v4-flash').trim(),
         ollama_url: (settings.ollama_url || '').trim(),
         ollama_model: (settings.ollama_model || '').trim()
       };
@@ -997,7 +1097,8 @@ const App: React.FC = () => {
           selectedModule === 0 ? undefined : Number(selectedModule), // 传递模块ID
           selectedSkills.length > 0 ? selectedSkills : undefined,
           selectedApiEndpointId.length > 0 ? selectedApiEndpointId : undefined,
-          selectedApiProjectId
+          selectedApiProjectId,
+          Object.keys(apiEndpointOverrides).length > 0 ? apiEndpointOverrides : null
         );
         console.log('生成测试用例API响应:', response);
 
@@ -1451,6 +1552,8 @@ const App: React.FC = () => {
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
                                 onApiExecute={handleApiExecuteTestcase}
+                                onViewExecutionLogs={handleViewExecutionLogs}
+                                onInferDependencies={handleInferTestcaseDependencies}
                               />
                             ),
                           },
@@ -1491,6 +1594,8 @@ const App: React.FC = () => {
                                 onApiEndpointChange={(ids: number[]) => setSelectedApiEndpointId(ids)}
                                 selectedApiProjectId={selectedApiProjectId}
                                 onApiProjectChange={setSelectedApiProjectId}
+                                apiEndpointOverrides={apiEndpointOverrides}
+                                onApiEndpointOverridesChange={setApiEndpointOverrides}
                               />
                             ),
                           },
@@ -1525,6 +1630,8 @@ const App: React.FC = () => {
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
                                 onApiExecute={handleApiExecuteTestcase}
+                                onViewExecutionLogs={handleViewExecutionLogs}
+                                onInferDependencies={handleInferTestcaseDependencies}
                               />
                             ),
                           },
@@ -1570,6 +1677,17 @@ const App: React.FC = () => {
             onPrev={handlePrevCase}
             onCancel={() => setIsViewModalVisible(false)}
             onComplete={handleCompleteTestcase}
+          />
+          <TestCaseExecutionLogModal
+            visible={isExecutionLogModalVisible}
+            testcase={executionLogTestcase}
+            logs={executionLogs}
+            loading={executionLogsLoading}
+            onCancel={() => {
+              setIsExecutionLogModalVisible(false);
+              setExecutionLogTestcase(null);
+              setExecutionLogs([]);
+            }}
           />
           <CompleteTestcaseModal
             visible={confirmCompleteTestcaseVisible}
@@ -1693,6 +1811,9 @@ const App: React.FC = () => {
               onCancel={() => setIsSettingModalVisible(false)}
               onFinish={handleSaveSetting}
               onSettingTypeChange={handleSettingTypeChange}
+              modelList={modelList}
+              modelListLoading={modelListLoading}
+              onFetchModels={fetchModelList}
             />
           )}
 

@@ -11,6 +11,7 @@ from app.services.api_test_tool import (
     detect_base_url,
     endpoints_from_spec,
     generate_body_from_schema,
+    infer_step_dependencies,
     parse_spec_text,
     run_endpoint,
     run_scenario,
@@ -58,6 +59,7 @@ class GenerateBodyRequest(BaseModel):
     api_key: str = ""
     api_base_url: str = ""
     api_proxy_url: str = ""
+    api_model: str = "deepseek-v4-flash"
     ollama_url: str = ""
     ollama_model: str = ""
 
@@ -117,7 +119,7 @@ def match_endpoint(
     if request.project_id:
         project = session.get(ApiProject, request.project_id)
         if not project or project.user_id != user.user_id:
-            return Response(code=status.HTTP_404_NOT_FOUND, message="???????")
+            return Response(code=status.HTTP_404_NOT_FOUND, message="项目不存在")
         query = query.where(ApiEndpoint.project_id == request.project_id)
     else:
         projects = session.exec(
@@ -318,6 +320,91 @@ def update_endpoint(endpoint_id: int, endpoint: ApiEndpoint, session: SessionDep
     return Response(data=db_endpoint, message="接口已更新")
 
 
+def _endpoint_inference_step(endpoint: ApiEndpoint) -> dict:
+    return {
+        "endpoint_id": endpoint.id,
+        "name": endpoint.name,
+        "headers": list(endpoint.headers or []),
+        "parameters": list(endpoint.parameters or []),
+        "body": endpoint.body,
+        "post_actions": list(endpoint.post_actions or []),
+        "request_schema": endpoint.request_schema or {},
+        "response_schema": endpoint.response_schema or {},
+    }
+
+
+def _apply_inference_step_to_endpoint(endpoint: ApiEndpoint, step: dict) -> None:
+    endpoint.headers = step.get("headers") or []
+    endpoint.parameters = step.get("parameters") or []
+    endpoint.body = step.get("body") or ""
+    endpoint.post_actions = step.get("post_actions") or []
+
+
+def _scenario_inference_step(step: dict, endpoint: ApiEndpoint | None) -> dict:
+    return {
+        **step,
+        "headers": step["headers"] if "headers" in step else list(getattr(endpoint, "headers", []) or []),
+        "parameters": step["parameters"] if "parameters" in step else list(getattr(endpoint, "parameters", []) or []),
+        "body": step.get("body") if "body" in step else getattr(endpoint, "body", None),
+        "post_actions": step["post_actions"] if "post_actions" in step else list(getattr(endpoint, "post_actions", []) or []),
+        "request_schema": getattr(endpoint, "request_schema", {}) or {},
+        "response_schema": getattr(endpoint, "response_schema", {}) or {},
+    }
+
+
+@router.post("/projects/{project_id}/infer-dependencies", response_model=Response[dict])
+def infer_project_dependencies(project_id: int, session: SessionDep, user: CurrentUser):
+    project = session.get(ApiProject, project_id)
+    if not project or project.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
+    endpoints = session.exec(
+        select(ApiEndpoint)
+        .where(ApiEndpoint.project_id == project_id)
+        .where(ApiEndpoint.user_id == user.user_id)
+        .order_by(ApiEndpoint.id)
+    ).all()
+    steps = [_endpoint_inference_step(endpoint) for endpoint in endpoints]
+    summary = infer_step_dependencies(steps)
+    for endpoint, step in zip(endpoints, steps):
+        _apply_inference_step_to_endpoint(endpoint, step)
+        session.add(endpoint)
+    session.commit()
+    return Response(data={**summary, "target": "project", "project_id": project_id}, message="依赖推断完成")
+
+
+@router.post("/scenarios/{scenario_id}/infer-dependencies", response_model=Response[dict])
+def infer_scenario_dependencies(scenario_id: int, session: SessionDep, user: CurrentUser):
+    scenario = session.get(ApiScenario, scenario_id)
+    if not scenario or scenario.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
+    endpoints = {
+        endpoint.id: endpoint
+        for endpoint in session.exec(
+            select(ApiEndpoint)
+            .where(ApiEndpoint.project_id == scenario.project_id)
+            .where(ApiEndpoint.user_id == user.user_id)
+        ).all()
+    }
+    original_steps = []
+    inference_steps = []
+    for raw_step in scenario.steps or []:
+        if not isinstance(raw_step, dict) or raw_step.get("enabled", True) is False:
+            continue
+        endpoint = endpoints.get(raw_step.get("endpoint_id"))
+        original_steps.append(raw_step)
+        inference_steps.append(_scenario_inference_step(raw_step, endpoint))
+    summary = infer_step_dependencies(inference_steps)
+    for original, inferred in zip(original_steps, inference_steps):
+        for key in ("headers", "parameters", "body", "post_actions"):
+            if key in inferred:
+                original[key] = inferred[key]
+    scenario.steps = list(scenario.steps or [])
+    session.add(scenario)
+    session.commit()
+    session.refresh(scenario)
+    return Response(data={**summary, "target": "scenario", "scenario_id": scenario_id}, message="依赖推断完成")
+
+
 @router.delete("/endpoints/{endpoint_id}", response_model=Response)
 def delete_endpoint(endpoint_id: int, session: SessionDep, user: CurrentUser):
     db_endpoint = session.get(ApiEndpoint, endpoint_id)
@@ -357,6 +444,7 @@ async def generate_endpoint_body(endpoint_id: int, request: GenerateBodyRequest,
         api_key=request.api_key,
         api_base_url=request.api_base_url,
         api_proxy_url=request.api_proxy_url,
+        api_model=request.api_model,
         ollama_url=request.ollama_url,
         ollama_model=request.ollama_model,
     )

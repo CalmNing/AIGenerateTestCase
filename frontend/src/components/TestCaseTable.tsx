@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Table, Button, TableProps, message, Modal, Tooltip } from 'antd';
-import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined, HistoryOutlined, BranchesOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../types';
 
 interface TestCaseTableProps {
@@ -12,6 +12,8 @@ interface TestCaseTableProps {
   onBatchDelete: (ids: number[]) => void;
   onMove: (testcase: TestCase) => void;
   onApiExecute?: (testcase: TestCase) => void;
+  onViewExecutionLogs?: (testcase: TestCase) => void;
+  onInferDependencies?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
 }
 
@@ -30,6 +32,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onBatchDelete,
   onMove,
   onApiExecute,
+  onViewExecutionLogs,
+  onInferDependencies,
   onBatchMove
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
@@ -122,7 +126,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
     {
       title: '操作',
       key: 'action',
-      width: 170,
+      width: 224,
       align: 'center' as const,
       render: (_: any, record: TestCase) => (
         <div className="tcm-actions">
@@ -145,6 +149,20 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             <Tooltip title="API 执行" placement="top">
               <button className="tcm-action-btn tcm-action-btn--api" onClick={() => onApiExecute(record)}>
                 <ApiOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onViewExecutionLogs && record.api_endpoint_id && (
+            <Tooltip title="执行日志" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--log" onClick={() => onViewExecutionLogs(record)}>
+                <HistoryOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onInferDependencies && record.api_endpoint_id && (
+            <Tooltip title="推断依赖" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--infer" onClick={() => onInferDependencies(record)}>
+                <BranchesOutlined />
               </button>
             </Tooltip>
           )}

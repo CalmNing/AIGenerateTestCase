@@ -74,7 +74,7 @@ class TestCase(BaseModel, table=True):
     """测试用例数据模型"""
     case_name: str = Field(default="")
     case_level: Optional[int] = Field(default=4, ge=1, le=4)  # 使用整数类型，添加范围约束
-    preset_conditions: List[str] = Field(default_factory=list, sa_type=JSON)
+    preset_conditions: List = Field(default_factory=list, sa_type=JSON)
     steps: List = Field(default_factory=list, sa_type=JSON)
     expected_results: List = Field(default_factory=list, sa_type=JSON)
     session_id: Optional[int] = Field(default=None, foreign_key="session.id")
@@ -82,8 +82,9 @@ class TestCase(BaseModel, table=True):
     bug_id: Optional[int] = Field(default=None)
     module_id: Optional[int] = Field(default=None)
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
-    api_endpoint_id: Optional[int] = Field(default=None, description="关联的 API Endpoint ID（逗号分隔）")
+    api_endpoint_id: Optional[str] = Field(default=None, description="关联的 API Endpoint ID（逗号分隔）")
     api_project_id: Optional[int] = Field(default=None, description="关联的 API Project ID")
+    assertions: Optional[List[dict]] = Field(default=None, sa_type=JSON, description="用例级断言规则，执行时覆盖接口默认断言")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
@@ -242,6 +243,17 @@ class ApiScenarioResult(BaseModel, table=True):
     passed: bool = Field(default=False, description="是否执行通过")
     result: dict = Field(default_factory=dict, sa_type=JSON, description="执行结果详情")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class TestCaseExecutionLog(BaseModel, table=True):
+    """测试用例 API 执行日志"""
+    testcase_id: int = Field(foreign_key="testcase.id", index=True, description="测试用例ID")
+    session_id: int = Field(foreign_key="session.id", index=True, description="会话ID")
+    case_name: str = Field(default="", description="执行时的用例名称快照")
+    passed: bool = Field(default=False, description="是否执行通过")
+    status: str = Field(default="FAILED", description="执行后的用例状态")
+    result: dict = Field(default_factory=dict, sa_type=JSON, description="执行日志详情")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID")
 
 
 class MockLog(BaseModel, table=True):

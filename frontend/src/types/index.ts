@@ -19,15 +19,16 @@ export interface TestCase {
   id: number;
   case_name: string;
   case_level: number;
-  preset_conditions: string[];
+  preset_conditions: (string | Record<string, any>)[];
   created_at: string;
   status?: TestCaseStatus; // 测试用例状态：NOT_RUN（未运行）、PASSED（通过）、FAILED（未通过）
   bug_id?: number;
   session_id: number;
   module_id?: number | null;
   user_id?: string;
-  api_endpoint_id?: number | null;
+  api_endpoint_id?: number | string | null;
   api_project_id?: number | null;
+  assertions?: Record<string, any>[] | null;
   steps: (string | Record<string, any>)[];
   expected_results: (string | Record<string, any>)[];
 }
@@ -41,6 +42,19 @@ export interface TestCaseResponse {
   totalNumber: number;
   totalBugs: number;
 
+}
+
+export interface TestCaseExecutionLog {
+  id: number;
+  testcase_id: number;
+  session_id: number;
+  case_name: string;
+  passed: boolean;
+  status: string;
+  result: Record<string, any>;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // 更新会话请求类型

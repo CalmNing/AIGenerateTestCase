@@ -4,6 +4,7 @@ import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../types';
 import TestCaseTable from './TestCaseTable';
 import * as XLSX from 'xlsx';
+import { formatStep } from '../utils/stepUtils';
 import './TestCaseManager.css';
 
 interface TestCaseManagerProps {
@@ -23,6 +24,8 @@ interface TestCaseManagerProps {
   onBatchMove: (ids: number[]) => void;
   onAdd: () => void;
   onApiExecute?: (testcase: TestCase) => void;
+  onViewExecutionLogs?: (testcase: TestCase) => void;
+  onInferDependencies?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
 }
 
@@ -50,6 +53,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onBatchDelete,
   onAdd,
   onApiExecute,
+  onViewExecutionLogs,
+  onInferDependencies,
   onMove,
   onBatchMove
 }) => {
@@ -63,8 +68,11 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
         '模块名称': tc.module_id ? modules.find(m => m.id === tc.module_id)?.module_name || '未知模块' : '未分配模块',
         '用例名称': tc.case_name,
         '用例级别': `P${tc.case_level}`,
-        '前置条件': tc.preset_conditions.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
-        '测试步骤': tc.steps.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
+        '前置条件': tc.preset_conditions.map((item: any, idx) => {
+          const text = typeof item === 'string' ? item : formatStep(item);
+          return `${idx + 1}. ${text}`;
+        }).join('\n'),
+        '测试步骤': tc.steps.map((item: any, idx) => `${idx + 1}. ${typeof item === 'string' ? item : formatStep(item)}`).join('\n'),
         '预期结果': tc.expected_results.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
         '状态': tc.status === TestCaseStatus.PASSED ? '已通过' : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
         'bug': tc.bug_id ? `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}` : '',
@@ -189,6 +197,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onBatchDelete={onBatchDelete}
             onMove={onMove}
             onApiExecute={onApiExecute}
+            onViewExecutionLogs={onViewExecutionLogs}
+            onInferDependencies={onInferDependencies}
             onBatchMove={onBatchMove}
           />
         </>

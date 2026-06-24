@@ -112,7 +112,10 @@
       "Bash(.venv/bin/python -c \"from app.services.api_test_tool import run_endpoint, run_scenario; print\\('OK'\\)\")",
       "Bash(.venv/bin/python *)",
       "Bash(npx eslint *)",
-      "Bash(kill %1)"
+      "Bash(kill %1)",
+      "WebFetch(domain:api-docs.deepseek.com)",
+      "PowerShell(python -c \"import py_compile; py_compile.compile\\('backend/utils/model_utils.py', doraise=True\\); print\\('OK'\\)\")",
+      "PowerShell(python -c \"import py_compile; py_compile.compile\\('backend/utils/model_utils.py', doraise=True\\); print\\('Syntax OK'\\)\")"
     ]
   },
   "enableAllProjectMcpServers": true,

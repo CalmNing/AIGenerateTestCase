@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal } from 'antd';
 import { CheckOutlined, UpOutlined, DownOutlined, BugOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
+import { formatStep } from '../../utils/stepUtils';
 import './ViewTestcaseModal.css';
 
 interface ViewTestcaseModalProps {
@@ -38,11 +39,11 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
     <ul className="vtm-step-list">
       {items.map((item, index) => {
         const isObject = typeof item !== 'string';
-        const text = isObject ? JSON.stringify(item, null, 2) : item;
+        const text = isObject ? formatStep(item as Record<string, unknown>) : item;
         return (
           <li key={index} className="vtm-step-item">
             <span className="vtm-step-num">{index + 1}</span>
-            {isObject ? (
+            {isObject && text.includes('\n') ? (
               <pre className="vtm-step-code">{text}</pre>
             ) : (
               <span className="vtm-step-text">{text}</span>
@@ -111,17 +112,13 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
           </div>
 
           {/* Preset Conditions */}
-          {tc.preset_conditions.length > 0 && tc.preset_conditions.some(s => s.trim()) && (
+          {tc.preset_conditions.length > 0 && (
             <div className="vtm-section">
               <div className="vtm-section-label">前置条件</div>
-              <ul className="vtm-step-list">
-                {tc.preset_conditions.filter(s => s.trim()).map((item, index) => (
-                  <li key={index} className="vtm-step-item">
-                    <span className="vtm-step-num">{index + 1}</span>
-                    <span className="vtm-step-text">{item}</span>
-                  </li>
-                ))}
-              </ul>
+              {renderStepList(
+                tc.preset_conditions.filter((s: any) => typeof s === 'string' ? s.trim() : true) as (string | object)[],
+                'step'
+              )}
             </div>
           )}
 

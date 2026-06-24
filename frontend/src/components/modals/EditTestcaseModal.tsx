@@ -32,6 +32,13 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
   const [environments, setEnvironments] = useState<GlobalParameter[]>([]);
   const [body, setBody] = useState<string>('');
 
+  const firstEndpointId = (value: TestCase['api_endpoint_id']): number | null => {
+    if (value === null || value === undefined) return null;
+    const first = String(value).split(',')[0]?.trim();
+    const parsed = Number(first);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
   // 加载环境列表
   useEffect(() => {
     if (visible) {
@@ -80,7 +87,8 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
         if ((apiCallStep as any).body) {
           setBody((apiCallStep as any).body);
         } else if (selectedTestcase.api_project_id && selectedTestcase.api_endpoint_id) {
-          loadEndpointBody(selectedTestcase.api_project_id, selectedTestcase.api_endpoint_id);
+          const endpointId = firstEndpointId(selectedTestcase.api_endpoint_id);
+          if (endpointId) loadEndpointBody(selectedTestcase.api_project_id, endpointId);
         } else {
           setBody('');
         }
@@ -90,7 +98,8 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
         setEnvironmentId(undefined);
         // 从关联接口加载 body
         if (selectedTestcase.api_project_id && selectedTestcase.api_endpoint_id) {
-          loadEndpointBody(selectedTestcase.api_project_id, selectedTestcase.api_endpoint_id);
+          const endpointId = firstEndpointId(selectedTestcase.api_endpoint_id);
+          if (endpointId) loadEndpointBody(selectedTestcase.api_project_id, endpointId);
         } else {
           setBody('');
         }
@@ -100,7 +109,9 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
         case_name: selectedTestcase.case_name,
         case_level: selectedTestcase.case_level,
         status: selectedTestcase.status || TestCaseStatus.NOT_RUN,
-        preset_conditions: selectedTestcase.preset_conditions.join('\n'),
+        preset_conditions: selectedTestcase.preset_conditions
+          .filter((s: any) => typeof s === 'string')
+          .join('\n'),
         steps: selectedTestcase.steps
           .filter((step: any) => typeof step === 'string')
           .join('\n'),
@@ -155,9 +166,17 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
       });
     }
 
+    // 处理前置条件：合并 textarea 文本 + 保留现有的 api_call 对象
+    const textPresets = (values.preset_conditions || '')
+      .split('\n')
+      .filter((s: string) => s.trim());
+    const objectPresets = (selectedTestcase?.preset_conditions || [])
+      .filter((s: any) => typeof s !== 'string');
+
     // 调用原始onFinish，传递修改后的数据
     onFinish({
       ...values,
+      preset_conditions: [...textPresets, ...objectPresets],
       steps
     });
   };

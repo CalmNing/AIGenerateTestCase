@@ -9,10 +9,10 @@ from sqlmodel import select, desc, func
 
 from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
-from db.models import Session, TestCase, StatusValue, McpServer
+from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog
 from utils.base_response import Response
 import traceback
-from app.services.api_test_tool import run_endpoint
+from app.services.api_test_tool import run_endpoint, run_endpoint_steps
 from db.models import ApiEndpoint, ApiProject
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
@@ -28,6 +28,57 @@ class TestCasePage(BaseModel):
     model_config = {
         "arbitrary_types_allowed": True,
     }
+
+
+MAX_TESTCASE_EXECUTION_LOGS = 10
+
+
+def _save_execution_log(db_session, testcase: TestCase, result: dict, passed: bool, status: str) -> TestCaseExecutionLog:
+    """保存测试用例执行日志，并清理超出限制的旧日志。"""
+    # 移除超出限制的旧日志
+    existing_logs = db_session.exec(
+        select(TestCaseExecutionLog)
+        .where(TestCaseExecutionLog.testcase_id == testcase.id)
+        .order_by(desc(TestCaseExecutionLog.created_at))
+    ).all()
+    if len(existing_logs) >= MAX_TESTCASE_EXECUTION_LOGS:
+        for old_log in existing_logs[MAX_TESTCASE_EXECUTION_LOGS - 1:]:
+            db_session.delete(old_log)
+
+    log = TestCaseExecutionLog(
+        testcase_id=testcase.id,
+        session_id=testcase.session_id,
+        case_name=testcase.case_name,
+        passed=passed,
+        status=status,
+        result=result,
+        user_id=testcase.user_id,
+    )
+    db_session.add(log)
+    db_session.commit()
+    db_session.refresh(log)
+    return log
+
+
+@router.get("/{session_id}/testcases/{testcase_id}/execution-logs", response_model=Response[List[TestCaseExecutionLog]])
+async def get_execution_logs(
+    session: SessionDep,
+    user: CurrentUser,
+    session_id: int,
+    testcase_id: int,
+):
+    """获取测试用例的执行日志列表。"""
+    testcase = session.get(TestCase, testcase_id)
+    if not testcase or testcase.session_id != session_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+
+    logs = session.exec(
+        select(TestCaseExecutionLog)
+        .where(TestCaseExecutionLog.testcase_id == testcase_id)
+        .order_by(desc(TestCaseExecutionLog.created_at))
+        .limit(MAX_TESTCASE_EXECUTION_LOGS)
+    ).all()
+    return Response(data=list(logs))
 
 
 # 测试用例管理API
@@ -128,6 +179,7 @@ async def generate_testcases(
         selected_skills: Optional[str] = Form(""),
         api_endpoint_id: Optional[str] = Form(""),
         api_project_id: Optional[str] = Form(""),
+        api_endpoint_overrides: Optional[str] = Form(default=None),
 ):
     """生成测试用例"""
     from utils.model_utils import ModelServiceUnavailableError, generate_testcases
@@ -209,27 +261,52 @@ async def generate_testcases(
                 except ValueError:
                     pass
 
+    # 解析 API 端点覆盖配置（用户编辑过的 body/headers/parameters）
+    endpoint_overrides: dict[int, dict] = {}
+    if api_endpoint_overrides:
+        try:
+            raw_overrides = json.loads(api_endpoint_overrides)
+            for eid_str, override in raw_overrides.items():
+                eid = int(eid_str)
+                if eid in api_endpoint_ids:
+                    endpoint_overrides[eid] = override
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.warning("端点覆盖配置解析失败，继续使用数据库默认值")
+
     if api_endpoint_ids:
         api_sections = []
-        for eid in api_endpoint_ids:
+        endpoint_index_to_id = {}
+        for idx, eid in enumerate(api_endpoint_ids, 1):
             try:
                 endpoint_db = session.get(ApiEndpoint, eid)
                 if not endpoint_db:
                     continue
+                endpoint_index_to_id[idx] = eid
                 project_db = session.get(ApiProject, api_project_id and int(api_project_id) or endpoint_db.project_id)
                 ep_lines = []
-                ep_lines.append('===== ' + endpoint_db.name + ' =====')
-                ep_lines.append('??: ' + (project_db.name if project_db else '??'))
-                ep_lines.append('??: ' + endpoint_db.method)
-                ep_lines.append('??: ' + endpoint_db.path)
-                if endpoint_db.headers:
-                    ep_lines.append('???: ' + json.dumps(endpoint_db.headers, ensure_ascii=False, indent=2))
-                if endpoint_db.parameters:
-                    ep_lines.append('??: ' + json.dumps(endpoint_db.parameters, ensure_ascii=False, indent=2))
+                ep_lines.append(f'===== [{idx}] {endpoint_db.name} =====')
+                ep_lines.append('所属项目: ' + (project_db.name if project_db else '未知'))
+                ep_lines.append('请求方法: ' + endpoint_db.method)
+                ep_lines.append('请求路径: ' + endpoint_db.path)
+                if endpoint_db.tags:
+                    ep_lines.append('标签: ' + ', '.join(endpoint_db.tags))
+                if endpoint_db.assertions:
+                    ep_lines.append('默认断言: ' + json.dumps(endpoint_db.assertions, ensure_ascii=False, indent=2))
+                # 使用用户编辑的值优先，否则使用数据库写入
+                override = endpoint_overrides.get(eid, {})
+                ep_headers = override.get("headers") if override.get("headers") is not None else endpoint_db.headers
+                ep_parameters = override.get("parameters") if override.get("parameters") is not None else endpoint_db.parameters
+                ep_body = override.get("body") if override.get("body") is not None else endpoint_db.body
+                if ep_headers:
+                    ep_lines.append('请求头: ' + json.dumps(ep_headers, ensure_ascii=False, indent=2))
+                if ep_parameters:
+                    ep_lines.append('请求参数: ' + json.dumps(ep_parameters, ensure_ascii=False, indent=2))
                 if endpoint_db.request_schema:
                     ep_lines.append('请求 Schema:\n' + json.dumps(endpoint_db.request_schema, ensure_ascii=False, indent=2))
                 if endpoint_db.response_schema:
                     ep_lines.append('响应 Schema:\n' + json.dumps(endpoint_db.response_schema, ensure_ascii=False, indent=2))
+                if ep_body:
+                    ep_lines.append('请求体示例:\n' + ep_body)
                 api_sections.append('\n'.join(ep_lines))
                 logger.info('已加载 API 端点: ' + endpoint_db.name + ' (' + endpoint_db.method + ' ' + endpoint_db.path + ')')
             except Exception as e:
@@ -237,7 +314,7 @@ async def generate_testcases(
 
         if api_sections:
             all_api_info = '\n\n'.join(api_sections)
-            api_context = '\n\n===== 以下 API 接口信息 =====\n' + all_api_info
+            api_context = '\n\n===== 以下 API 接口信息（每个接口前的[数字]为接口编号）=====\n' + all_api_info
 
     effective_requirement = requirement
     if api_context:
@@ -258,6 +335,7 @@ async def generate_testcases(
             mcp_configs=mcp_configs,
             selected_skill_names=selected_skill_names,
             user_id=user.user_id,
+            endpoint_index_to_id=endpoint_index_to_id,
         )
     except ModelServiceUnavailableError as e:
         logger.error(f"生成测试用例失败: {e}")

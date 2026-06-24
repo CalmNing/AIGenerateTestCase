@@ -25,6 +25,7 @@ import {
 import {
   ArrowUpOutlined,
   ArrowDownOutlined,
+  BranchesOutlined,
   CopyOutlined,
   SnippetsOutlined,
   DeleteOutlined,
@@ -424,6 +425,13 @@ function endpointToFormValues(endpoint: ApiEndpoint) {
   };
 }
 
+function formatInferDependencySummary(data?: Record<string, any>) {
+  const addedPostActions = Number(data?.added_post_actions || 0);
+  const replacedFields = Number(data?.replaced_fields || 0);
+  const skippedExisting = Number(data?.skipped_existing || 0);
+  return `依赖推断完成：新增提取 ${addedPostActions} 个，填充字段 ${replacedFields} 个，跳过已有 ${skippedExisting} 个`;
+}
+
 const ApiScenarioTestTool: React.FC = () => {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
@@ -584,6 +592,7 @@ const ApiScenarioTestTool: React.FC = () => {
         api_key: (settings.api_key || '').trim(),
         api_base_url: (settings.api_base_url || '').trim(),
         api_proxy_url: (settings.api_proxy_url || '').trim(),
+        api_model: (settings.api_model || 'deepseek-v4-flash').trim(),
         ollama_url: (settings.ollama_url || '').trim(),
         ollama_model: (settings.ollama_model || '').trim(),
       };
@@ -932,6 +941,63 @@ const ApiScenarioTestTool: React.FC = () => {
       }
     } finally {
       setScenarioGenerating(false);
+    }
+  };
+
+  const handleInferProjectDependencies = async () => {
+    if (!selectedProjectId) return;
+    const currentEndpointId = selectedEndpoint?.id;
+    const currentScenarioId = selectedScenario?.id;
+    try {
+      const res = await apiTestApi.inferProjectDependencies(selectedProjectId);
+      if (res.code !== 200) {
+        message.error(res.message || '依赖推断失败');
+        return;
+      }
+      const [endpointRes, scenarioRes] = await Promise.all([
+        apiTestApi.getEndpoints(selectedProjectId),
+        apiTestApi.getScenarios(selectedProjectId),
+      ]);
+      const nextEndpoints = endpointRes.code === 200 ? endpointRes.data || [] : endpoints;
+      const nextScenarios = scenarioRes.code === 200 ? scenarioRes.data || [] : scenarios;
+      setEndpoints(nextEndpoints);
+      setScenarios(nextScenarios);
+      if (currentEndpointId) {
+        setSelectedEndpoint(nextEndpoints.find((endpoint) => endpoint.id === currentEndpointId) || null);
+      }
+      if (currentScenarioId) {
+        const nextScenario = nextScenarios.find((scenario) => scenario.id === currentScenarioId) || null;
+        setSelectedScenario(nextScenario);
+        selectedScenarioIdRef.current = nextScenario?.id || null;
+      }
+      message.success(formatInferDependencySummary(res.data));
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '依赖推断失败');
+    }
+  };
+
+  const handleInferScenarioDependencies = async () => {
+    if (!selectedScenario || !selectedProjectId) return;
+    try {
+      const res = await apiTestApi.inferScenarioDependencies(selectedScenario.id);
+      if (res.code !== 200) {
+        message.error(res.message || '场景依赖推断失败');
+        return;
+      }
+      const scenarioRes = await apiTestApi.getScenarios(selectedProjectId);
+      if (scenarioRes.code === 200) {
+        const nextScenarios = scenarioRes.data || [];
+        const nextScenario = nextScenarios.find((scenario) => scenario.id === selectedScenario.id) || null;
+        setScenarios(nextScenarios);
+        setSelectedScenario(nextScenario);
+        selectedScenarioIdRef.current = nextScenario?.id || null;
+        if (nextScenario) {
+          scenarioForm.setFieldsValue(scenarioToFormValues(nextScenario, endpoints));
+        }
+      }
+      message.success(formatInferDependencySummary(res.data));
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '场景依赖推断失败');
     }
   };
 
@@ -2245,6 +2311,7 @@ const ApiScenarioTestTool: React.FC = () => {
             />
             <Space wrap style={scenarioActionsStyle}>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveEndpoint}>保存接口</Button>
+              <Button icon={<BranchesOutlined />} onClick={handleInferProjectDependencies}>推断项目依赖</Button>
               <Button icon={<SwapOutlined />} onClick={() => handleReplaceVariables('endpoint')}>替换变量</Button>
               <Button icon={<PlayCircleOutlined />} loading={endpointRunning} onClick={handleRunEndpoint}>调试接口</Button>
               <Button icon={<ExperimentOutlined />} loading={scenarioGenerating} onClick={handleGenerateScenarioTests}>生成接口单测</Button>
@@ -2380,6 +2447,7 @@ const ApiScenarioTestTool: React.FC = () => {
             />
             <Space wrap style={scenarioActionsStyle}>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveScenario}>保存场景</Button>
+              <Button icon={<BranchesOutlined />} onClick={handleInferScenarioDependencies}>推断场景依赖</Button>
               <Button icon={<SwapOutlined />} onClick={() => handleReplaceVariables('scenario')}>替换变量</Button>
               <Button icon={<PlayCircleOutlined />} loading={running} onClick={handleRunScenario}>串行执行</Button>
               <Button
