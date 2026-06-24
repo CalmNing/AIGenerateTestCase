@@ -158,8 +158,16 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
     // 添加api_call步骤（如果启用）
     if (apiCallEnabled && selectedTestcase?.api_endpoint_id) {
       const validHeaders = headers.filter(h => h.key.trim() !== '');
+      // 从现有 api_call 步骤中提取 endpoint_id，或从 api_endpoint_id 取第一个
+      const existingApiCall = Array.isArray(selectedTestcase.steps)
+        ? selectedTestcase.steps.find((s: any) => typeof s === 'object' && s.type === 'api_call')
+        : undefined;
+      const existingEndpointId = existingApiCall
+        ? (existingApiCall as any).endpoint_id
+        : firstEndpointId(selectedTestcase.api_endpoint_id);
       steps.push({
         type: 'api_call',
+        endpoint_id: existingEndpointId,
         headers: validHeaders,
         body: body || undefined,
         environment_id: environmentId
