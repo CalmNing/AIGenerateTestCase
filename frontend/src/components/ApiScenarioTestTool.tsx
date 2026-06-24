@@ -228,6 +228,21 @@ function formatScenarioResultRecordLabel(record: ApiScenarioResult) {
   return `${new Date(record.created_at).toLocaleString()} - ${passed}/${total}`;
 }
 
+function formatScenarioResultTime(record: ApiScenarioResult | undefined) {
+  if (!record) return '';
+  return new Date(record.created_at).toLocaleString();
+}
+
+function latestScenarioResultLabel(record: ApiScenarioResult | undefined) {
+  if (!record) return '未执行';
+  return record.passed ? '通过' : '不通过';
+}
+
+function latestScenarioResultColor(record: ApiScenarioResult | undefined) {
+  if (!record) return 'default';
+  return record.passed ? 'success' : 'error';
+}
+
 function endpointLabel(endpoint: ApiEndpoint): string {
   return `${endpoint.name || '未命名接口'} · ${endpoint.method} ${endpoint.path || endpoint.url || ''}`;
 }
@@ -536,7 +551,11 @@ const ApiScenarioTestTool: React.FC = () => {
       apiTestApi.getScenarios(projectId),
     ]);
     if (endpointRes.code === 200) setEndpoints(endpointRes.data || []);
-    if (scenarioRes.code === 200) setScenarios(scenarioRes.data || []);
+    if (scenarioRes.code === 200) {
+      const nextScenarios = scenarioRes.data || [];
+      setScenarios(nextScenarios);
+      loadLatestScenarioResults(nextScenarios).catch(() => message.error('加载场景最新执行结果失败'));
+    }
     setSelectedEndpoint(null);
     setSelectedScenario(null);
     selectedScenarioIdRef.current = null;
@@ -566,6 +585,24 @@ const ApiScenarioTestTool: React.FC = () => {
     }
 
     return records;
+  };
+
+  const loadLatestScenarioResults = async (items: ApiScenario[]) => {
+    if (items.length === 0) return;
+    const pairs = await Promise.all(
+      items.map(async (scenario) => {
+        const res = await apiTestApi.getScenarioResults(scenario.id, 1);
+        if (res.code !== 200) return [scenario.id, []] as const;
+        return [scenario.id, res.data || []] as const;
+      }),
+    );
+    setScenarioResultHistory((history) => {
+      const next = { ...history };
+      pairs.forEach(([scenarioId, records]) => {
+        next[scenarioId] = records;
+      });
+      return next;
+    });
   };
 
   const loadEnvironments = async () => {
@@ -2106,10 +2143,23 @@ const ApiScenarioTestTool: React.FC = () => {
                             <List.Item.Meta
                               title={scenario.name}
                               description={
-                                <span className="scenario-item-steps">
-                                  <PlayCircleOutlined style={{ fontSize: 11 }} />
-                                  {scenario.steps?.length || 0} 个步骤
-                                </span>
+                                <Space direction="vertical" size={2}>
+                                  <span className="scenario-item-steps">
+                                    <PlayCircleOutlined style={{ fontSize: 11 }} />
+                                    {scenario.steps?.length || 0} 个步骤
+                                  </span>
+                                  {(() => {
+                                    const latestRecord = scenarioResultHistory[scenario.id]?.[0];
+                                    return (
+                                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                                        <Tag color={latestScenarioResultColor(latestRecord)} style={{ margin: 0 }}>
+                                          {latestScenarioResultLabel(latestRecord)}
+                                        </Tag>
+                                        {latestRecord && <span style={{ color: 'var(--color-text-tertiary)' }}>{formatScenarioResultTime(latestRecord)}</span>}
+                                      </span>
+                                    );
+                                  })()}
+                                </Space>
                               }
                             />
                           </List.Item>
