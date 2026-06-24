@@ -45,6 +45,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const [smartMatching, setSmartMatching] = useState(false);
   const [overrideEditorVisible, setOverrideEditorVisible] = useState(false);
   const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
+  const [previewVisible, setPreviewVisible] = useState(false);
 
   const loadApiProjects = useCallback(async () => {
     try {
@@ -92,6 +93,14 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
 
   const handleEndpointChange = (vals: number[]) => {
     if (onApiEndpointChange) onApiEndpointChange(vals);
+  };
+
+  const handleGenerateWithPreview = () => {
+    if (selectedApiEndpointId && selectedApiEndpointId.length > 0) {
+      setPreviewVisible(true);
+    } else {
+      onGenerate();
+    }
   };
 
   const handleSmartMatch = async () => {
@@ -299,7 +308,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
               {/* Generate Button */}
               <button
                 className={`tcg-generate-btn ${loading ? 'is-loading' : ''}`}
-                onClick={onGenerate}
+                onClick={handleGenerateWithPreview}
                 disabled={!requirement.trim() || loading}
               >
                 {loading ? (
@@ -444,6 +453,57 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
               </div>
             );
           })}
+        </Modal>
+
+        {/* Generation Preview Confirmation Modal */}
+        <Modal
+          title="确认生成测试用例"
+          open={previewVisible}
+          onCancel={() => setPreviewVisible(false)}
+          width={640}
+          footer={[
+            <button key="cancel" className="tcg-smart-btn" onClick={() => setPreviewVisible(false)}>
+              取消
+            </button>,
+            <button
+              key="confirm"
+              className="tcg-smart-btn"
+              style={{ background: 'var(--color-primary)', color: '#fff', border: 'none' }}
+              onClick={() => {
+                setPreviewVisible(false);
+                onGenerate();
+              }}
+            >
+              确认生成
+            </button>,
+          ]}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>
+              <ApiOutlined style={{ marginRight: 8 }} />已选接口（{selectedApiEndpointId?.length || 0} 个）
+            </div>
+            {selectedApiEndpointId?.map((eid) => {
+              const ep = apiEndpoints.find(e => e.id === eid);
+              if (!ep) return null;
+              const methodColor = methodColorMap[ep.method?.toUpperCase()] || 'default';
+              const hasOverrides = apiEndpointOverrides?.[eid] && (
+                apiEndpointOverrides[eid]?.body ||
+                (apiEndpointOverrides[eid]?.headers?.length || 0) > 0 ||
+                (apiEndpointOverrides[eid]?.parameters?.length || 0) > 0
+              );
+              return (
+                <div key={eid} style={{ padding: '8px 0', borderBottom: '1px solid var(--color-border-secondary)' }}>
+                  <Tag color={methodColor}>{ep.method?.toUpperCase()}</Tag>
+                  <span style={{ fontWeight: 500 }}>{ep.path}</span>
+                  <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-tertiary)' }}>{ep.name}</span>
+                  {hasOverrides && <Tag color="warning" style={{ marginLeft: 8 }}>已自定义参数</Tag>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
+            AI 将根据以上接口信息和您的需求描述生成包含可执行 API 调用步骤的测试用例。
+          </div>
         </Modal>
       </div>
 
