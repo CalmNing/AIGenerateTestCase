@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, TestCaseExecutionLog, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiImportResult, ApiSyncResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -100,15 +100,13 @@ export const testcaseApi = {
     api_key?: string;
     api_base_url?: string;
     api_proxy_url?: string;
-    api_model?: string;
     ollama_url?: string;
     ollama_model?: string;
   }, imageBase64?: string | null,
     moduleId?: number | null,
     selectedSkills?: string[],
     apiEndpointId?: number[] | number | null,
-    apiProjectId?: number | null,
-    apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }> | null): Promise<ApiResponse<TestCase[]>> => {
+    apiProjectId?: number | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -136,9 +134,6 @@ export const testcaseApi = {
       }
       if (modelConfig.api_proxy_url) {
         formData.append('api_proxy_url', modelConfig.api_proxy_url);
-      }
-      if (modelConfig.api_model) {
-        formData.append('api_model', modelConfig.api_model);
       }
       if (modelConfig.ollama_url) {
         formData.append('ollama_url', modelConfig.ollama_url);
@@ -188,7 +183,7 @@ export const testcaseApi = {
 
     // 发送请求，axios会自动设置正确的Content-Type头
     // 包括multipart/form-data和边界信息
-    // 传递关联的 API 接口 ID（多个接口以逗号分隔）
+    // ?????API??ID?????????ID?
     if (apiEndpointId !== null && apiEndpointId !== undefined) {
       const endpointStr = Array.isArray(apiEndpointId) ? apiEndpointId.join(",") : String(apiEndpointId);
       if (endpointStr) {
@@ -197,9 +192,6 @@ export const testcaseApi = {
     }
     if (apiProjectId !== null && apiProjectId !== undefined) {
       formData.append("api_project_id", String(apiProjectId));
-    }
-    if (apiEndpointOverrides && Object.keys(apiEndpointOverrides).length > 0) {
-      formData.append("api_endpoint_overrides", JSON.stringify(apiEndpointOverrides));
     }
 
     return api.post(`/testcases/${sessionId}/testcases`, formData);
@@ -224,15 +216,9 @@ export const testcaseApi = {
   batchMoveTestcase: (testcaseIds: number[], sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
     api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId }),
 
-  /** 执行测试用例的 API 调用 */
-  executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any; log_id?: number }>> =>
+  /** ?????????? API ?? */
+  executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any }>> =>
     api.post(`/testcases/${sessionId}/testcases/${testcaseId}/execute`),
-
-  getExecutionLogs: (sessionId: number, testcaseId: number): Promise<ApiResponse<TestCaseExecutionLog[]>> =>
-    api.get(`/testcases/${sessionId}/testcases/${testcaseId}/execution-logs`),
-
-  inferDependencies: (sessionId: number, testcaseId: number): Promise<ApiResponse<Record<string, any>>> =>
-    api.post(`/testcases/${sessionId}/testcases/${testcaseId}/infer-dependencies`),
 };
 
 // 模块管理API
@@ -368,8 +354,6 @@ export const skillsApi = {
 export const configApi = {
   getLanhuCookie: (): Promise<ApiResponse<{ cookie: string; has_cookie: boolean }>> => api.get('/config/lanhu-cookie'),
   setLanhuCookie: (cookie: string): Promise<ApiResponse> => api.post('/config/lanhu-cookie', { cookie }),
-  listModels: (apiKey: string, apiBaseUrl: string): Promise<ApiResponse<{ id: string; owned_by: string }[]>> =>
-    api.get('/config/models', { params: { api_key: apiKey, api_base_url: apiBaseUrl } }),
 };
 
 // Mock配置API
@@ -393,8 +377,6 @@ export const apiTestApi = {
     api.put(`/api-test/projects/${projectId}`, project),
   deleteProject: (projectId: number): Promise<ApiResponse> => api.delete(`/api-test/projects/${projectId}`),
   syncProject: (projectId: number): Promise<ApiResponse<ApiSyncResult>> => api.post(`/api-test/projects/${projectId}/sync`),
-  inferProjectDependencies: (projectId: number): Promise<ApiResponse<Record<string, any>>> =>
-    api.post(`/api-test/projects/${projectId}/infer-dependencies`),
   importOpenApi: (data: { name?: string; url?: string; file?: File | null }): Promise<ApiResponse<ApiImportResult>> => {
     const formData = new FormData();
     if (data.name) formData.append('name', data.name);
@@ -422,11 +404,11 @@ export const apiTestApi = {
   updateScenario: (scenarioId: number, scenario: Partial<ApiScenario>): Promise<ApiResponse<ApiScenario>> =>
     api.put(`/api-test/scenarios/${scenarioId}`, scenario),
   deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
-  inferScenarioDependencies: (scenarioId: number): Promise<ApiResponse<Record<string, any>>> =>
-    api.post(`/api-test/scenarios/${scenarioId}/infer-dependencies`),
-  getScenarioResults: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
-    api.get(`/api-test/scenarios/${scenarioId}/results`),
+  getScenarioResults: (scenarioId: number, limit?: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
+    api.get(`/api-test/scenarios/${scenarioId}/results${limit ? `?limit=${limit}` : ''}`),
   runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`),
+  runScenarios: (projectId: number, payload: ApiScenarioBatchRunRequest): Promise<ApiResponse<ApiScenarioBatchRunResult>> =>
+    api.post(`/api-test/projects/${projectId}/scenarios/run-batch`, payload),
   matchEndpoint: (data: { requirement: string; project_id?: number }): Promise<ApiResponse<{ matches: any[]; total_matches: number }>> =>
     api.post("/api-test/match-endpoint", data),
 };

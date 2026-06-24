@@ -51,6 +51,27 @@ class RunEndpointRequest(BaseModel):
     assertions: Optional[List[dict]] = None
 
 
+class RunScenarioBatchRequest(BaseModel):
+    scenario_ids: List[int] = Field(default_factory=list)
+    run_all: bool = False
+
+
+class ScenarioBatchResultItem(BaseModel):
+    scenario_id: int
+    scenario_name: str
+    record_id: int
+    passed: bool
+    created_at: str
+    result: dict
+
+
+class RunScenarioBatchResponse(BaseModel):
+    total: int
+    passed: int
+    failed: int
+    results: List[ScenarioBatchResultItem]
+
+
 class GenerateBodyRequest(BaseModel):
     instruction: str = ""
     current_body: str = ""
@@ -538,6 +559,104 @@ def list_scenario_results(
     return Response(data=results)
 
 
+@router.post("/projects/{project_id}/scenarios/run-batch", response_model=Response[RunScenarioBatchResponse])
+async def run_api_scenarios_batch(
+    project_id: int,
+    request: RunScenarioBatchRequest,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    project = session.get(ApiProject, project_id)
+    if not project or project.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
+
+    if not request.run_all and not request.scenario_ids:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="请选择要执行的场景")
+
+    query = (
+        select(ApiScenario)
+        .where(ApiScenario.project_id == project_id)
+        .where(ApiScenario.user_id == user.user_id)
+        .order_by(ApiScenario.updated_at.desc(), ApiScenario.id.desc())
+    )
+    scenarios = session.exec(query).all()
+
+    if not request.run_all:
+        requested_ids = set(request.scenario_ids)
+        found_ids = {scenario.id for scenario in scenarios}
+        missing_ids = [scenario_id for scenario_id in request.scenario_ids if scenario_id not in found_ids]
+        if missing_ids:
+            missing_text = ", ".join(str(scenario_id) for scenario_id in missing_ids)
+            return Response(
+                code=status.HTTP_400_BAD_REQUEST,
+                message=f"场景不存在或无权限: {missing_text}",
+            )
+        scenarios = [scenario for scenario in scenarios if scenario.id in requested_ids]
+
+    result_items: List[ScenarioBatchResultItem] = []
+    passed_count = 0
+
+    for scenario in scenarios:
+        try:
+            result = await run_scenario(session, scenario, project)
+        except Exception as exc:
+            result = {"passed": False, "error": str(exc), "steps": []}
+
+        record = _store_scenario_result(session, scenario, project, user.user_id, result)
+        if record.passed:
+            passed_count += 1
+        result_items.append(
+            ScenarioBatchResultItem(
+                scenario_id=scenario.id,
+                scenario_name=scenario.name,
+                record_id=record.id,
+                passed=record.passed,
+                created_at=record.created_at.isoformat(),
+                result=record.result,
+            )
+        )
+
+    response = RunScenarioBatchResponse(
+        total=len(result_items),
+        passed=passed_count,
+        failed=len(result_items) - passed_count,
+        results=result_items,
+    )
+    return Response(data=response, message="场景批量执行完成")
+
+
+def _store_scenario_result(
+    session: SessionDep,
+    scenario: ApiScenario,
+    project: ApiProject,
+    user_id: str,
+    result: dict,
+) -> ApiScenarioResult:
+    record = ApiScenarioResult(
+        scenario_id=scenario.id,
+        project_id=project.id,
+        scenario_name=scenario.name,
+        passed=bool(result.get("passed")),
+        result=result,
+        user_id=user_id,
+    )
+    session.add(record)
+    session.flush()
+
+    records = session.exec(
+        select(ApiScenarioResult)
+        .where(ApiScenarioResult.scenario_id == scenario.id)
+        .where(ApiScenarioResult.user_id == user_id)
+        .order_by(ApiScenarioResult.created_at.desc(), ApiScenarioResult.id.desc())
+    ).all()
+    for old_record in records[MAX_SCENARIO_RESULT_RECORDS:]:
+        session.delete(old_record)
+
+    session.commit()
+    session.refresh(record)
+    return record
+
+
 @router.post("/scenarios/{scenario_id}/run", response_model=Response[ApiScenarioResult])
 async def run_api_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
     scenario = session.get(ApiScenario, scenario_id)
@@ -547,26 +666,5 @@ async def run_api_scenario(scenario_id: int, session: SessionDep, user: CurrentU
     if not project or project.user_id != user.user_id:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     result = await run_scenario(session, scenario, project)
-    record = ApiScenarioResult(
-        scenario_id=scenario.id,
-        project_id=project.id,
-        scenario_name=scenario.name,
-        passed=bool(result.get("passed")),
-        result=result,
-        user_id=user.user_id,
-    )
-    session.add(record)
-    session.flush()
-
-    records = session.exec(
-        select(ApiScenarioResult)
-        .where(ApiScenarioResult.scenario_id == scenario.id)
-        .where(ApiScenarioResult.user_id == user.user_id)
-        .order_by(ApiScenarioResult.created_at.desc(), ApiScenarioResult.id.desc())
-    ).all()
-    for old_record in records[MAX_SCENARIO_RESULT_RECORDS:]:
-        session.delete(old_record)
-
-    session.commit()
-    session.refresh(record)
+    record = _store_scenario_result(session, scenario, project, user.user_id, result)
     return Response(data=record, message="场景执行完成")
