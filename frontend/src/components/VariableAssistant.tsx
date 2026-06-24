@@ -66,9 +66,13 @@ const VariableAssistant: React.FC<VariableAssistantProps> = ({
         const value = activeElement.value;
         activeElement.value =
           value.slice(0, start) + syntax + value.slice(end);
-        // Trigger React onChange
+        // Trigger React onChange - use correct prototype based on element type
+        const prototype =
+          activeElement.tagName === 'INPUT'
+            ? window.HTMLInputElement.prototype
+            : window.HTMLTextAreaElement.prototype;
         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
+          prototype,
           'value'
         )?.set;
         if (nativeInputValueSetter) {
@@ -82,7 +86,9 @@ const VariableAssistant: React.FC<VariableAssistantProps> = ({
         message.success(`已插入: ${syntax}`);
         onInsert?.(syntax);
       } else {
-        navigator.clipboard.writeText(syntax);
+        navigator.clipboard.writeText(syntax).catch(() => {
+          message.error('复制失败');
+        });
         message.success('已复制到剪贴板');
       }
     },
@@ -90,7 +96,9 @@ const VariableAssistant: React.FC<VariableAssistantProps> = ({
   );
 
   const handleCopy = useCallback((syntax: string) => {
-    navigator.clipboard.writeText(syntax);
+    navigator.clipboard.writeText(syntax).catch(() => {
+      message.error('复制失败');
+    });
     message.success('已复制到剪贴板');
   }, []);
 
