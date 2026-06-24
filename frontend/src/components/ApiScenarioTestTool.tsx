@@ -458,6 +458,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [copyingScenarioId, setCopyingScenarioId] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
   const [scenarioResultHistory, setScenarioResultHistory] = useState<Record<number, ApiScenarioResult[]>>({});
+  const [selectedScenarioIds, setSelectedScenarioIds] = useState<number[]>([]);
   const [selectedScenarioResultRecordId, setSelectedScenarioResultRecordId] = useState<number | null>(null);
   const [endpointResult, setEndpointResult] = useState<any>(null);
   const [bodyPreview, setBodyPreview] = useState('');
@@ -562,6 +563,7 @@ const ApiScenarioTestTool: React.FC = () => {
     setResult(null);
     setScenarioResultHistory({});
     setSelectedScenarioResultRecordId(null);
+    setSelectedScenarioIds([]);
     setEndpointResult(null);
   };
 
@@ -693,6 +695,21 @@ const ApiScenarioTestTool: React.FC = () => {
     loadScenarioResults(scenario.id, true).catch(() => message.error('加载场景执行结果失败'));
   };
 
+  const toggleScenarioSelection = (scenarioId: number, checked: boolean) => {
+    setSelectedScenarioIds((ids) => {
+      if (checked) return ids.includes(scenarioId) ? ids : [...ids, scenarioId];
+      return ids.filter((id) => id !== scenarioId);
+    });
+  };
+
+  const selectAllScenarios = () => {
+    setSelectedScenarioIds(scenarios.map((scenario) => scenario.id));
+  };
+
+  const clearScenarioSelection = () => {
+    setSelectedScenarioIds([]);
+  };
+
   const handleImport = async () => {
     if (!importFile && !importUrl.trim()) {
       message.warning('请上传 Swagger/OpenAPI 文件或填写 URL');
@@ -770,6 +787,7 @@ const ApiScenarioTestTool: React.FC = () => {
     selectedScenarioIdRef.current = null;
     setResult(null);
     setSelectedScenarioResultRecordId(null);
+    setSelectedScenarioIds([]);
     setEndpointResult(null);
   };
 
@@ -799,6 +817,7 @@ const ApiScenarioTestTool: React.FC = () => {
           setResult(null);
           setScenarioResultHistory({});
           setSelectedScenarioResultRecordId(null);
+          setSelectedScenarioIds([]);
           setEndpointResult(null);
         }
         message.success('接口项目已删除');
@@ -2117,7 +2136,14 @@ const ApiScenarioTestTool: React.FC = () => {
                   label: `场景 ${scenarios.length}`,
                   children: (
                     <div style={assetTabPaneStyle}>
-                      <Button icon={<PlusOutlined />} onClick={handleCreateScenario} block>新建场景</Button>
+                      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                        <Button icon={<PlusOutlined />} onClick={handleCreateScenario} block>新建场景</Button>
+                        <Space wrap size={6}>
+                          <Button size="small" onClick={selectAllScenarios} disabled={scenarios.length === 0}>全选</Button>
+                          <Button size="small" onClick={clearScenarioSelection} disabled={selectedScenarioIds.length === 0}>取消选择</Button>
+                          <Tag style={{ margin: 0 }}>已选 {selectedScenarioIds.length}</Tag>
+                        </Space>
+                      </Space>
                       <List
                         style={assetListScrollStyle}
                         dataSource={scenarios}
@@ -2140,6 +2166,12 @@ const ApiScenarioTestTool: React.FC = () => {
                             ]}
                             onClick={() => selectScenario(scenario)}
                           >
+                            <Checkbox
+                              checked={selectedScenarioIds.includes(scenario.id)}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => toggleScenarioSelection(scenario.id, event.target.checked)}
+                              style={{ marginRight: 8 }}
+                            />
                             <List.Item.Meta
                               title={scenario.name}
                               description={
@@ -2442,6 +2474,7 @@ const ApiScenarioTestTool: React.FC = () => {
                     const deletedScenarioId = selectedScenario.id;
                     await apiTestApi.deleteScenario(deletedScenarioId);
                     setScenarios(scenarios.filter((scenario) => scenario.id !== deletedScenarioId));
+                    setSelectedScenarioIds((ids) => ids.filter((id) => id !== deletedScenarioId));
                     setSelectedScenario(null);
                     selectedScenarioIdRef.current = null;
                     setResult(null);
