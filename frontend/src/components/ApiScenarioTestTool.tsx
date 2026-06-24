@@ -602,7 +602,7 @@ const ApiScenarioTestTool: React.FC = () => {
     setScenarioResultHistory((history) => {
       const next = { ...history };
       pairs.forEach(([scenarioId, records]) => {
-        next[scenarioId] = records;
+        next[scenarioId] = [...records];
       });
       return next;
     });
