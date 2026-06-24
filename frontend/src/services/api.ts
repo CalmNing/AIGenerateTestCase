@@ -298,10 +298,23 @@ export const globalParameterApi = {
   extractAndSaveVariables: (data: ExtractVariablesRequest): Promise<ApiResponse<Record<string, string>>> => api.post('/global-parameters/extract-and-save', data)
 };
 
+interface TestVariableRequest {
+  expression: string;
+  environment_id?: number;
+}
+
+interface TestVariableResponse {
+  expression: string;
+  result: string;
+  unresolved: string[];
+}
+
 // 代理转发API
 export const proxyApi = {
   // 转发请求
-  forwardRequest: (request: ProxyRequest): Promise<ProxyResponse<ApiResponse<any>>> => api.post('/proxy/forward', request)
+  forwardRequest: (request: ProxyRequest): Promise<ProxyResponse<ApiResponse<any>>> => api.post('/proxy/forward', request),
+  // 测试变量
+  testVariable: (request: TestVariableRequest): Promise<ApiResponse<TestVariableResponse>> => api.post('/proxy/test-variable', request)
 };
 
 // 定时任务API
