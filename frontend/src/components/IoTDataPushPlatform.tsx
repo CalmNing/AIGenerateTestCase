@@ -6,6 +6,7 @@ import { json } from '@codemirror/lang-json';
 import { savedRequestApi, globalParameterApi, proxyApi } from '../services/api';
 import { SavedRequest as SavedRequestType } from '../types';
 import FileUpload, { UploadedFileResult } from './FileUpload';
+import VariableAssistant from './VariableAssistant';
 import './IoTDataPushPlatform.css';
 
 interface HeaderItem {
@@ -1271,37 +1272,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
             <div className="iot-panel-header">
               <span className="iot-panel-header-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 请求体
-                <Tooltip
-                  title={
-                    <div style={{ maxWidth: 660, fontSize: 12, lineHeight: 1.8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>1. 内置函数 {'{{$function}}'}</div>
-                      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                        <tbody>
-                          <tr><td style={{ whiteSpace: 'nowrap', paddingRight: 12 }}><code>{'{{$timestamp}}'}</code></td><td>毫秒时间戳</td></tr>
-                          <tr><td><code>{'{{$now}}'}</code></td><td>秒级时间戳</td></tr>
-                          <tr><td><code>{'{{$date}}'}</code></td><td>当前日期 (YYYY-MM-DD)</td></tr>
-                          <tr><td><code>{"{{$date('YYYY-MM-DD HH:mm:ss')}}"}</code></td><td>自定义格式日期</td></tr>
-                          <tr><td><code>{'{{$randomInt}}'}</code></td><td>0~100 随机整数</td></tr>
-                          <tr><td><code>{'{{$randomInt(1,1000)}}'}</code></td><td>指定范围随机整数</td></tr>
-                          <tr><td><code>{'{{$uuid}}'}</code></td><td>UUID v4</td></tr>
-                        </tbody>
-                      </table>
-                      <div style={{ fontWeight: 600, marginTop: 8, marginBottom: 4 }}>2. JS 表达式 {'{{@expression}}'}</div>
-                      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                        <tbody>
-                          <tr><td style={{ whiteSpace: 'nowrap', paddingRight: 12 }}><code>{'{{@Date.now()}}'}</code></td><td>JS 时间戳</td></tr>
-                          <tr><td><code>{'{{@Math.random().toFixed(4)}}'}</code></td><td>随机小数</td></tr>
-                          <tr><td><code>{'{{@new Date().toISOString()}}'}</code></td><td>ISO 日期</td></tr>
-                          <tr><td><code>{"{{@'test_' + Math.floor(Math.random()*1000)}}"}</code></td><td>拼接表达式</td></tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  }
-                  overlayClassName="iot-tooltip"
-                  overlayInnerStyle={{ maxWidth: 680 }}
-                >
-                  <QuestionCircleOutlined style={{ color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 13 }} />
-                </Tooltip>
               </span>
               <Button
                 type="text"
@@ -1595,6 +1565,11 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>
+
+      <VariableAssistant
+        environmentId={currentEnvironmentId ? parseInt(currentEnvironmentId) || undefined : undefined}
+        environmentVariables={getCurrentEnvironment().parameters.filter(p => p.key).map(p => ({ key: p.key, value: p.value }))}
+      />
     </div>
   );
 };
