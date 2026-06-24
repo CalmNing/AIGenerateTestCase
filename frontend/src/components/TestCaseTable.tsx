@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Table, Button, TableProps, message, Modal, Tooltip } from 'antd';
+import { Table, Button, TableProps, message, Modal, Tooltip, Tag } from 'antd';
 import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined, HistoryOutlined, BranchesOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../types';
 
@@ -68,6 +68,43 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (level: number) => {
         const cls = `tcm-level-badge tcm-level-badge--${level || 4}`;
         return <span className={cls}>P{level || 4}</span>;
+      },
+    },
+    {
+      title: '接口',
+      key: 'api_steps',
+      width: 200,
+      render: (_: any, record: TestCase) => {
+        // 收集所有 api_call 步骤（preset_conditions + steps）
+        const allSteps = [
+          ...((record.preset_conditions || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
+          ...((record.steps || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
+        ];
+        if (allSteps.length === 0) {
+          if (!record.api_endpoint_id) return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
+          const ids = String(record.api_endpoint_id).split(',').map(s => s.trim()).filter(Boolean);
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {ids.map((id, i) => (
+                <Tag key={i} color="default" style={{ fontSize: 11, margin: 0 }}>
+                  <ApiOutlined style={{ marginRight: 4 }} />接口 #{id}
+                </Tag>
+              ))}
+            </div>
+          );
+        }
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {allSteps.map((step: any, i: number) => (
+              <Tooltip key={i} title={step.description || step.name || `API 步骤 ${i + 1}`}>
+                <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer' }}>
+                  <ApiOutlined style={{ marginRight: 4 }} />
+                  {step.description || step.name || `步骤 ${i + 1}`}
+                </Tag>
+              </Tooltip>
+            ))}
+          </div>
+        );
       },
     },
     {
