@@ -14,6 +14,7 @@ from db.db import get_db
 from db.models import GlobalParameter, MockConfig
 from app.deps import CurrentUser
 from app.permissions import Permission, get_user_permissions
+from utils.base_response import Response
 from utils.js_expression import eval_js_expression
 
 router = APIRouter(prefix="/proxy", tags=["proxy"])
@@ -378,8 +379,8 @@ async def test_variable(
     # 执行变量替换
     result = substitute_variables(request.expression, param_map, unresolved)
 
-    return {
+    return Response(data={
         "expression": request.expression,
         "result": result,
         "unresolved": list(unresolved) if unresolved else [],
-    }
+    })
