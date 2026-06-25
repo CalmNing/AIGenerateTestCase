@@ -497,6 +497,15 @@ def list_scenarios(project_id: int, session: SessionDep, user: CurrentUser):
     return Response(data=scenarios)
 
 
+@router.get("/scenarios/{scenario_id}", response_model=Response[ApiScenario])
+def get_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
+    """获取场景详情"""
+    scenario = session.get(ApiScenario, scenario_id)
+    if not scenario or scenario.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
+    return Response(data=scenario)
+
+
 @router.post("/projects/{project_id}/scenarios", response_model=Response[ApiScenario])
 def create_scenario(project_id: int, scenario: ApiScenario, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
