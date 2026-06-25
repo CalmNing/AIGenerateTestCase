@@ -175,8 +175,14 @@ def _best_matching_create_endpoint(
     return candidates_sorted[0] if candidates_sorted else None
 
 
+class ScenarioStepSummary(BaseModel):
+    method: str = ""
+    path: str = ""
+    name: str = ""
+
+
 class TestCasePage(BaseModel):
-    items: List[TestCase]
+    items: List[dict]
     totalNumber: int = Field(0, description="总条数")
     passed: int = Field(0, description="已通过的用例数")
     failed: int = Field(0, description="未通过的用例数")
@@ -394,6 +400,32 @@ def get_testcases(
         query = query.where(TestCase.bug_id != None)
 
     testcases_db = session.exec(query.offset(offset).limit(limit)).all()
+
+    # 批量加载关联场景的步骤摘要
+    scenario_ids = [tc.scenario_id for tc in testcases_db if tc.scenario_id]
+    scenario_steps_map: dict[int, list[dict]] = {}
+    if scenario_ids:
+        scenarios = session.exec(
+            select(ApiScenario).where(ApiScenario.id.in_(scenario_ids))
+        ).all()
+        for sc in scenarios:
+            steps_summary = []
+            for step in (sc.steps or []):
+                if isinstance(step, dict):
+                    steps_summary.append({
+                        "method": step.get("method", ""),
+                        "path": step.get("path") or step.get("url", ""),
+                        "name": step.get("name") or step.get("endpoint_name", ""),
+                    })
+            scenario_steps_map[sc.id] = steps_summary
+
+    # 附加场景步骤摘要到用例
+    tc_items = []
+    for tc in testcases_db:
+        tc_dict = tc.model_dump()
+        tc_dict["scenario_steps"] = scenario_steps_map.get(tc.scenario_id, []) if tc.scenario_id else []
+        tc_items.append(tc_dict)
+
     # 构建基础查询条件
     count_query_base = [TestCase.session_id == session_id]
     if module_id is not None:
@@ -421,7 +453,7 @@ def get_testcases(
     totalBugs = session.scalar(select(func.count()).where(*total_bugs_query))
 
     testcases = TestCasePage(
-        items=testcases_db,
+        items=tc_items,
         totalNumber=totalNumber,
         passed=passed,
         failed=failed,
