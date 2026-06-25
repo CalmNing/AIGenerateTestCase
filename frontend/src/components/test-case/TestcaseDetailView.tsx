@@ -1,7 +1,7 @@
 import React from 'react';
 import { BugOutlined } from '@ant-design/icons';
-import { TestCase, TestCaseStatus } from '../types';
-import { formatStep } from '../utils/stepUtils';
+import { TestCase, TestCaseStatus } from '../../types';
+import { formatStep } from '../../utils/stepUtils';
 
 interface TestcaseDetailViewProps {
   testcase: TestCase;

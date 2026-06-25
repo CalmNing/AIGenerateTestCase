@@ -3,8 +3,8 @@ import { Modal, Tabs } from 'antd';
 import { CheckCircleOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 import { TestCase } from '../../types';
 import { configApi } from '../../services/api';
-import TestcaseDetailView from '../TestcaseDetailView';
-import TestcaseScenarioView from '../TestcaseScenarioView';
+import TestcaseDetailView from '../test-case/TestcaseDetailView';
+import TestcaseScenarioView from '../test-case/TestcaseScenarioView';
 import './ViewTestcaseModal.css';
 
 interface ViewTestcaseModalProps {

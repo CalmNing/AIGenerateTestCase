@@ -6,8 +6,8 @@ import {
   EyeOutlined,
   DeleteOutlined,
 } from '@ant-design/icons';
-import { apiTestApi } from '../services/api';
-import { ApiScenario, ApiScenarioStep } from '../types';
+import { apiTestApi } from '../../services/api';
+import { ApiScenario, ApiScenarioStep } from '../../types';
 import './TestcaseScenarioView.css';
 
 interface TestcaseScenarioViewProps {

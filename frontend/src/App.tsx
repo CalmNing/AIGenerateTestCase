@@ -15,15 +15,15 @@ interface Environment {
   is_default?: boolean;
 }
 import HomePage from './components/HomePage';
-import IoTDataPushPlatform from './components/IoTDataPushPlatform';
-import IoTMockPlatform from './components/IoTMockPlatform';
+import IoTDataPushPlatform from './components/iot/IoTDataPushPlatform';
+import IoTMockPlatform from './components/iot/IoTMockPlatform';
 import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
-import TestCaseGenerator from './components/TestCaseGenerator';
-import TestCaseManager from './components/TestCaseManager';
-import SessionApiConfig from './components/SessionApiConfig';
+import TestCaseGenerator from './components/test-case/TestCaseGenerator';
+import TestCaseManager from './components/test-case/TestCaseManager';
+import SessionApiConfig from './components/api/SessionApiConfig';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
-import ApiScenarioTestTool from './components/ApiScenarioTestTool';
+import ApiScenarioTestTool from './components/api/ApiScenarioTestTool';
 import VariableAssistant from './components/VariableAssistant';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';

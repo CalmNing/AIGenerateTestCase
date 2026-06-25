@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Form, Input, Button, Space, Switch, Select, message, Spin } from 'antd';
 import { PlusOutlined, DeleteOutlined, SaveOutlined } from '@ant-design/icons';
-import { Session, GlobalParameter } from '../types';
-import { sessionApi, globalParameterApi } from '../services/api';
+import { Session, GlobalParameter } from '../../types';
+import { sessionApi, globalParameterApi } from '../../services/api';
 
 interface HeaderItem {
   key: string;

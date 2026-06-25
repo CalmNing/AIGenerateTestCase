@@ -3,8 +3,8 @@ import { Form, Select, Input, Button, Table, Tag, message, Modal, Switch, Toolti
 import { PlusOutlined, DeleteOutlined, ReloadOutlined, CopyOutlined, ExperimentOutlined, QuestionCircleOutlined, FileTextOutlined, ApiOutlined, CodeOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
-import { mockConfigApi, globalParameterApi } from '../services/api';
-import type { MockConfig, GlobalParameter } from '../types';
+import { mockConfigApi, globalParameterApi } from '../../services/api';
+import type { MockConfig, GlobalParameter } from '../../types';
 import './IoTMockPlatform.css';
 
 /**

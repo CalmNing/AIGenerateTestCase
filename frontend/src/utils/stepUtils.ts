@@ -24,9 +24,24 @@ export function formatStep(step: string | Record<string, unknown> | ApiCallStepL
     return step;
   }
 
-  // Detect api_call steps — show description only
+  // Detect api_call steps — show description, or fall back to a readable summary
   if (step.type === 'api_call' || step.endpoint_ref) {
-    return typeof step.description === 'string' ? step.description : '';
+    const desc = typeof step.description === 'string' ? step.description.trim() : '';
+    if (desc) return desc;
+
+    // Fallback: build a human-readable line from available fields
+    const parts: string[] = [];
+    const method = (step as ApiCallStepLike).method;
+    const path = (step as ApiCallStepLike).path;
+    if (method || path) {
+      parts.push([method, path].filter(Boolean).join(' '));
+    }
+    const name = (step as Record<string, unknown>).name;
+    if (typeof name === 'string' && name) parts.push(name);
+    if (parts.length > 0) return parts.join(' — ');
+
+    // Last resort: JSON dump so the step is never visually empty
+    return JSON.stringify(step, null, 2);
   }
 
   // Fallback: JSON for other object types

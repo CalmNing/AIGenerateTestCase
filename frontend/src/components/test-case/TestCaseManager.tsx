@@ -1,10 +1,10 @@
 import React from 'react';
 import { Button, Input, Select, notification, Switch } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../types';
+import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
 import TestCaseTable from './TestCaseTable';
 import * as XLSX from 'xlsx';
-import { formatStep } from '../utils/stepUtils';
+import { formatStep } from '../../utils/stepUtils';
 import './TestCaseManager.css';
 
 interface TestCaseManagerProps {

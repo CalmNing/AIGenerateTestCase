@@ -3,9 +3,9 @@ import { Form, Select, Input, Button, Tabs, Space, message, Modal, Tooltip, Radi
 import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
-import { savedRequestApi, globalParameterApi, proxyApi } from '../services/api';
-import { SavedRequest as SavedRequestType } from '../types';
-import FileUpload, { UploadedFileResult } from './FileUpload';
+import { savedRequestApi, globalParameterApi, proxyApi } from '../../services/api';
+import { SavedRequest as SavedRequestType } from '../../types';
+import FileUpload, { UploadedFileResult } from '../FileUpload';
 import './IoTDataPushPlatform.css';
 
 interface HeaderItem {

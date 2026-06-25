@@ -45,8 +45,8 @@ import {
 } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
-import { apiTestApi, globalParameterApi } from '../services/api';
-import { ApiEndpoint, ApiProject, ApiScenario, ApiScenarioResult, ApiScenarioStep, GlobalParameter } from '../types';
+import { apiTestApi, globalParameterApi } from '../../services/api';
+import { ApiEndpoint, ApiProject, ApiScenario, ApiScenarioResult, ApiScenarioStep, GlobalParameter } from '../../types';
 
 const { TextArea } = Input;
 const REMOVED_FROM_SPEC_TAG = '__removed_from_spec__';

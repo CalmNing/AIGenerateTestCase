@@ -1,8 +1,8 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal } from 'antd';
 import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined, EditOutlined, RocketOutlined } from '@ant-design/icons';
-import { Session, Module, ApiProject, ApiEndpoint } from '../types';
-import HistoryPromptSidebar from './HistoryPromptSidebar';
+import { Session, Module, ApiProject, ApiEndpoint } from '../../types';
+import HistoryPromptSidebar from '../HistoryPromptSidebar';
 import './TestCaseGenerator.css';
 
 interface TestCaseGeneratorProps {
@@ -66,7 +66,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
 
   const loadApiProjects = useCallback(async () => {
     try {
-      const { apiTestApi } = await import('../services/api');
+      const { apiTestApi } = await import('../../services/api');
       const res = await apiTestApi.getProjects();
       if (res.code === 200 && res.data) {
         setApiProjects(res.data);
@@ -79,7 +79,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const loadApiEndpoints = useCallback(async (projectId: number) => {
     setLoadingApis(true);
     try {
-      const { apiTestApi } = await import('../services/api');
+      const { apiTestApi } = await import('../../services/api');
       const res = await apiTestApi.getEndpoints(projectId);
       if (res.code === 200 && res.data) {
         setApiEndpoints(res.data);
@@ -127,7 +127,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     }
     setSmartMatching(true);
     try {
-      const { apiTestApi } = await import('../services/api');
+      const { apiTestApi } = await import('../../services/api');
       const res = await apiTestApi.matchEndpoint({
         requirement: requirement.trim(),
         project_id: selectedApiProjectId || undefined,

@@ -1240,17 +1240,16 @@ async def create_testcase_agent(
                 "- 如果工具返回信息不足，可以结合自己的知识对需求做适当的合理补充。",
             ])
             TOOL_SYSTEM_PROMPT = SYSTEM_PROMPT + f"""
-可用工具列表：
-{tool_names}
-
-注意事项：
-{chr(10).join(tool_notes)}
-"""
+                                                可用工具列表：
+                                                {tool_names}
+                                                注意事项：
+                                                {chr(10).join(tool_notes)}
+                                                """
         else:
             TOOL_SYSTEM_PROMPT = SYSTEM_PROMPT + """
-重要：你没有可用的工具，不需要调用任何工具，直接回答用户的问题即可。
-不要生成任何tool_calls相关的内容。
-"""
+                                                重要：你没有可用的工具，不需要调用任何工具，直接回答用户的问题即可。
+                                                不要生成任何tool_calls相关的内容。
+                                                """
 
         agent = create_agent(
             model=model,

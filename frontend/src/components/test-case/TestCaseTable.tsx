@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Table, Button, TableProps, message, Modal, Tooltip, Tag } from 'antd';
 import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined, HistoryOutlined, BranchesOutlined } from '@ant-design/icons';
-import { TestCase, TestCaseStatus } from '../types';
+import { TestCase, TestCaseStatus } from '../../types';
 
 interface TestCaseTableProps {
   testcases: TestCase[];
@@ -101,7 +101,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
               const label = method && path ? `${method} ${path}` : (step.description || step.name || `步骤 ${i + 1}`);
               return (
                 <Tooltip key={i} title={label}>
-                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 180, display: 'inline-flex', alignItems: 'center' }}>
+                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 230, display: 'inline-flex', alignItems: 'center' }}>
                     <ApiOutlined style={{ marginRight: 4, flexShrink: 0 }} />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
                   </Tag>
