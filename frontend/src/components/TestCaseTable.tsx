@@ -73,7 +73,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
     {
       title: '接口',
       key: 'api_steps',
-      width: 200,
+      width: 260,
       render: (_: any, record: TestCase) => {
         // 收集所有 api_call 步骤（preset_conditions + steps）
         const allSteps = [
