@@ -421,6 +421,8 @@ export const apiTestApi = {
   updateScenario: (scenarioId: number, scenario: Partial<ApiScenario>): Promise<ApiResponse<ApiScenario>> =>
     api.put(`/api-test/scenarios/${scenarioId}`, scenario),
   deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
+  getScenario: (scenarioId: number): Promise<ApiResponse<ApiScenario>> =>
+    api.get(`/api-test/scenarios/${scenarioId}`),
   getScenarioResults: (scenarioId: number, limit?: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
     api.get(`/api-test/scenarios/${scenarioId}/results${limit ? `?limit=${limit}` : ''}`),
   runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`),
