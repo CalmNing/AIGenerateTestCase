@@ -333,7 +333,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   // 渲染步骤
   const renderStep = (step: ApiScenarioStep, index: number) => {
     const method = step.method || 'GET';
-    const stepName = step.name || step.url || `步骤 ${index + 1}`;
+    const stepLabel = step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : (step.name || `步骤 ${index + 1}`);
 
     return (
       <Collapse
@@ -346,7 +346,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
               <Space>
                 <span className="step-number">{index + 1}</span>
                 <Tag color={methodColors[method] || 'default'}>{method}</Tag>
-                <span>{stepName}</span>
+                <span>{stepLabel}</span>
                 {step.enabled === false && <Tag color="red">已禁用</Tag>}
               </Space>
             ),
@@ -418,7 +418,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   // 渲染可编辑步骤
   const renderEditStep = (step: any, index: number) => {
     const method = step.method || 'GET';
-    const stepName = step.name || `步骤 ${index + 1}`;
+    const stepLabel = step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : (step.name || `步骤 ${index + 1}`);
     const totalSteps = editScenario?.steps.length || 0;
 
     return (
@@ -432,7 +432,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
               <Space>
                 <span className="step-number">{index + 1}</span>
                 <Tag color={methodColors[method] || 'default'}>{method}</Tag>
-                <span>{stepName}</span>
+                <span>{stepLabel}</span>
                 {step.enabled === false && <Tag color="red">已禁用</Tag>}
               </Space>
             ),
@@ -600,7 +600,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
               >
                 <Space>
                   <span>{index + 1}.</span>
-                  <span>{step.name || `步骤 ${index + 1}`}</span>
+                  <span>{step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : (step.name || `步骤 ${index + 1}`)}</span>
                   <Tag
                     color={step.status === 'passed' ? 'success' : 'error'}
                   >
