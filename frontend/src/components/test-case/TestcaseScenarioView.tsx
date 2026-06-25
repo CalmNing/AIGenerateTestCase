@@ -347,6 +347,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
             label: (
               <Space>
                 <span className="step-number">{index + 1}</span>
+                {(step as any).is_preset && <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>前置</Tag>}
                 <Tag color={methodColors[method] || 'default'}>{method}</Tag>
                 <span>{stepLabel}</span>
                 {step.enabled === false && <Tag color="red">已禁用</Tag>}
@@ -435,6 +436,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
             label: (
               <Space>
                 <span className="step-number">{index + 1}</span>
+                {(step as any).is_preset && <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>前置</Tag>}
                 <Tag color={methodColors[method] || 'default'}>{method}</Tag>
                 <span>{stepLabel}</span>
                 {step.enabled === false && <Tag color="red">已禁用</Tag>}

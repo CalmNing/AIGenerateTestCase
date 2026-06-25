@@ -1854,10 +1854,12 @@ async def generate_testcases(
 
             # 创建关联的接口场景（如果有 API 调用步骤且有项目ID）
             scenario_id = None
+            api_call_preset = [s for s in converted_preset_conditions if isinstance(s, dict) and s.get("endpoint_id")]
             api_call_steps = [s for s in converted_steps if isinstance(s, dict) and s.get("endpoint_id")]
-            if api_call_steps and api_project_id and db_session:
-                # 预加载步骤涉及的接口信息，用于丰富场景步骤的 method/path 字段（供前端展示）
-                endpoint_ids = [s["endpoint_id"] for s in api_call_steps]
+            all_api_call_steps = api_call_preset + api_call_steps
+            if all_api_call_steps and api_project_id and db_session:
+                # 预加载步骤涉及的接口信息，用于丰富场景步骤的 method/path/name 字段（供前端展示）
+                endpoint_ids = [s["endpoint_id"] for s in all_api_call_steps]
                 endpoint_map: dict[int, ApiEndpoint] = {}
                 if endpoint_ids:
                     rows = db_session.exec(
@@ -1866,15 +1868,19 @@ async def generate_testcases(
                     endpoint_map = {e.id: e for e in rows}
 
                 scenario_steps: list[dict] = []
-                for s in api_call_steps:
+                for s in all_api_call_steps:
                     step_copy = dict(s)
                     ep = endpoint_map.get(s["endpoint_id"])
                     if ep:
                         step_copy.setdefault("method", ep.method)
                         step_copy.setdefault("path", ep.path)
                         step_copy.setdefault("url", ep.url or ep.path)
+                        step_copy.setdefault("endpoint_name", ep.name)
                         step_copy.setdefault("enabled", True)
                         step_copy.setdefault("continue_on_failure", True)
+                    # 标记前置条件步骤
+                    if s in api_call_preset:
+                        step_copy["is_preset"] = True
                     scenario_steps.append(step_copy)
 
                 scenario = ApiScenario(
