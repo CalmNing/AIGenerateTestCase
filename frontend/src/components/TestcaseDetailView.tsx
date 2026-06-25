@@ -5,6 +5,7 @@ import { formatStep } from '../utils/stepUtils';
 
 interface TestcaseDetailViewProps {
   testcase: TestCase;
+  bugLinkTemplate?: string;
 }
 
 const statusMap: Record<string, { label: string; cls: string }> = {
@@ -13,7 +14,7 @@ const statusMap: Record<string, { label: string; cls: string }> = {
   [TestCaseStatus.NOT_RUN]: { label: '未执行', cls: 'vtm-status--not_run' },
 };
 
-const TestcaseDetailView: React.FC<TestcaseDetailViewProps> = ({ testcase }) => {
+const TestcaseDetailView: React.FC<TestcaseDetailViewProps> = ({ testcase, bugLinkTemplate }) => {
   const tc = testcase;
   const status = tc ? (statusMap[tc.status || TestCaseStatus.NOT_RUN] || statusMap[TestCaseStatus.NOT_RUN]) : null;
 
@@ -54,7 +55,10 @@ const TestcaseDetailView: React.FC<TestcaseDetailViewProps> = ({ testcase }) => 
             )}
             {tc.bug_id ? (
               <a
-                href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}`}
+                href={bugLinkTemplate
+                  ? bugLinkTemplate.replace('{bug_id}', String(tc.bug_id))
+                  : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}`
+                }
                 target="_blank"
                 rel="noopener noreferrer"
                 className="vtm-bug-link"

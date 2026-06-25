@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal, Tabs } from 'antd';
 import { CheckCircleOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 import { TestCase } from '../../types';
+import { configApi } from '../../services/api';
 import TestcaseDetailView from '../TestcaseDetailView';
 import TestcaseScenarioView from '../TestcaseScenarioView';
 import './ViewTestcaseModal.css';
@@ -29,6 +30,17 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
 }) => {
   const tc = selectedTestcase;
   const [activeTab, setActiveTab] = useState('detail');
+  const [bugLinkTemplate, setBugLinkTemplate] = useState('');
+
+  useEffect(() => {
+    if (visible) {
+      configApi.getBugLinkTemplate().then(res => {
+        if (res.code === 200 && res.data) {
+          setBugLinkTemplate(res.data.template || '');
+        }
+      }).catch(() => {}); // silent fail
+    }
+  }, [visible]);
 
   return (
     <Modal
@@ -62,7 +74,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
             {
               key: 'detail',
               label: '用例详情',
-              children: <TestcaseDetailView testcase={tc} />,
+              children: <TestcaseDetailView testcase={tc} bugLinkTemplate={bugLinkTemplate} />,
             },
             {
               key: 'scenario',
