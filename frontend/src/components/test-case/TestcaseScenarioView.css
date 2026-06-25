@@ -28,10 +28,16 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
+  transition: box-shadow 0.2s ease;
+}
+
+.scenario-step-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .scenario-step-item .ant-collapse-header {
   padding: 8px 12px !important;
+  align-items: center !important;
 }
 
 .scenario-step-item .ant-collapse-content-box {
@@ -68,16 +74,37 @@
   color: var(--color-text-tertiary);
 }
 
+/* 编辑模式表单样式 */
 .step-edit-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+}
+
+.step-edit-section {
+  background: var(--color-bg-layout);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.step-edit-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .step-edit-row {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  margin-bottom: 8px;
+}
+
+.step-edit-row:last-child {
+  margin-bottom: 0;
 }
 
 .step-edit-row > label {
@@ -85,19 +112,90 @@
   font-weight: 500;
   padding-top: 4px;
   color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
+.step-edit-row .ant-input,
+.step-edit-row .ant-input-textarea {
+  flex: 1;
+}
+
+/* 开关组样式 */
+.step-edit-toggles {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.step-edit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.step-edit-toggle-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+/* 操作按钮组 */
 .step-edit-actions {
   display: flex;
-  justify-content: flex-end;
-  padding-top: 8px;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 12px;
   border-top: 1px solid var(--color-border);
 }
 
+.step-edit-actions-left {
+  display: flex;
+  gap: 4px;
+}
+
+.step-edit-actions-right {
+  display: flex;
+  gap: 4px;
+}
+
+/* 键值编辑器 */
 .kv-editor,
 .post-actions-editor,
 .assertions-editor {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  width: 100%;
+}
+
+.kv-editor-row,
+.post-actions-editor-row,
+.assertions-editor-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.kv-editor-row .ant-input,
+.post-actions-editor-row .ant-input,
+.assertions-editor-row .ant-input {
+  flex: 1;
+}
+
+/* 请求体编辑器 */
+.body-editor {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  resize: vertical;
+  min-height: 100px;
+}
+
+.body-editor:focus {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-primary-bg);
 }

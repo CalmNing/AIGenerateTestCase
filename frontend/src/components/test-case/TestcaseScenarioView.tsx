@@ -444,95 +444,103 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
             ),
             children: (
               <div className="step-edit-form">
-                {/* 基本信息 */}
-                <div className="step-edit-row">
-                  <label>步骤名称:</label>
-                  <Input
-                    size="small"
-                    value={step.name || ''}
-                    onChange={e => updateStep(index, 'name', e.target.value)}
-                    style={{ width: 300 }}
-                  />
-                </div>
-
-                <div className="step-edit-row">
-                  <Space>
-                    <span>启用:</span>
-                    <Switch
+                {/* 基本配置 */}
+                <div className="step-edit-section">
+                  <div className="step-edit-section-title">基本配置</div>
+                  <div className="step-edit-row">
+                    <label>步骤名称:</label>
+                    <Input
                       size="small"
-                      checked={step.enabled !== false}
-                      onChange={checked => updateStep(index, 'enabled', checked)}
+                      value={step.name || ''}
+                      onChange={e => updateStep(index, 'name', e.target.value)}
+                      placeholder="输入步骤描述"
                     />
-                    <span style={{ marginLeft: 16 }}>失败继续:</span>
-                    <Switch
+                  </div>
+
+                  <div className="step-edit-row">
+                    <label>URL:</label>
+                    <Input
                       size="small"
-                      checked={step.continue_on_failure === true}
-                      onChange={checked => updateStep(index, 'continue_on_failure', checked)}
+                      value={step.url || ''}
+                      onChange={e => updateStep(index, 'url', e.target.value)}
+                      placeholder="请求地址"
                     />
-                  </Space>
+                  </div>
+
+                  <div className="step-edit-toggles">
+                    <div className="step-edit-toggle">
+                      <Switch
+                        size="small"
+                        checked={step.enabled !== false}
+                        onChange={checked => updateStep(index, 'enabled', checked)}
+                      />
+                      <span className="step-edit-toggle-label">启用</span>
+                    </div>
+                    <div className="step-edit-toggle">
+                      <Switch
+                        size="small"
+                        checked={step.continue_on_failure === true}
+                        onChange={checked => updateStep(index, 'continue_on_failure', checked)}
+                      />
+                      <span className="step-edit-toggle-label">失败继续</span>
+                    </div>
+                  </div>
                 </div>
 
-                {/* URL */}
-                <div className="step-edit-row">
-                  <label>URL:</label>
-                  <Input
-                    size="small"
-                    value={step.url || ''}
-                    onChange={e => updateStep(index, 'url', e.target.value)}
-                    style={{ flex: 1 }}
-                  />
+                {/* 请求配置 */}
+                <div className="step-edit-section">
+                  <div className="step-edit-section-title">请求配置</div>
+                  <div className="step-edit-row">
+                    <label>请求头:</label>
+                    <KeyValueEditor
+                      value={step.headers || []}
+                      onChange={val => updateStep(index, 'headers', val)}
+                    />
+                  </div>
+
+                  <div className="step-edit-row">
+                    <label>请求参数:</label>
+                    <KeyValueEditor
+                      value={step.parameters || []}
+                      onChange={val => updateStep(index, 'parameters', val)}
+                    />
+                  </div>
+
+                  <div className="step-edit-row">
+                    <label>请求体:</label>
+                    <Input.TextArea
+                      value={step.body || ''}
+                      onChange={e => updateStep(index, 'body', e.target.value)}
+                      rows={4}
+                      className="body-editor"
+                      placeholder='{"key": "value"}'
+                    />
+                  </div>
                 </div>
 
-                {/* 请求头 */}
-                <div className="step-edit-row">
-                  <label>请求头:</label>
-                  <KeyValueEditor
-                    value={step.headers || []}
-                    onChange={val => updateStep(index, 'headers', val)}
-                  />
+                {/* 后置处理 */}
+                <div className="step-edit-section">
+                  <div className="step-edit-section-title">后置处理</div>
+                  <div className="step-edit-row">
+                    <label>变量提取:</label>
+                    <PostActionsEditor
+                      value={step.post_actions || []}
+                      onChange={val => updateStep(index, 'post_actions', val)}
+                    />
+                  </div>
+
+                  <div className="step-edit-row">
+                    <label>断言:</label>
+                    <AssertionsEditor
+                      value={step.assertions || []}
+                      onChange={val => updateStep(index, 'assertions', val)}
+                    />
+                  </div>
                 </div>
 
-                {/* 请求参数 */}
-                <div className="step-edit-row">
-                  <label>请求参数:</label>
-                  <KeyValueEditor
-                    value={step.parameters || []}
-                    onChange={val => updateStep(index, 'parameters', val)}
-                  />
-                </div>
-
-                {/* 请求体 */}
-                <div className="step-edit-row">
-                  <label>请求体:</label>
-                  <Input.TextArea
-                    value={step.body || ''}
-                    onChange={e => updateStep(index, 'body', e.target.value)}
-                    rows={4}
-                    style={{ fontFamily: 'monospace', fontSize: 12 }}
-                  />
-                </div>
-
-                {/* 变量提取 */}
-                <div className="step-edit-row">
-                  <label>变量提取:</label>
-                  <PostActionsEditor
-                    value={step.post_actions || []}
-                    onChange={val => updateStep(index, 'post_actions', val)}
-                  />
-                </div>
-
-                {/* 断言 */}
-                <div className="step-edit-row">
-                  <label>断言:</label>
-                  <AssertionsEditor
-                    value={step.assertions || []}
-                    onChange={val => updateStep(index, 'assertions', val)}
-                  />
-                </div>
-
-                {/* 排序和删除 */}
+                {/* 操作按钮 */}
                 <div className="step-edit-actions">
-                  <Space>
+                  <div className="step-edit-actions-left">
                     <Button
                       size="small"
                       disabled={index === 0}
@@ -547,6 +555,8 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                     >
                       ↓ 下移
                     </Button>
+                  </div>
+                  <div className="step-edit-actions-right">
                     <Button
                       size="small"
                       danger
@@ -555,7 +565,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                     >
                       删除
                     </Button>
-                  </Space>
+                  </div>
                 </div>
               </div>
             ),
