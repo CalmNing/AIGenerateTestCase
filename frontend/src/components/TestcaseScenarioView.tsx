@@ -31,7 +31,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [latestResult, setLatestResult] = useState<any>(null);
-  const [resultSource, setResultSource] = useState<'current' | 'history' | null>(null);
+
   const [editing, setEditing] = useState(!initialReadOnly);
 
   // 加载场景数据
@@ -79,7 +79,6 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
       const res = await apiTestApi.runScenario(scenarioId);
       if (res.code === 200 && res.data) {
         setResult(res.data);
-        setResultSource('current');
         setLatestResult(res.data);
         message.success(res.data.passed ? '场景执行通过' : '场景执行失败');
       } else {
