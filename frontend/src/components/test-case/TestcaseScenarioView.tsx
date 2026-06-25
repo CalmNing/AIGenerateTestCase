@@ -34,9 +34,37 @@ const commonJsonPathOptions = [
   { label: '数据项 data.items', value: '$.data.items' },
   { label: '错误信息 message', value: '$.message' },
   { label: '业务编码 code', value: '$.code' },
-  { label: '记录ID data.id', value: '$.data.id' },
-  { label: '记录ID data.recordId', value: '$.data.recordId' },
 ];
+
+// 从 response schema 中提取 JSONPath 选项
+function collectJsonPathOptions(schema: Record<string, any> | undefined, prefix = '$', labelPrefix = '响应字段', depth = 0): Array<{ label: string; value: string }> {
+  if (!schema || depth > 4) return [];
+  const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : undefined;
+  if (!properties) return [];
+  const options: Array<{ label: string; value: string }> = [];
+  Object.entries(properties).forEach(([key, value]) => {
+    const path = `${prefix}.${key}`;
+    const label = `${labelPrefix} ${path.replace('$.', '')}`;
+    options.push({ label, value: path });
+    if (value && typeof value === 'object') {
+      options.push(...collectJsonPathOptions(value as Record<string, any>, path, labelPrefix, depth + 1));
+      if ((value as Record<string, any>).type === 'array' && (value as Record<string, any>).items) {
+        options.push(...collectJsonPathOptions((value as Record<string, any>).items, `${path}[0]`, labelPrefix, depth + 1));
+      }
+    }
+  });
+  return options;
+}
+
+// 根据 response schema 生成完整的 JSONPath 选项
+function buildJsonPathOptions(responseSchema?: Record<string, any>): Array<{ label: string; value: string }> {
+  const schemaOptions = collectJsonPathOptions(responseSchema);
+  // 去重并合并
+  const optionMap = new Map<string, { label: string; value: string }>();
+  commonJsonPathOptions.forEach((option) => optionMap.set(option.value, option));
+  schemaOptions.forEach((option) => optionMap.set(option.value, option));
+  return Array.from(optionMap.values());
+}
 
 // 格式化 JSON 字符串
 const formatJsonBody = (body: string): string => {
@@ -116,12 +144,15 @@ const KeyValueEditor: React.FC<{
 const PostActionsEditor: React.FC<{
   value: any[];
   onChange: (val: any[]) => void;
-}> = ({ value, onChange }) => {
+  responseSchema?: Record<string, any>;
+}> = ({ value, onChange, responseSchema }) => {
   const update = (index: number, field: string, val: string) => {
     const newActions = [...value];
     newActions[index] = { ...newActions[index], [field]: val };
     onChange(newActions);
   };
+
+  const jsonPathOptions = buildJsonPathOptions(responseSchema);
 
   return (
     <div className="post-actions-editor">
@@ -139,7 +170,7 @@ const PostActionsEditor: React.FC<{
             placeholder="$.jsonpath"
             value={action.jsonpath || ''}
             onChange={val => update(i, 'jsonpath', val)}
-            options={commonJsonPathOptions}
+            options={jsonPathOptions}
             filterOption={(input, option) => {
               const label = String(option?.label || '').toLowerCase();
               const value = String(option?.value || '').toLowerCase();
@@ -161,7 +192,8 @@ const PostActionsEditor: React.FC<{
 const AssertionsEditor: React.FC<{
   value: any[];
   onChange: (val: any[]) => void;
-}> = ({ value, onChange }) => {
+  responseSchema?: Record<string, any>;
+}> = ({ value, onChange, responseSchema }) => {
   const update = (index: number, field: string, val: string) => {
     const newAssertions = [...value];
     newAssertions[index] = { ...newAssertions[index], [field]: val };
@@ -175,6 +207,8 @@ const AssertionsEditor: React.FC<{
     { label: 'JSONPath 存在', value: 'jsonpath_exists' },
     { label: 'JSONPath 等于', value: 'jsonpath_equals' },
   ];
+
+  const jsonPathOptions = buildJsonPathOptions(responseSchema);
 
   return (
     <div className="assertions-editor">
@@ -192,7 +226,7 @@ const AssertionsEditor: React.FC<{
             placeholder="jsonpath"
             value={assertion.jsonpath || ''}
             onChange={val => update(i, 'jsonpath', val)}
-            options={commonJsonPathOptions}
+            options={jsonPathOptions}
             filterOption={(input, option) => {
               const label = String(option?.label || '').toLowerCase();
               const value = String(option?.value || '').toLowerCase();
@@ -474,6 +508,11 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
     const stepLabel = methodPath ? (epName ? `${methodPath} ${epName}` : methodPath) : (step.name || `步骤 ${index + 1}`);
     const totalSteps = editScenario?.steps.length || 0;
 
+    // 获取当前步骤对应接口的 response_schema
+    const endpointId = step.endpoint_id;
+    const endpoint = endpointId ? endpoints.find((ep: any) => ep.id === endpointId) : null;
+    const responseSchema = endpoint?.response_schema || undefined;
+
     return (
       <Collapse
         key={index}
@@ -578,6 +617,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                     <PostActionsEditor
                       value={step.post_actions || []}
                       onChange={val => updateStep(index, 'post_actions', val)}
+                      responseSchema={responseSchema}
                     />
                   </div>
 
@@ -586,6 +626,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                     <AssertionsEditor
                       value={step.assertions || []}
                       onChange={val => updateStep(index, 'assertions', val)}
+                      responseSchema={responseSchema}
                     />
                   </div>
                 </div>
