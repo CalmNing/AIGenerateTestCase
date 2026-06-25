@@ -161,6 +161,14 @@
   opacity: 0.7;
 }
 
+/* --- Override Editor --- */
+.tcg-override-section-label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
 /* --- Requirement Section --- */
 .tcg-requirement-section {
   margin-bottom: 16px;

@@ -47,6 +47,23 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
   const [previewVisible, setPreviewVisible] = useState(false);
 
+  // 更新指定接口的 override 字段
+  const updateOverride = useCallback((eid: number, field: string, value: any) => {
+    setEditingOverrides(prev => ({
+      ...prev,
+      [eid]: { ...(prev[eid] || {}), [field]: value },
+    }));
+  }, []);
+
+  // 保存 overrides 并关闭弹窗
+  const handleSaveOverrides = useCallback(() => {
+    if (onApiEndpointOverridesChange) {
+      onApiEndpointOverridesChange(editingOverrides);
+    }
+    setOverrideEditorVisible(false);
+    antMessage.success('接口参数已保存');
+  }, [editingOverrides, onApiEndpointOverridesChange]);
+
   const loadApiProjects = useCallback(async () => {
     try {
       const { apiTestApi } = await import('../services/api');
@@ -334,23 +351,12 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
           onCancel={() => setOverrideEditorVisible(false)}
           width={800}
           footer={[
-            <button key="cancel" className="tcg-smart-btn" onClick={() => setOverrideEditorVisible(false)}>
+            <Button key="cancel" onClick={() => setOverrideEditorVisible(false)}>
               取消
-            </button>,
-            <button
-              key="save"
-              className="tcg-smart-btn"
-              style={{ background: 'var(--color-primary)', color: '#fff', border: 'none' }}
-              onClick={() => {
-                if (onApiEndpointOverridesChange) {
-                  onApiEndpointOverridesChange(editingOverrides);
-                }
-                setOverrideEditorVisible(false);
-                antMessage.success('接口参数已保存');
-              }}
-            >
-              确定
-            </button>,
+            </Button>,
+            <Button key="save" type="primary" onClick={handleSaveOverrides}>
+              保存
+            </Button>,
           ]}
         >
           {selectedApiEndpointId?.map((eid) => {
@@ -360,94 +366,135 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
             const methodColor = methodColorMap[ep.method?.toUpperCase()] || 'default';
             return (
               <div key={eid} style={{ marginBottom: 24, borderBottom: '1px solid var(--color-border-secondary)', paddingBottom: 16 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 12 }}>
                   <Tag color={methodColor}>{ep.method?.toUpperCase()}</Tag>
-                  {ep.path} - {ep.name}
+                  <span>{ep.path}</span>
+                  <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--color-text-tertiary)', fontSize: 13 }}>{ep.name}</span>
                 </div>
 
                 {/* Headers */}
-                <div style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 4 }}>请求头 (Headers)</div>
-                  {(override.headers || []).map((h: any, hi: number) => (
-                    <div key={hi} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
-                      <Input
-                        size="small"
-                        style={{ width: 120 }}
-                        placeholder="Key"
-                        value={h.key}
-                        onChange={(e) => {
-                          const newOverrides = { ...editingOverrides };
-                          const epOverrides = { ...(newOverrides[eid] || {}) };
-                          const headers = [...(epOverrides.headers || [])];
-                          headers[hi] = { ...headers[hi], key: e.target.value };
-                          epOverrides.headers = headers;
-                          newOverrides[eid] = epOverrides;
-                          setEditingOverrides(newOverrides);
-                        }}
-                      />
-                      <Input
-                        size="small"
-                        style={{ flex: 1 }}
-                        placeholder="Value"
-                        value={h.value}
-                        onChange={(e) => {
-                          const newOverrides = { ...editingOverrides };
-                          const epOverrides = { ...(newOverrides[eid] || {}) };
-                          const headers = [...(epOverrides.headers || [])];
-                          headers[hi] = { ...headers[hi], value: e.target.value };
-                          epOverrides.headers = headers;
-                          newOverrides[eid] = epOverrides;
-                          setEditingOverrides(newOverrides);
-                        }}
-                      />
-                    </div>
-                  ))}
+                <div style={{ marginBottom: 12 }}>
+                  <div className="tcg-override-section-label">请求头 (Headers)</div>
+                  {(override.headers || []).length > 0 ? (
+                    (override.headers || []).map((h: any, hi: number) => (
+                      <div key={hi} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                        <Input
+                          size="small"
+                          style={{ width: 120 }}
+                          placeholder="Key"
+                          value={h.key}
+                          onChange={(e) => {
+                            const headers = [...(override.headers || [])];
+                            headers[hi] = { ...headers[hi], key: e.target.value };
+                            updateOverride(eid, 'headers', headers);
+                          }}
+                        />
+                        <Input
+                          size="small"
+                          style={{ flex: 1 }}
+                          placeholder="Value"
+                          value={h.value}
+                          onChange={(e) => {
+                            const headers = [...(override.headers || [])];
+                            headers[hi] = { ...headers[hi], value: e.target.value };
+                            updateOverride(eid, 'headers', headers);
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          danger
+                          type="text"
+                          onClick={() => {
+                            const headers = (override.headers || []).filter((_: any, i: number) => i !== hi);
+                            updateOverride(eid, 'headers', headers);
+                          }}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--color-text-disabled)', marginBottom: 4 }}>暂无请求头</div>
+                  )}
+                  <Button
+                    size="small"
+                    type="dashed"
+                    onClick={() => {
+                      const headers = [...(override.headers || []), { key: '', value: '' }];
+                      updateOverride(eid, 'headers', headers);
+                    }}
+                    style={{ marginTop: 4 }}
+                  >
+                    + 添加请求头
+                  </Button>
                 </div>
 
                 {/* Parameters */}
-                <div style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 4 }}>请求参数 (Parameters)</div>
-                  {(override.parameters || []).map((p: any, pi: number) => (
-                    <div key={pi} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
-                      <Input
-                        size="small"
-                        style={{ width: 100 }}
-                        placeholder="Key"
-                        value={p.key}
-                      />
-                      <Input
-                        size="small"
-                        style={{ flex: 1 }}
-                        placeholder="Value"
-                        value={p.value}
-                        onChange={(e) => {
-                          const newOverrides = { ...editingOverrides };
-                          const epOverrides = { ...(newOverrides[eid] || {}) };
-                          const params = [...(epOverrides.parameters || [])];
-                          params[pi] = { ...params[pi], value: e.target.value };
-                          epOverrides.parameters = params;
-                          newOverrides[eid] = epOverrides;
-                          setEditingOverrides(newOverrides);
-                        }}
-                      />
-                    </div>
-                  ))}
+                <div style={{ marginBottom: 12 }}>
+                  <div className="tcg-override-section-label">请求参数 (Parameters)</div>
+                  {(override.parameters || []).length > 0 ? (
+                    (override.parameters || []).map((p: any, pi: number) => (
+                      <div key={pi} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                        <Input
+                          size="small"
+                          style={{ width: 120 }}
+                          placeholder="Key"
+                          value={p.key}
+                          onChange={(e) => {
+                            const params = [...(override.parameters || [])];
+                            params[pi] = { ...params[pi], key: e.target.value };
+                            updateOverride(eid, 'parameters', params);
+                          }}
+                        />
+                        <Input
+                          size="small"
+                          style={{ flex: 1 }}
+                          placeholder="Value"
+                          value={p.value}
+                          onChange={(e) => {
+                            const params = [...(override.parameters || [])];
+                            params[pi] = { ...params[pi], value: e.target.value };
+                            updateOverride(eid, 'parameters', params);
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          danger
+                          type="text"
+                          onClick={() => {
+                            const params = (override.parameters || []).filter((_: any, i: number) => i !== pi);
+                            updateOverride(eid, 'parameters', params);
+                          }}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--color-text-disabled)', marginBottom: 4 }}>暂无请求参数</div>
+                  )}
+                  <Button
+                    size="small"
+                    type="dashed"
+                    onClick={() => {
+                      const params = [...(override.parameters || []), { key: '', value: '' }];
+                      updateOverride(eid, 'parameters', params);
+                    }}
+                    style={{ marginTop: 4 }}
+                  >
+                    + 添加参数
+                  </Button>
                 </div>
 
                 {/* Body */}
                 <div>
-                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 4 }}>请求体 (Body)</div>
+                  <div className="tcg-override-section-label">请求体 (Body)</div>
                   <Input.TextArea
                     rows={4}
                     value={override.body || ''}
-                    onChange={(e) => {
-                      const newOverrides = { ...editingOverrides };
-                      const epOverrides = { ...(newOverrides[eid] || {}) };
-                      epOverrides.body = e.target.value;
-                      newOverrides[eid] = epOverrides;
-                      setEditingOverrides(newOverrides);
-                    }}
-                    placeholder="JSON 格式的请求体"
+                    onChange={(e) => updateOverride(eid, 'body', e.target.value)}
+                    placeholder='JSON 格式，如 {"key": "value"}'
+                    style={{ fontFamily: 'monospace', fontSize: 13 }}
                   />
                 </div>
               </div>
