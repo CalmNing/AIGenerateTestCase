@@ -897,3 +897,41 @@ async def execute_testcase(
             pass
 
         return Response(code=status.HTTP_500_INTERNAL_SERVER_ERROR, message=f"执行失败: {str(e)}")
+
+
+@router.post("/{session_id}/testcases/{testcase_id}/infer-dependencies", response_model=Response)
+def infer_testcase_dependencies(
+    session: SessionDep,
+    user: CurrentUser,
+    session_id: int,
+    testcase_id: int,
+):
+    """推断测试用例的接口依赖关系，返回需要补全的接口 ID 列表。"""
+    testcase = session.get(TestCase, testcase_id)
+    if not testcase or testcase.session_id != session_id or (testcase.user_id and testcase.user_id != user.user_id):
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+
+    if not testcase.api_endpoint_id or not testcase.api_project_id:
+        return Response(data={"added_post_actions": 0, "replaced_fields": 0, "extra_endpoint_ids": []})
+
+    # 解析关联的接口 ID
+    endpoint_ids = []
+    for part in str(testcase.api_endpoint_id).split(','):
+        part = part.strip()
+        if part:
+            try:
+                endpoint_ids.append(int(part))
+            except ValueError:
+                pass
+
+    if not endpoint_ids:
+        return Response(data={"added_post_actions": 0, "replaced_fields": 0, "extra_endpoint_ids": []})
+
+    # 调用依赖推断
+    extra_ids = infer_endpoint_dependencies(session, endpoint_ids, testcase.api_project_id)
+
+    return Response(data={
+        "added_post_actions": 0,
+        "replaced_fields": 0,
+        "extra_endpoint_ids": extra_ids,
+    })

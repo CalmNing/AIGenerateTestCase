@@ -223,6 +223,10 @@ export const testcaseApi = {
   // 获取测试用例执行日志
   getExecutionLogs: (sessionId: number, testcaseId: number): Promise<ApiResponse<any[]>> =>
     api.get(`/testcases/${sessionId}/testcases/${testcaseId}/execution-logs`),
+
+  // 推断测试用例的接口依赖关系
+  inferDependencies: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ added_post_actions: number; replaced_fields: number; extra_endpoint_ids: number[] }>> =>
+    api.post(`/testcases/${sessionId}/testcases/${testcaseId}/infer-dependencies`),
 };
 
 // 模块管理API
