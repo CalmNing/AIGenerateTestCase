@@ -30,6 +30,7 @@ export interface TestCase {
   api_project_id?: number | null;
   assertions?: Record<string, any>[] | null;
   scenario_id?: number | null;
+  scenario_steps?: { method: string; path: string; name: string }[];
   steps: (string | Record<string, any>)[];
   expected_results: (string | Record<string, any>)[];
 }

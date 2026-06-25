@@ -75,7 +75,29 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       key: 'api_steps',
       width: 260,
       render: (_: any, record: TestCase) => {
-        // 收集所有 api_call 步骤（preset_conditions + steps）
+        // 优先从 scenario_steps 读取（新逻辑）
+        const scenarioSteps = record.scenario_steps || [];
+        if (scenarioSteps.length > 0) {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {scenarioSteps.map((step, i: number) => {
+                const method = step.method ? step.method.toUpperCase() : '';
+                const path = step.path || '';
+                const label = method && path ? `${method} ${path}` : (step.name || `步骤 ${i + 1}`);
+                return (
+                  <Tooltip key={i} title={label}>
+                    <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 230, display: 'inline-flex', alignItems: 'center' }}>
+                      <ApiOutlined style={{ marginRight: 4, flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
+                    </Tag>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          );
+        }
+
+        // 回退：旧用例从 steps/preset_conditions 读取 api_call 步骤
         const allSteps = [
           ...((record.preset_conditions || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
           ...((record.steps || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
