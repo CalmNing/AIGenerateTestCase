@@ -101,9 +101,9 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
               const label = method && path ? `${method} ${path}` : (step.description || step.name || `步骤 ${i + 1}`);
               return (
                 <Tooltip key={i} title={step.description || step.name || label}>
-                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer' }}>
+                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 180 }}>
                     <ApiOutlined style={{ marginRight: 4 }} />
-                    {label}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', maxWidth: 140 }}>{label}</span>
                   </Tag>
                 </Tooltip>
               );
