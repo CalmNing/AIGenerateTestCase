@@ -47,15 +47,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
   const [previewVisible, setPreviewVisible] = useState(false);
 
-  // 生成完成后自动关闭预览弹窗
-  const prevLoadingRef = useRef(loading);
-  useEffect(() => {
-    if (prevLoadingRef.current && !loading && previewVisible) {
-      setPreviewVisible(false);
-    }
-    prevLoadingRef.current = loading;
-  }, [loading, previewVisible]);
-
   const loadApiProjects = useCallback(async () => {
     try {
       const { apiTestApi } = await import('../services/api');
@@ -468,10 +459,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
         <Modal
           title="确认生成测试用例"
           open={previewVisible}
-          onCancel={() => !loading && setPreviewVisible(false)}
+          onCancel={() => setPreviewVisible(false)}
           width={640}
-          maskClosable={!loading}
-          closable={!loading}
           footer={[
             <Button key="cancel" onClick={() => setPreviewVisible(false)} disabled={loading}>
               取消
@@ -480,8 +469,10 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
               key="confirm"
               type="primary"
               icon={<RocketOutlined />}
-              loading={loading}
-              onClick={onGenerate}
+              onClick={() => {
+                setPreviewVisible(false);
+                onGenerate();
+              }}
             >
               确认生成
             </Button>,
