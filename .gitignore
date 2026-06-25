@@ -17,3 +17,6 @@ backend/.env.*
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+
+# Superpowers session artifacts
+.superpowers/
