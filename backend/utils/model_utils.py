@@ -1040,6 +1040,17 @@ async def generate_testcases(
                 db_session.flush()  # 获取场景ID
                 scenario_id = scenario.id
 
+            # 过滤 api_call 步骤：用例只存文本步骤，api_call 步骤在场景中
+            if scenario_id:
+                converted_preset_conditions = [
+                    s for s in converted_preset_conditions
+                    if not (isinstance(s, dict) and s.get("endpoint_id"))
+                ]
+                converted_steps = [
+                    s for s in converted_steps
+                    if not (isinstance(s, dict) and s.get("endpoint_id"))
+                ]
+
             # 创建DBTestCase对象，转换属性
             db_tc = DBTestCase(
                 case_name=tc.case_name,
