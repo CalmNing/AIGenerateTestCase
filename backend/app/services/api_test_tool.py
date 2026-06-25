@@ -1834,6 +1834,14 @@ async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) 
     results = []
     passed = True
 
+    # 收集需要从响应中提取的变量（值以 $. 开头的视为 jsonpath 表达式）
+    pending_extractions: dict[str, str] = {}  # variable_name -> jsonpath_expression
+    for var in (scenario.variables or []):
+        if isinstance(var, dict) and var.get("key") and var.get("value", "").startswith("$."):
+            pending_extractions[var["key"]] = var["value"]
+            # 临时移除，等提取后再赋值
+            variables.pop(var["key"], None)
+
     async with httpx.AsyncClient(limits=API_TEST_HTTP_LIMITS) as client:
         for index, step in enumerate(scenario.steps or [], 1):
             if not isinstance(step, dict) or step.get("enabled", True) is False:
@@ -1858,6 +1866,25 @@ async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) 
             )
             results.append(result)
             passed = passed and step_passed
+
+            # 从当前步骤的响应中提取待提取的变量
+            if step_passed and pending_extractions:
+                response_data = result.get("response", {}).get("body")
+                if isinstance(response_data, (dict, list)):
+                    extracted_keys = []
+                    for var_name, jsonpath_expr in pending_extractions.items():
+                        try:
+                            matches = parse_jsonpath(jsonpath_expr).find(response_data)
+                            if matches:
+                                value = matches[0].value
+                                variables[var_name] = str(value) if not isinstance(value, str) else value
+                                extracted_keys.append(var_name)
+                        except Exception:
+                            pass
+                    # 移除已提取的变量
+                    for key in extracted_keys:
+                        del pending_extractions[key]
+
             if not step_passed and not step.get("continue_on_failure"):
                 break
 
