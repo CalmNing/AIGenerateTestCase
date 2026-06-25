@@ -6,6 +6,9 @@ import {
   EyeOutlined,
   DeleteOutlined,
 } from '@ant-design/icons';
+import CodeMirror from '@uiw/react-codemirror';
+import { json } from '@codemirror/lang-json';
+import { EditorView } from '@codemirror/view';
 import { apiTestApi } from '../../services/api';
 import { ApiScenario, ApiScenarioStep } from '../../types';
 import './TestcaseScenarioView.css';
@@ -374,7 +377,13 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                         overflow: 'auto',
                       }}
                     >
-                      {step.body}
+                      {(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(step.body), null, 2);
+                        } catch {
+                          return step.body;
+                        }
+                      })()}
                     </pre>
                   </div>
                 )}
@@ -508,13 +517,17 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
 
                   <div className="step-edit-row">
                     <label>请求体:</label>
-                    <Input.TextArea
-                      value={step.body || ''}
-                      onChange={e => updateStep(index, 'body', e.target.value)}
-                      rows={4}
-                      className="body-editor"
-                      placeholder='{"key": "value"}'
-                    />
+                    <div className="body-editor-wrapper">
+                      <CodeMirror
+                        value={step.body || ''}
+                        onChange={(value) => updateStep(index, 'body', value)}
+                        extensions={[json(), EditorView.lineWrapping]}
+                        theme="light"
+                        minHeight="100px"
+                        maxHeight="300px"
+                        style={{ fontSize: 12, borderRadius: 'var(--radius-sm)' }}
+                      />
+                    </div>
                   </div>
                 </div>
 
