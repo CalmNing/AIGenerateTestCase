@@ -57,15 +57,40 @@ class TestCase(BaseModel):
     """自定义 TestCase schema."""
     case_name: str = Field(..., description="用例名称")
     steps: List[Union[str, ApiCallStep]] = Field(..., description="用例步骤，支持纯文本步骤和结构化 api_call 步骤")
-    case_level: Optional[AllowedValue] = Field(default=4, description="用例级别: 1-功能 2-边界 3-异常 4-场景")
-    preset_conditions: List[Union[str, ApiCallStep]] = Field(default_factory=list, description="前置条件，支持纯文本和 api_call 步骤")
-    expected_results: List[str] = Field(default_factory=list, description="预期结果列表")
-    api_endpoint_ref: Optional[List[int]] = Field(default=None, description="关联的接口编号列表")
+    preset_conditions: List[Union[str, ApiCallStep]] = Field(default_factory=list, description="前置条件，支持纯文本和结构化 api_call 步骤")
+    expected_results: List[str] = Field(..., description="预期结果")
+    case_level: Optional[AllowedValue] = Field(default=4, description="用例级别")
+    api_endpoint_ref: Optional[List[int]] = Field(default=None, description="关联的 API 接口编号列表（在 API 信息中的序号，从1开始）。不提供时默认关联所有已加载的接口。")
+    assertions: Optional[List[AssertionRule]] = Field(default=None, description="用例级断言规则，覆盖接口默认断言。不提供时使用接口自身的断言配置。")
+
+    def __post_init__(self):
+        """验证case_level只允许1、2、3、4"""
+        allowed_levels = [1, 2, 3, 4]
+        if self.case_level is not None and self.case_level not in allowed_levels:
+            raise ValueError(f"case_level必须是{allowed_levels}中的一个，当前值：{self.case_level}")
 
 
+# 定义响应格式数据类
 class ResponseFormat(BaseModel):
-    """定义结构化输出格式"""
-    testcases: List[TestCase] = Field(..., description="测试用例列表")
+    """agent 的响应格式"""
+    response: List[TestCase] = Field(default_factory=list)
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_response_key(cls, data: Any) -> Any:
+        """自动标准化响应数据：映射 test_cases→response，标准化每个用例的字段名。"""
+        if isinstance(data, dict):
+            # 顶层映射：test_cases → response
+            if 'test_cases' in data and 'response' not in data:
+                data = dict(data)
+                data['response'] = data.pop('test_cases')
+            # 每个测试用例字段名标准化（name→case_name, level→case_level 等）
+            if 'response' in data and isinstance(data['response'], list):
+                data['response'] = [
+                    _normalize_testcase_dict(tc) if isinstance(tc, dict) else tc
+                    for tc in data['response']
+                ]
+        return data
 
 
 class TestCaseDesignMethod(BaseModel):
