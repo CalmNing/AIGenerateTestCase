@@ -705,7 +705,7 @@ def _extract_post_actions(actions: list[dict] | None, response_data: Any, variab
     return extracted
 
 
-def _run_assertions(assertions: list[dict] | None, response_data: Any, status_code: int, elapsed_ms: int) -> list[dict]:
+def _run_assertions(assertions: list[dict] | None, response_data: Any, status_code: int, elapsed_ms: int, variables: dict | None = None) -> list[dict]:
     results = []
     for assertion in assertions or []:
         if not isinstance(assertion, dict):
@@ -715,8 +715,24 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
         actual = None
         expected = None
         try:
+            # 对断言的 value 字段进行变量替换
+            raw_value = assertion.get("value")
+            if isinstance(raw_value, str) and "{{" in raw_value and variables:
+                unresolved: set[str] = set()
+                expected_str = substitute_variables(raw_value, variables, unresolved)
+                # 尝试转为数字（如果原始值是数字）
+                try:
+                    expected = int(expected_str)
+                except (ValueError, TypeError):
+                    try:
+                        expected = float(expected_str)
+                    except (ValueError, TypeError):
+                        expected = expected_str
+            else:
+                expected = raw_value
+
             if kind == "status_code":
-                expected = int(assertion.get("value", 200))
+                expected = int(expected if expected is not None else 200)
                 actual = status_code
                 ok = actual == expected
             elif kind == "status_code_range":
@@ -726,7 +742,7 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
                 actual = status_code
                 ok = lo <= status_code <= hi
             elif kind == "response_time_lt":
-                expected = int(assertion.get("value", 3000))
+                expected = int(expected if expected is not None else 3000)
                 actual = elapsed_ms
                 ok = elapsed_ms < expected
             elif kind == "jsonpath_exists":
@@ -735,7 +751,7 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
                 ok = actual > 0
             elif kind == "jsonpath_equals":
                 expr = assertion.get("jsonpath")
-                expected = str(assertion.get("value", ""))
+                expected = str(expected) if expected is not None else ""
                 matches = parse_jsonpath(expr).find(response_data) if expr else []
                 actual = str(matches[0].value) if matches else None
                 ok = actual == expected
@@ -854,6 +870,7 @@ async def _execute_endpoint_step(
             response_data,
             response.status_code,
             elapsed_ms,
+            variables,
         )
         extracted = _extract_post_actions(merged.get("post_actions"), response_data, variables)
         step_passed = (
