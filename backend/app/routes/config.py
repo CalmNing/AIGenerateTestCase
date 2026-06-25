@@ -12,13 +12,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"])
 
 
-@router.get("/bug-link-template")
-async def get_bug_link_template():
-    """获取 Bug 链接模板配置"""
-    template = config_manager.get("bug_link_template", "")
-    return Response(data={"template": template})
-
-
 class LanhuCookieRequest(BaseModel):
     cookie: str
 
