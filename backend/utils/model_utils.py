@@ -8,7 +8,6 @@ import uuid
 from typing import List, Optional, Union, Any
 
 from langchain.agents import create_agent
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
