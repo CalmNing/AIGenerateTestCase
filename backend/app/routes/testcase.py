@@ -600,6 +600,10 @@ async def generate_testcases(
                     ep_lines.append('响应 Schema:\n' + json.dumps(endpoint_db.response_schema, ensure_ascii=False, indent=2))
                 if ep_body:
                     ep_lines.append('请求体示例:\n' + ep_body)
+                if endpoint_db.pre_actions:
+                    ep_lines.append('前置操作: ' + json.dumps(endpoint_db.pre_actions, ensure_ascii=False, indent=2))
+                if endpoint_db.post_actions:
+                    ep_lines.append('后置提取: ' + json.dumps(endpoint_db.post_actions, ensure_ascii=False, indent=2))
                 api_sections.append('\n'.join(ep_lines))
                 logger.info('已加载 API 端点: ' + endpoint_db.name + ' (' + endpoint_db.method + ' ' + endpoint_db.path + ')')
             except Exception as e:
