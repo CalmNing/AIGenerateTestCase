@@ -175,14 +175,8 @@ def _best_matching_create_endpoint(
     return candidates_sorted[0] if candidates_sorted else None
 
 
-class ScenarioStepSummary(BaseModel):
-    method: str = ""
-    path: str = ""
-    name: str = ""
-
-
 class TestCasePage(BaseModel):
-    items: List[dict]
+    items: List[dict]  # dict 而非 TestCase，因为每项附带了额外的 scenario_steps 字段
     totalNumber: int = Field(0, description="总条数")
     passed: int = Field(0, description="已通过的用例数")
     failed: int = Field(0, description="未通过的用例数")
