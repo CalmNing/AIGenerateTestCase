@@ -67,3 +67,37 @@
   padding: 40px 0;
   color: var(--color-text-tertiary);
 }
+
+.step-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step-edit-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.step-edit-row > label {
+  min-width: 80px;
+  font-weight: 500;
+  padding-top: 4px;
+  color: var(--color-text-secondary);
+}
+
+.step-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.kv-editor,
+.post-actions-editor,
+.assertions-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
