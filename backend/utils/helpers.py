@@ -4,14 +4,12 @@ import json
 import logging
 import os
 import re
-import time
 from typing import Any
 
-import yaml
 from langchain_core.callbacks import BaseCallbackHandler
 from sqlmodel import select, desc
 
-from db.models import HistoryPrompt, ApiEndpoint
+from db.models import HistoryPrompt
 from utils.history_prompt_cleaner import clean_history_prompt_content
 
 logger = logging.getLogger(__name__)

@@ -4,6 +4,8 @@ from typing import List, Optional, Literal, Any, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+from utils.helpers import _normalize_testcase_dict
+
 
 # 定义字面量类型：仅允许 1/2/3/4
 AllowedValue = Literal[1, 2, 3, 4]
