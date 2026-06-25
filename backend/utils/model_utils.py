@@ -1743,11 +1743,12 @@ async def generate_testcases(
                     eid = endpoint_index_to_id.get(step.endpoint_ref)
                     if eid:
                         step_dict["endpoint_id"] = eid
-                        # 从数据库加载 method/path，供前端展示
+                        # 从数据库加载 method/path/name，供前端展示
                         _ep = _step_endpoint_map.get(eid)
                         if _ep:
                             step_dict["method"] = _ep.method
                             step_dict["path"] = _ep.path
+                            step_dict["endpoint_name"] = _ep.name
                     if step.description:
                         step_dict["name"] = step.description
                     if step.headers:
@@ -1786,11 +1787,12 @@ async def generate_testcases(
                     eid = endpoint_index_to_id.get(pc.endpoint_ref)
                     if eid:
                         pc_dict["endpoint_id"] = eid
-                        # 从数据库加载 method/path，供前端展示
+                        # 从数据库加载 method/path/name，供前端展示
                         _pc_ep = _pc_endpoint_map.get(eid)
                         if _pc_ep:
                             pc_dict["method"] = _pc_ep.method
                             pc_dict["path"] = _pc_ep.path
+                            pc_dict["endpoint_name"] = _pc_ep.name
                     if pc.description:
                         pc_dict["name"] = pc.description
                     if pc.headers:

@@ -334,7 +334,8 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   const renderStep = (step: ApiScenarioStep, index: number) => {
     const method = step.method || 'GET';
     const methodPath = step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : '';
-    const stepLabel = methodPath ? (step.name ? `${methodPath} ${step.name}` : methodPath) : (step.name || `步骤 ${index + 1}`);
+    const epName = (step as any).endpoint_name || step.name || '';
+    const stepLabel = methodPath ? (epName ? `${methodPath} ${epName}` : methodPath) : (step.name || `步骤 ${index + 1}`);
 
     return (
       <Collapse
@@ -420,7 +421,8 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   const renderEditStep = (step: any, index: number) => {
     const method = step.method || 'GET';
     const methodPath = step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : '';
-    const stepLabel = methodPath ? (step.name ? `${methodPath} ${step.name}` : methodPath) : (step.name || `步骤 ${index + 1}`);
+    const epName = (step as any).endpoint_name || step.name || '';
+    const stepLabel = methodPath ? (epName ? `${methodPath} ${epName}` : methodPath) : (step.name || `步骤 ${index + 1}`);
     const totalSteps = editScenario?.steps.length || 0;
 
     return (
@@ -602,7 +604,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
               >
                 <Space>
                   <span>{index + 1}.</span>
-                  <span>{(() => { const mp = step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : ''; return mp ? (step.name ? `${mp} ${step.name}` : mp) : (step.name || `步骤 ${index + 1}`); })()}</span>
+                  <span>{(() => { const mp = step.method && (step.path || step.url) ? `${step.method.toUpperCase()} ${step.path || step.url}` : ''; const en = (step as any).endpoint_name || step.name || ''; return mp ? (en ? `${mp} ${en}` : mp) : (step.name || `步骤 ${index + 1}`); })()}</span>
                   <Tag
                     color={step.status === 'passed' ? 'success' : 'error'}
                   >
