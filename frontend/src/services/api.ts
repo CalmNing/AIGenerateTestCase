@@ -100,6 +100,7 @@ export const testcaseApi = {
     api_key?: string;
     api_base_url?: string;
     api_proxy_url?: string;
+    api_model?: string;
     ollama_url?: string;
     ollama_model?: string;
   }, imageBase64?: string | null,
@@ -134,6 +135,9 @@ export const testcaseApi = {
       }
       if (modelConfig.api_proxy_url) {
         formData.append('api_proxy_url', modelConfig.api_proxy_url);
+      }
+      if (modelConfig.api_model) {
+        formData.append('api_model', modelConfig.api_model);
       }
       if (modelConfig.ollama_url) {
         formData.append('ollama_url', modelConfig.ollama_url);
