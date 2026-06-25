@@ -372,6 +372,8 @@ export const configApi = {
   getLanhuCookie: (): Promise<ApiResponse<{ cookie: string; has_cookie: boolean }>> => api.get('/config/lanhu-cookie'),
   setLanhuCookie: (cookie: string): Promise<ApiResponse> => api.post('/config/lanhu-cookie', { cookie }),
   getBugLinkTemplate: (): Promise<ApiResponse<{ template: string }>> => api.get('/config/bug-link-template'),
+  listModels: (apiKey: string, apiBaseUrl: string): Promise<ApiResponse<{ id: string; owned_by: string }[]>> =>
+    api.get('/config/models', { params: { api_key: apiKey, api_base_url: apiBaseUrl } }),
 };
 
 // Mock配置API
