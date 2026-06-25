@@ -1723,12 +1723,31 @@ async def generate_testcases(
 
             # 转换步骤：将 ApiCallStep 对象转为 dict
             converted_steps = []
+            # 预加载步骤涉及的接口信息，用于丰富 method/path 字段（供前端展示）
+            _step_eids = set()
+            for step in tc.steps:
+                if isinstance(step, ApiCallStep):
+                    eid = endpoint_index_to_id.get(step.endpoint_ref)
+                    if eid:
+                        _step_eids.add(eid)
+            _step_endpoint_map: dict[int, ApiEndpoint] = {}
+            if _step_eids and db_session:
+                _rows = db_session.exec(
+                    select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_step_eids)))
+                ).all()
+                _step_endpoint_map = {e.id: e for e in _rows}
+
             for step in tc.steps:
                 if isinstance(step, ApiCallStep):
                     step_dict = {"type": "api_call"}
                     eid = endpoint_index_to_id.get(step.endpoint_ref)
                     if eid:
                         step_dict["endpoint_id"] = eid
+                        # 从数据库加载 method/path，供前端展示
+                        _ep = _step_endpoint_map.get(eid)
+                        if _ep:
+                            step_dict["method"] = _ep.method
+                            step_dict["path"] = _ep.path
                     if step.description:
                         step_dict["name"] = step.description
                     if step.headers:
@@ -1747,12 +1766,31 @@ async def generate_testcases(
 
             # 转换前置条件：将 ApiCallStep 对象转为 dict
             converted_preset_conditions = []
+            # 预加载前置条件涉及的接口信息
+            _pc_eids = set()
+            for pc in tc.preset_conditions:
+                if isinstance(pc, ApiCallStep):
+                    eid = endpoint_index_to_id.get(pc.endpoint_ref)
+                    if eid:
+                        _pc_eids.add(eid)
+            _pc_endpoint_map: dict[int, ApiEndpoint] = {}
+            if _pc_eids and db_session:
+                _pc_rows = db_session.exec(
+                    select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_pc_eids)))
+                ).all()
+                _pc_endpoint_map = {e.id: e for e in _pc_rows}
+
             for pc in tc.preset_conditions:
                 if isinstance(pc, ApiCallStep):
                     pc_dict = {"type": "api_call"}
                     eid = endpoint_index_to_id.get(pc.endpoint_ref)
                     if eid:
                         pc_dict["endpoint_id"] = eid
+                        # 从数据库加载 method/path，供前端展示
+                        _pc_ep = _pc_endpoint_map.get(eid)
+                        if _pc_ep:
+                            pc_dict["method"] = _pc_ep.method
+                            pc_dict["path"] = _pc_ep.path
                     if pc.description:
                         pc_dict["name"] = pc.description
                     if pc.headers:
