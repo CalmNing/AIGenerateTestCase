@@ -534,7 +534,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                     <label>请求体:</label>
                     <div className="body-editor-wrapper">
                       <CodeMirror
-                        value={step.body || ''}
+                        value={formatJsonBody(step.body || '')}
                         onChange={(value) => updateStep(index, 'body', value)}
                         extensions={[json(), EditorView.lineWrapping]}
                         theme="light"
