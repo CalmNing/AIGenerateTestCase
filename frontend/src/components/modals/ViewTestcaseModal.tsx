@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Modal, Tabs } from 'antd';
-import { CheckOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 import { TestCase } from '../../types';
 import TestcaseDetailView from '../TestcaseDetailView';
 import TestcaseScenarioView from '../TestcaseScenarioView';
@@ -47,7 +47,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
           <DownOutlined style={{ fontSize: 11 }} /> 下一个
         </button>,
         <button key="execute" className="vtm-footer-btn vtm-footer-btn--primary" onClick={() => onComplete(tc)}>
-          <CheckOutlined style={{ fontSize: 12 }} /> 执行
+          <CheckCircleOutlined style={{ fontSize: 12 }} /> 标记完成
         </button>,
         <button key="close" className="vtm-footer-btn" onClick={onCancel}>
           关闭
