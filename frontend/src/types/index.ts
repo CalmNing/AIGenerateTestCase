@@ -29,6 +29,7 @@ export interface TestCase {
   api_endpoint_id?: number | string | null;
   api_project_id?: number | null;
   assertions?: Record<string, any>[] | null;
+  scenario_id?: number | null;
   steps: (string | Record<string, any>)[];
   expected_results: (string | Record<string, any>)[];
 }
