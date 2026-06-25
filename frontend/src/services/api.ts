@@ -219,6 +219,10 @@ export const testcaseApi = {
   /** ?????????? API ?? */
   executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any }>> =>
     api.post(`/testcases/${sessionId}/testcases/${testcaseId}/execute`),
+
+  // 获取测试用例执行日志
+  getExecutionLogs: (sessionId: number, testcaseId: number): Promise<ApiResponse<any[]>> =>
+    api.get(`/testcases/${sessionId}/testcases/${testcaseId}/execution-logs`),
 };
 
 // 模块管理API
