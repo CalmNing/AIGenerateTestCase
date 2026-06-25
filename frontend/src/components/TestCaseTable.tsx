@@ -95,14 +95,19 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
         }
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {allSteps.map((step: any, i: number) => (
-              <Tooltip key={i} title={step.description || step.name || `API 步骤 ${i + 1}`}>
-                <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer' }}>
-                  <ApiOutlined style={{ marginRight: 4 }} />
-                  {step.description || step.name || `步骤 ${i + 1}`}
-                </Tag>
-              </Tooltip>
-            ))}
+            {allSteps.map((step: any, i: number) => {
+              const method = step.method ? step.method.toUpperCase() : '';
+              const path = step.path || step.url || '';
+              const label = method && path ? `${method} ${path}` : (step.description || step.name || `步骤 ${i + 1}`);
+              return (
+                <Tooltip key={i} title={step.description || step.name || label}>
+                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer' }}>
+                    <ApiOutlined style={{ marginRight: 4 }} />
+                    {label}
+                  </Tag>
+                </Tooltip>
+              );
+            })}
           </div>
         );
       },
