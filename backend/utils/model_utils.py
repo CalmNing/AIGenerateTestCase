@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from sqlmodel import select, desc
 
-from db.models import TestCase as DBTestCase, HistoryPrompt
+from db.models import TestCase as DBTestCase, HistoryPrompt, ApiScenario
 from utils.history_prompt_cleaner import clean_history_prompt_content
 
 try:
@@ -1695,6 +1695,9 @@ async def generate_testcases(
         # 转换为DBTestCase对象
         db_testcases = []
         endpoint_index_to_id = kwargs.get("endpoint_index_to_id", {})
+        db_session = kwargs.get("db_session")
+        user_id = kwargs.get("user_id")
+        api_project_id = kwargs.get("api_project_id")
         for tc in local_testcases:
             # 处理按需关联接口
             attached_ids = None
@@ -1759,6 +1762,20 @@ async def generate_testcases(
                 else:
                     converted_preset_conditions.append(str(pc))
 
+            # 创建关联的接口场景（如果有步骤且有项目ID）
+            scenario_id = None
+            if converted_steps and api_project_id and db_session:
+                scenario = ApiScenario(
+                    project_id=api_project_id,
+                    name=f"{tc.case_name}_场景",
+                    description=f"测试用例 {tc.case_name} 的接口场景",
+                    steps=converted_steps,
+                    user_id=user_id,
+                )
+                db_session.add(scenario)
+                db_session.flush()  # 获取场景ID
+                scenario_id = scenario.id
+
             # 创建DBTestCase对象，转换属性
             db_tc = DBTestCase(
                 case_name=tc.case_name,
@@ -1770,6 +1787,7 @@ async def generate_testcases(
                 expected_results=tc.expected_results,
                 api_endpoint_id=attached_ids,
                 assertions=serialized_assertions,
+                scenario_id=scenario_id,
             )
             db_testcases.append(db_tc)
 
