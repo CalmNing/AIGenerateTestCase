@@ -30,6 +30,8 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [latestResult, setLatestResult] = useState<any>(null);
+  const [resultSource, setResultSource] = useState<'current' | 'history' | null>(null);
   const [editing, setEditing] = useState(!initialReadOnly);
 
   // 加载场景数据
@@ -52,6 +54,23 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
     loadScenario();
   }, [loadScenario]);
 
+  // 加载最近一次执行结果
+  const loadLatestResult = useCallback(async () => {
+    if (!scenarioId) return;
+    try {
+      const res = await apiTestApi.getScenarioResults(scenarioId, 1);
+      if (res.code === 200 && res.data && res.data.length > 0) {
+        setLatestResult(res.data[0]);
+      }
+    } catch (error) {
+      console.error('加载历史结果失败:', error);
+    }
+  }, [scenarioId]);
+
+  useEffect(() => {
+    loadLatestResult();
+  }, [loadLatestResult]);
+
   // 执行场景
   const handleExecute = async () => {
     if (!scenarioId) return;
@@ -60,6 +79,8 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
       const res = await apiTestApi.runScenario(scenarioId);
       if (res.code === 200 && res.data) {
         setResult(res.data);
+        setResultSource('current');
+        setLatestResult(res.data);
         message.success(res.data.passed ? '场景执行通过' : '场景执行失败');
       } else {
         message.error(res.message || '执行失败');
@@ -157,24 +178,32 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
   };
 
   // 渲染执行结果
+  const effectiveResult = result || latestResult;
+  const effectiveSource = result ? 'current' : (latestResult ? 'history' : null);
+
   const renderResult = () => {
-    if (!result) return null;
+    if (!effectiveResult) return null;
 
     return (
       <div className="scenario-result">
         <div style={{ marginBottom: 8 }}>
+          {effectiveSource && (
+            <Tag color={effectiveSource === 'current' ? 'blue' : 'default'} style={{ marginRight: 8 }}>
+              {effectiveSource === 'current' ? '当前执行' : '上次结果'}
+            </Tag>
+          )}
           <Tag
-            color={result.passed ? 'success' : 'error'}
+            color={effectiveResult.passed ? 'success' : 'error'}
             style={{ fontSize: 14 }}
           >
-            {result.passed ? '执行通过' : '执行失败'}
+            {effectiveResult.passed ? '执行通过' : '执行失败'}
           </Tag>
         </div>
 
-        {result.steps && result.steps.length > 0 && (
+        {effectiveResult.steps && effectiveResult.steps.length > 0 && (
           <div>
             <strong>步骤详情:</strong>
-            {result.steps.map((step: any, index: number) => (
+            {effectiveResult.steps.map((step: any, index: number) => (
               <div
                 key={index}
                 style={{
