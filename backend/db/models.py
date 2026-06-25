@@ -85,6 +85,7 @@ class TestCase(BaseModel, table=True):
     api_endpoint_id: Optional[str] = Field(default=None, description="关联的 API Endpoint ID（逗号分隔）")
     api_project_id: Optional[int] = Field(default=None, description="关联的 API Project ID")
     assertions: Optional[List[dict]] = Field(default=None, sa_type=JSON, description="用例级断言规则，执行时覆盖接口默认断言")
+    scenario_id: Optional[int] = Field(default=None, foreign_key="apiscenario.id", description="关联的接口场景ID")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
