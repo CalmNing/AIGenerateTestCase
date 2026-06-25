@@ -56,14 +56,14 @@ function collectJsonPathOptions(schema: Record<string, any> | undefined, prefix 
   return options;
 }
 
-// 根据 response schema 生成完整的 JSONPath 选项
+// 根据 response schema 生成 JSONPath 选项
 function buildJsonPathOptions(responseSchema?: Record<string, any>): Array<{ label: string; value: string }> {
   const schemaOptions = collectJsonPathOptions(responseSchema);
-  // 去重并合并
-  const optionMap = new Map<string, { label: string; value: string }>();
-  commonJsonPathOptions.forEach((option) => optionMap.set(option.value, option));
-  schemaOptions.forEach((option) => optionMap.set(option.value, option));
-  return Array.from(optionMap.values());
+  // 如果有 schema 字段，只显示 schema 字段；否则显示常用选项
+  if (schemaOptions.length > 0) {
+    return schemaOptions;
+  }
+  return commonJsonPathOptions;
 }
 
 // 格式化 JSON 字符串
