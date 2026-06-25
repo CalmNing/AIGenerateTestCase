@@ -1107,7 +1107,6 @@ async def generate_body_from_schema(
         body = json.dumps(body_obj, ensure_ascii=False, indent=2)
         body = _apply_global_tokens_to_body(body, variables)
         return {"body": body, "used_ai": True, "message": "AI generated successfully"}
-        return {"body": json.dumps(body_obj, ensure_ascii=False, indent=2), "used_ai": True, "message": "AI 生成成功"}
     except Exception as exc:
         return {"body": rule_body, "used_ai": False, "message": f"AI 生成失败，已使用 schema 规则生成: {exc}"}
 
@@ -1211,16 +1210,6 @@ def _is_dependency_fillable(value: Any) -> bool:
     if isinstance(value, (int, float)) and value == 0:
         return True
     return False
-
-
-def _schema_properties(schema: Any) -> dict:
-    if not isinstance(schema, dict):
-        return {}
-    if isinstance(schema.get("properties"), dict):
-        return schema["properties"]
-    if schema.get("type") == "array" and isinstance(schema.get("items"), dict):
-        return _schema_properties(schema["items"])
-    return {}
 
 
 def _iter_response_schema_fields(schema: Any, path: str = "$") -> list[dict]:

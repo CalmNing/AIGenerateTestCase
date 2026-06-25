@@ -118,7 +118,7 @@ def _calculate_match_score(requirement: str, endpoint: ApiEndpoint) -> float:
                 score += 15.0
 
     # Match on summary/description
-    summary = endpoint.summary or endpoint.description or ""
+    summary = endpoint.name or ""
     if summary:
         summary_lower = summary.lower()
         req_words = set(req_lower.split())
