@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal } from 'antd';
-import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined, EditOutlined } from '@ant-design/icons';
+import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal } from 'antd';
+import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined, EditOutlined, RocketOutlined } from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../types';
 import HistoryPromptSidebar from './HistoryPromptSidebar';
 import './TestCaseGenerator.css';
@@ -46,6 +46,15 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const [overrideEditorVisible, setOverrideEditorVisible] = useState(false);
   const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
   const [previewVisible, setPreviewVisible] = useState(false);
+
+  // 生成完成后自动关闭预览弹窗
+  const prevLoadingRef = useRef(loading);
+  useEffect(() => {
+    if (prevLoadingRef.current && !loading && previewVisible) {
+      setPreviewVisible(false);
+    }
+    prevLoadingRef.current = loading;
+  }, [loading, previewVisible]);
 
   const loadApiProjects = useCallback(async () => {
     try {
@@ -459,51 +468,76 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
         <Modal
           title="确认生成测试用例"
           open={previewVisible}
-          onCancel={() => setPreviewVisible(false)}
+          onCancel={() => !loading && setPreviewVisible(false)}
           width={640}
+          maskClosable={!loading}
+          closable={!loading}
           footer={[
-            <button key="cancel" className="tcg-smart-btn" onClick={() => setPreviewVisible(false)}>
+            <Button key="cancel" onClick={() => setPreviewVisible(false)} disabled={loading}>
               取消
-            </button>,
-            <button
+            </Button>,
+            <Button
               key="confirm"
-              className="tcg-smart-btn"
-              style={{ background: 'var(--color-primary)', color: '#fff', border: 'none' }}
-              onClick={() => {
-                setPreviewVisible(false);
-                onGenerate();
-              }}
+              type="primary"
+              icon={<RocketOutlined />}
+              loading={loading}
+              onClick={onGenerate}
             >
               确认生成
-            </button>,
+            </Button>,
           ]}
         >
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>
-              <ApiOutlined style={{ marginRight: 8 }} />已选接口（{selectedApiEndpointId?.length || 0} 个）
-            </div>
-            {selectedApiEndpointId?.map((eid) => {
-              const ep = apiEndpoints.find(e => e.id === eid);
-              if (!ep) return null;
-              const methodColor = methodColorMap[ep.method?.toUpperCase()] || 'default';
-              const hasOverrides = apiEndpointOverrides?.[eid] && (
-                apiEndpointOverrides[eid]?.body ||
-                (apiEndpointOverrides[eid]?.headers?.length || 0) > 0 ||
-                (apiEndpointOverrides[eid]?.parameters?.length || 0) > 0
-              );
-              return (
-                <div key={eid} style={{ padding: '8px 0', borderBottom: '1px solid var(--color-border-secondary)' }}>
-                  <Tag color={methodColor}>{ep.method?.toUpperCase()}</Tag>
-                  <span style={{ fontWeight: 500 }}>{ep.path}</span>
-                  <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-tertiary)' }}>{ep.name}</span>
-                  {hasOverrides && <Tag color="warning" style={{ marginLeft: 8 }}>已自定义参数</Tag>}
-                </div>
-              );
-            })}
+          <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--color-text-secondary)' }}>
+            AI 将基于以下接口信息和您的需求描述，生成包含可执行 API 调用步骤的测试用例。
           </div>
-          <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
-            AI 将根据以上接口信息和您的需求描述生成包含可执行 API 调用步骤的测试用例。
-          </div>
+          <Card
+            size="small"
+            title={
+              <span>
+                <ApiOutlined style={{ marginRight: 8 }} />
+                已选接口（{selectedApiEndpointId?.length || 0} 个）
+              </span>
+            }
+            styles={{ body: { padding: 0 } }}
+          >
+            {selectedApiEndpointId && selectedApiEndpointId.length > 0 ? (
+              selectedApiEndpointId.map((eid, idx) => {
+                const ep = apiEndpoints.find(e => e.id === eid);
+                if (!ep) return null;
+                const methodColor = methodColorMap[ep.method?.toUpperCase()] || 'default';
+                const hasOverrides = apiEndpointOverrides?.[eid] && (
+                  apiEndpointOverrides[eid]?.body ||
+                  (apiEndpointOverrides[eid]?.headers?.length || 0) > 0 ||
+                  (apiEndpointOverrides[eid]?.parameters?.length || 0) > 0
+                );
+                return (
+                  <div
+                    key={eid}
+                    style={{
+                      padding: '10px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      borderBottom: idx < (selectedApiEndpointId?.length || 0) - 1
+                        ? '1px solid var(--color-border-secondary)'
+                        : 'none',
+                    }}
+                  >
+                    <Tag color={methodColor} style={{ margin: 0, minWidth: 52, textAlign: 'center' }}>
+                      {ep.method?.toUpperCase()}
+                    </Tag>
+                    <span style={{ fontWeight: 500, flex: 1 }}>{ep.path}</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{ep.name}</span>
+                    {hasOverrides && <Tag color="warning">已自定义</Tag>}
+                  </div>
+                );
+              })
+            ) : (
+              <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--color-text-tertiary)' }}>
+                未选择接口，将仅基于需求描述生成用例
+              </div>
+            )}
+          </Card>
         </Modal>
       </div>
 
