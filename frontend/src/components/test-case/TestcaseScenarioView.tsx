@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Space, Collapse, Tag, message, Spin, Empty, Input, Switch, Select } from 'antd';
+import { Button, Space, Collapse, Tag, message, Spin, Empty, Input, Switch, Select, AutoComplete } from 'antd';
 import {
   PlayCircleOutlined,
   EditOutlined,
@@ -25,6 +25,18 @@ const methodColors: Record<string, string> = {
   DELETE: 'red',
   PATCH: 'purple',
 };
+
+// 常用 JSONPath 选项
+const commonJsonPathOptions = [
+  { label: '响应体', value: '$' },
+  { label: '数据对象 data', value: '$.data' },
+  { label: '数据列表 data.list', value: '$.data.list' },
+  { label: '数据项 data.items', value: '$.data.items' },
+  { label: '错误信息 message', value: '$.message' },
+  { label: '业务编码 code', value: '$.code' },
+  { label: '记录ID data.id', value: '$.data.id' },
+  { label: '记录ID data.recordId', value: '$.data.recordId' },
+];
 
 // 格式化 JSON 字符串
 const formatJsonBody = (body: string): string => {
@@ -122,11 +134,17 @@ const PostActionsEditor: React.FC<{
             onChange={e => update(i, 'key', e.target.value)}
             style={{ width: 120 }}
           />
-          <Input
+          <AutoComplete
             size="small"
             placeholder="$.jsonpath"
             value={action.jsonpath || ''}
-            onChange={e => update(i, 'jsonpath', e.target.value)}
+            onChange={val => update(i, 'jsonpath', val)}
+            options={commonJsonPathOptions}
+            filterOption={(input, option) => {
+              const label = String(option?.label || '').toLowerCase();
+              const value = String(option?.value || '').toLowerCase();
+              return label.includes(input.toLowerCase()) || value.includes(input.toLowerCase());
+            }}
             style={{ width: 200 }}
           />
           <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => onChange(value.filter((_: any, idx: number) => idx !== i))} />
@@ -169,11 +187,17 @@ const AssertionsEditor: React.FC<{
             options={assertionTypes}
             style={{ width: 130 }}
           />
-          <Input
+          <AutoComplete
             size="small"
             placeholder="jsonpath"
             value={assertion.jsonpath || ''}
-            onChange={e => update(i, 'jsonpath', e.target.value)}
+            onChange={val => update(i, 'jsonpath', val)}
+            options={commonJsonPathOptions}
+            filterOption={(input, option) => {
+              const label = String(option?.label || '').toLowerCase();
+              const value = String(option?.value || '').toLowerCase();
+              return label.includes(input.toLowerCase()) || value.includes(input.toLowerCase());
+            }}
             style={{ width: 150 }}
           />
           <Input
