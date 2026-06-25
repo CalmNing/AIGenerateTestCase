@@ -541,6 +541,18 @@ async def generate_testcases(
                 except ValueError:
                     pass
 
+    # 自动推断依赖接口：补全缺失的前置"新增"接口
+    dependency_labels: dict[int, str] = {}  # {endpoint_id: "依赖补全"}
+    if api_endpoint_ids and api_project_id:
+        extra_ids = infer_endpoint_dependencies(session, api_endpoint_ids, api_project_id)
+        if extra_ids:
+            new_ids = [eid for eid in extra_ids if eid not in api_endpoint_ids]
+            for eid in new_ids:
+                api_endpoint_ids.append(eid)
+                dependency_labels[eid] = "依赖补全"
+            if new_ids:
+                logger.info(f"依赖推断：自动补全 {len(new_ids)} 个前置接口 {new_ids}")
+
     # 解析 API 端点覆盖配置（用户编辑过的 body/headers/parameters）
     endpoint_overrides: dict[int, dict] = {}
     if api_endpoint_overrides:
@@ -564,7 +576,8 @@ async def generate_testcases(
                 endpoint_index_to_id[idx] = eid
                 project_db = session.get(ApiProject, api_project_id and int(api_project_id) or endpoint_db.project_id)
                 ep_lines = []
-                ep_lines.append(f'===== [{idx}] {endpoint_db.name} =====')
+                dep_label = f" [{dependency_labels[eid]}]" if eid in dependency_labels else ""
+                ep_lines.append(f'===== [{idx}] {endpoint_db.name}{dep_label} =====')
                 ep_lines.append('所属项目: ' + (project_db.name if project_db else '未知'))
                 ep_lines.append('请求方法: ' + endpoint_db.method)
                 ep_lines.append('请求路径: ' + endpoint_db.path)
