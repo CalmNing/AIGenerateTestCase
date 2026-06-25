@@ -10,10 +10,10 @@ from sqlmodel import select, desc, func
 
 from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
-from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog, ApiEndpoint, ApiProject
+from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog, ApiEndpoint, ApiProject, ApiScenario
 from utils.base_response import Response
 import traceback
-from app.services.api_test_tool import run_endpoint_steps
+from app.services.api_test_tool import run_endpoint_steps, run_scenario
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
@@ -827,6 +827,29 @@ async def execute_testcase(
     testcase = session.get(TestCase, testcase_id)
     if not testcase or testcase.session_id != session_id or (testcase.user_id and testcase.user_id != user.user_id):
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+
+    # 优先使用关联的场景执行（保持参数同步）
+    if testcase.scenario_id:
+        scenario = session.get(ApiScenario, testcase.scenario_id)
+        if scenario and scenario.user_id == user.user_id:
+            project = session.get(ApiProject, scenario.project_id)
+            if project and project.user_id == user.user_id:
+                try:
+                    result = await run_scenario(session, scenario, project)
+                    passed = result.get("passed", False)
+                    testcase.status = "PASSED" if passed else "FAILED"
+                    session.add(testcase)
+                    session.commit()
+                    log = _save_execution_log(session, testcase, result, passed, testcase.status)
+                    return Response(data={
+                        "passed": passed,
+                        "status": testcase.status,
+                        "result": result,
+                        "log_id": log.id,
+                    })
+                except Exception as e:
+                    logger = __import__("logging").getLogger(__name__)
+                    logger.error(f"场景执行失败，回退到用例步骤: {e}")
 
     has_api_presets = any(
         isinstance(c, dict) and c.get("type") == "api_call"
