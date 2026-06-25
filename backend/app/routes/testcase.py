@@ -443,6 +443,14 @@ async def generate_testcases(
         effective_requirement = requirement
 
     try:
+        # Convert api_project_id to int once for downstream usage
+        api_project_id_int: int | None = None
+        if api_project_id:
+            try:
+                api_project_id_int = int(api_project_id)
+            except (ValueError, TypeError):
+                api_project_id_int = None
+
         testcases, effective_req = await generate_testcases(
             db_session=session,
             requirement=effective_requirement,
@@ -458,6 +466,7 @@ async def generate_testcases(
             selected_skill_names=selected_skill_names,
             user_id=user.user_id,
             endpoint_index_to_id=endpoint_index_to_id,
+            api_project_id=api_project_id_int,
         )
     except ModelServiceUnavailableError as e:
         logger.error(f"生成测试用例失败: {e}")
@@ -477,11 +486,8 @@ async def generate_testcases(
         if api_endpoint_id:
             # Save as comma-separated string for multi-endpoint support
             tc.api_endpoint_id = api_endpoint_id
-        if api_project_id:
-            try:
-                tc.api_project_id = int(api_project_id)
-            except (ValueError, TypeError):
-                pass
+        if api_project_id_int is not None:
+            tc.api_project_id = api_project_id_int
     session.add_all(testcases)
     session.commit()
     return Response(message="生成测试用例成功")

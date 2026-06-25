@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from sqlmodel import select, desc
 
-from db.models import TestCase as DBTestCase, HistoryPrompt, ApiScenario
+from db.models import TestCase as DBTestCase, HistoryPrompt, ApiScenario, ApiEndpoint
 from utils.history_prompt_cleaner import clean_history_prompt_content
 
 try:
@@ -1762,14 +1762,36 @@ async def generate_testcases(
                 else:
                     converted_preset_conditions.append(str(pc))
 
-            # 创建关联的接口场景（如果有步骤且有项目ID）
+            # 创建关联的接口场景（如果有 API 调用步骤且有项目ID）
             scenario_id = None
-            if converted_steps and api_project_id and db_session:
+            api_call_steps = [s for s in converted_steps if isinstance(s, dict) and s.get("endpoint_id")]
+            if api_call_steps and api_project_id and db_session:
+                # 预加载步骤涉及的接口信息，用于丰富场景步骤的 method/path 字段（供前端展示）
+                endpoint_ids = [s["endpoint_id"] for s in api_call_steps]
+                endpoint_map: dict[int, ApiEndpoint] = {}
+                if endpoint_ids:
+                    rows = db_session.exec(
+                        select(ApiEndpoint).where(ApiEndpoint.id.in_(endpoint_ids))
+                    ).all()
+                    endpoint_map = {e.id: e for e in rows}
+
+                scenario_steps: list[dict] = []
+                for s in api_call_steps:
+                    step_copy = dict(s)
+                    ep = endpoint_map.get(s["endpoint_id"])
+                    if ep:
+                        step_copy.setdefault("method", ep.method)
+                        step_copy.setdefault("path", ep.path)
+                        step_copy.setdefault("url", ep.url or ep.path)
+                        step_copy.setdefault("enabled", True)
+                        step_copy.setdefault("continue_on_failure", True)
+                    scenario_steps.append(step_copy)
+
                 scenario = ApiScenario(
                     project_id=api_project_id,
                     name=f"{tc.case_name}_场景",
                     description=f"测试用例 {tc.case_name} 的接口场景",
-                    steps=converted_steps,
+                    steps=scenario_steps,
                     user_id=user_id,
                 )
                 db_session.add(scenario)
