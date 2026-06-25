@@ -26,6 +26,27 @@ const methodColors: Record<string, string> = {
   PATCH: 'purple',
 };
 
+// 格式化 JSON 字符串
+const formatJsonBody = (body: string): string => {
+  if (!body) return '';
+  try {
+    // 尝试直接解析
+    const parsed = JSON.parse(body);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    // 如果直接解析失败，尝试处理转义的 JSON 字符串
+    try {
+      // 移除外层引号和转义
+      const unescaped = body.replace(/\\"/g, '"').replace(/^"|"$/g, '');
+      const parsed = JSON.parse(unescaped);
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      // 如果还是失败，返回原始字符串
+      return body;
+    }
+  }
+};
+
 // Key-Value 行列表编辑器
 const KeyValueEditor: React.FC<{
   value: Record<string, string> | Array<{key: string; value: string}>;
@@ -377,13 +398,7 @@ const TestcaseScenarioView: React.FC<TestcaseScenarioViewProps> = ({
                         overflow: 'auto',
                       }}
                     >
-                      {(() => {
-                        try {
-                          return JSON.stringify(JSON.parse(step.body), null, 2);
-                        } catch {
-                          return step.body;
-                        }
-                      })()}
+                      {formatJsonBody(step.body)}
                     </pre>
                   </div>
                 )}
