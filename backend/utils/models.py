@@ -14,7 +14,7 @@ AllowedValue = Literal[1, 2, 3, 4]
 # 定义断言规则
 class AssertionRule(BaseModel):
     """单个断言规则，匹配 api_test_tool._run_assertions 的期望格式"""
-    type: str = Field(..., description="断言类型: status_code | status_code_range | response_time_lt | jsonpath_exists | jsonpath_equals")
+    type: str = Field(..., description="断言类型: status_code | status_code_range | response_time_lt | jsonpath_exists | jsonpath_equals | jsonpath_not_equals")
     value: Optional[Any] = Field(default=None, description="断言值")
     min: Optional[int] = Field(default=None, description="范围最小值（用于 status_code_range）")
     max: Optional[int] = Field(default=None, description="范围最大值（用于 status_code_range）")
@@ -32,6 +32,8 @@ class AssertionRule(BaseModel):
             raise ValueError(f'jsonpath_exists 断言必须提供 jsonpath 参数')
         if t == 'jsonpath_equals' and (not self.jsonpath or self.value is None):
             raise ValueError(f'jsonpath_equals 断言必须同时提供 jsonpath 和 value 参数')
+        if t == 'jsonpath_not_equals' and (not self.jsonpath or self.value is None):
+            raise ValueError(f'jsonpath_not_equals 断言必须同时提供 jsonpath 和 value 参数')
         return self
 
 

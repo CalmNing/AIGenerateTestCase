@@ -70,6 +70,7 @@ class PromptConfig:
 - `status_code_range`：状态码范围（如 {"type": "status_code_range", "min": 200, "max": 299}）
 - `jsonpath_exists`：字段存在（如 {"type": "jsonpath_exists", "jsonpath": "$.data.id"}）
 - `jsonpath_equals`：字段值匹配（如 {"type": "jsonpath_equals", "jsonpath": "$.code", "value": 0}）
+- `jsonpath_not_equals`：字段值不匹配（如 {"type": "jsonpath_not_equals", "jsonpath": "$.data.status", "value": "deleted"}）
 - `response_time_lt`：响应时间上限（如 {"type": "response_time_lt", "value": 3000}）
 
 **断言策略**：

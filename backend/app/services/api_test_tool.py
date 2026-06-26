@@ -755,6 +755,16 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
                 matches = parse_jsonpath(expr).find(response_data) if expr else []
                 actual = str(matches[0].value) if matches else None
                 ok = actual == expected
+            elif kind == "jsonpath_not_equals":
+                expr = assertion.get("jsonpath")
+                expected = str(expected) if expected is not None else ""
+                matches = parse_jsonpath(expr).find(response_data) if expr else []
+                if not matches:
+                    actual = "字段不存在"
+                    ok = True  # 字段不存在视为"不等于"
+                else:
+                    actual = str(matches[0].value)
+                    ok = actual != expected
             else:
                 continue
         except Exception as exc:

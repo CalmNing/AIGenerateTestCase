@@ -206,6 +206,7 @@ const AssertionsEditor: React.FC<{
     { label: '响应时间<', value: 'response_time_lt' },
     { label: 'JSONPath 存在', value: 'jsonpath_exists' },
     { label: 'JSONPath 等于', value: 'jsonpath_equals' },
+    { label: 'JSONPath 不等于', value: 'jsonpath_not_equals' },
   ];
 
   const jsonPathOptions = buildJsonPathOptions(responseSchema);

@@ -127,6 +127,7 @@ const assertionTypeOptions = [
   { label: '响应时间小于', value: 'response_time_lt' },
   { label: '响应字段存在', value: 'jsonpath_exists' },
   { label: '响应字段等于', value: 'jsonpath_equals' },
+  { label: '响应字段不等于', value: 'jsonpath_not_equals' },
 ];
 const commonJsonPathOptions = [
   { label: '响应体', value: '$' },
@@ -201,6 +202,8 @@ function formatFailedAssertion(assertion: any): string {
       return `响应字段不存在（路径：${expected}，匹配数：${actual}）`;
     case 'jsonpath_equals':
       return `响应字段值不匹配（期望：${expected}，实际：${actual}）`;
+    case 'jsonpath_not_equals':
+      return `响应字段值不应等于此值（期望不等于：${expected}，实际：${actual}）`;
     default:
       return `${assertionTypeLabels[assertion?.type] || '断言'}未通过（期望：${expected}，实际：${actual}）`;
   }
