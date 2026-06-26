@@ -128,6 +128,15 @@
   color: var(--color-text-secondary);
   line-height: 1.4;
   padding-left: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.variable-description:hover {
+  white-space: normal;
+  word-break: break-all;
 }
 
 /* Right section: actions */

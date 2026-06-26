@@ -150,7 +150,7 @@ const VariableAssistant: React.FC<VariableAssistantProps> = ({
           >
             {item.syntax}
           </span>
-          <span className="variable-description">{item.description}</span>
+          <span className="variable-description" title={item.description}>{item.description}</span>
           {testResult?.result !== undefined && (
             <div className="variable-test-result">结果: {testResult.result}</div>
           )}
