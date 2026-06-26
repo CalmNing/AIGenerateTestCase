@@ -107,7 +107,8 @@ export const testcaseApi = {
     moduleId?: number | null,
     selectedSkills?: string[],
     apiEndpointId?: number[] | number | null,
-    apiProjectId?: number | null): Promise<ApiResponse<TestCase[]>> => {
+    apiProjectId?: number | null,
+    apiEndpointOverrides?: Record<number, any> | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -196,6 +197,11 @@ export const testcaseApi = {
     }
     if (apiProjectId !== null && apiProjectId !== undefined) {
       formData.append("api_project_id", String(apiProjectId));
+    }
+
+    // 添加端点覆盖配置
+    if (apiEndpointOverrides && Object.keys(apiEndpointOverrides).length > 0) {
+      formData.append("api_endpoint_overrides", JSON.stringify(apiEndpointOverrides));
     }
 
     return api.post(`/testcases/${sessionId}/testcases`, formData);
