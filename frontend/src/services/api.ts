@@ -447,8 +447,4 @@ export const apiTestApi = {
     api.post(`/api-test/projects/${projectId}/scenarios/run-batch`, payload),
   matchEndpoint: (data: { requirement: string; project_id?: number }): Promise<ApiResponse<{ matches: any[]; total_matches: number }>> =>
     api.post("/api-test/match-endpoint", data),
-  inferProjectDependencies: (projectId: number): Promise<ApiResponse<any>> =>
-    api.post(`/api-test/projects/${projectId}/infer-dependencies`),
-  inferScenarioDependencies: (scenarioId: number): Promise<ApiResponse<any>> =>
-    api.post(`/api-test/scenarios/${scenarioId}/infer-dependencies`),
 };
