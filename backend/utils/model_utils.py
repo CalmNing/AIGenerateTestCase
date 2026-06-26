@@ -47,6 +47,83 @@ from utils.helpers import (
     _HISTORY_PROMPT_LIMIT,
 )
 
+
+def _parse_step_from_string(step_str: str) -> dict | str:
+    """解析步骤字符串，尝试将其转换为字典格式。
+
+    AI 可能返回 Python 对象的字符串表示，如：
+    "endpoint_ref=1 description='...' headers=None body='...'"
+
+    此函数尝试解析这种格式并返回字典。
+    """
+    if not isinstance(step_str, str):
+        return step_str
+
+    # 如果已经是 JSON 格式，尝试解析
+    step_str = step_str.strip()
+    if step_str.startswith('{') and step_str.endswith('}'):
+        try:
+            return json.loads(step_str)
+        except json.JSONDecodeError:
+            pass
+
+    # 尝试解析 Python 对象格式
+    # 匹配 "key=value" 模式
+    if 'endpoint_ref=' in step_str or 'description=' in step_str:
+        result = {}
+        # 提取 endpoint_ref
+        match = re.search(r'endpoint_ref=(\d+)', step_str)
+        if match:
+            result['endpoint_ref'] = int(match.group(1))
+            result['type'] = 'api_call'
+
+        # 提取 description
+        match = re.search(r"description='([^']*)'", step_str)
+        if match:
+            result['description'] = match.group(1)
+
+        # 提取 body
+        match = re.search(r"body='([^']*)'", step_str)
+        if match:
+            body_str = match.group(1).replace("\\'", "'")
+            result['body'] = body_str
+
+        # 提取 headers
+        match = re.search(r'headers=(\[.*?\]|None)', step_str)
+        if match and match.group(1) != 'None':
+            try:
+                result['headers'] = json.loads(match.group(1).replace("'", '"'))
+            except:
+                pass
+
+        # 提取 parameters
+        match = re.search(r'parameters=(\[.*?\]|None)', step_str)
+        if match and match.group(1) != 'None':
+            try:
+                result['parameters'] = json.loads(match.group(1).replace("'", '"'))
+            except:
+                pass
+
+        if 'endpoint_ref' in result:
+            return result
+
+    # 无法解析，返回原字符串
+    return step_str
+
+
+def _normalize_steps(steps: list) -> list:
+    """规范化步骤列表，确保所有步骤都是正确的格式。"""
+    normalized = []
+    for step in steps:
+        if isinstance(step, dict):
+            normalized.append(step)
+        elif isinstance(step, str):
+            parsed = _parse_step_from_string(step)
+            normalized.append(parsed)
+        else:
+            normalized.append(step)
+    return normalized
+
 # 保持兼容性 re-export
 SYSTEM_PROMPT = PromptConfig.SYSTEM_PROMPT
 
@@ -826,8 +903,8 @@ async def generate_testcases(
                                             for d in testcase_dicts:
                                                 rebuilt.append(TestCase(
                                                     case_name=d.get('case_name', ''),
-                                                    steps=d.get('steps', []),
-                                                    preset_conditions=d.get('preset_conditions', []),
+                                                    steps=_normalize_steps(d.get('steps', [])),
+                                                    preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
                                                     expected_results=d.get('expected_results', []),
                                                     case_level=d.get('case_level', 4),
                                                 ))
@@ -849,8 +926,8 @@ async def generate_testcases(
                                         for d in testcase_dicts:
                                             rebuilt.append(TestCase(
                                                 case_name=d.get('case_name', ''),
-                                                steps=d.get('steps', []),
-                                                preset_conditions=d.get('preset_conditions', []),
+                                                steps=_normalize_steps(d.get('steps', [])),
+                                                preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
                                                 expected_results=d.get('expected_results', []),
                                                 case_level=d.get('case_level', 4),
                                             ))
