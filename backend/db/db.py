@@ -27,11 +27,13 @@ from db.models import (
     GlobalParameter,
     McpServer,
     MockConfig,
+    RequirementPoint,
     SavedRequest,
     ScheduledTask,
     Session,
     TestCase,
     TestCaseExecutionLog,
+    TestPoint,
 )
 
 # 创建所有表

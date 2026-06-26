@@ -68,6 +68,10 @@ class Session(BaseModel, table=True):
     test_cases: List["TestCase"] = Relationship(back_populates="session")
     # 定义与模块的一对多关系
     modules: List["Module"] = Relationship(back_populates="session")
+    # 定义与需求点的一对多关系（4阶段pipeline）
+    requirement_points: List["RequirementPoint"] = Relationship(back_populates="session")
+    # 定义与测试点的一对多关系（4阶段pipeline）
+    test_points: List["TestPoint"] = Relationship(back_populates="session")
 
 
 class TestCase(BaseModel, table=True):
@@ -86,9 +90,42 @@ class TestCase(BaseModel, table=True):
     api_project_id: Optional[int] = Field(default=None, description="关联的 API Project ID")
     assertions: Optional[List[dict]] = Field(default=None, sa_type=JSON, description="用例级断言规则，执行时覆盖接口默认断言")
     scenario_id: Optional[int] = Field(default=None, foreign_key="apiscenario.id", description="关联的接口场景ID")
+    # 4阶段pipeline关联字段
+    test_point_id: Optional[int] = Field(default=None, foreign_key="testpoint.id", index=True, description="关联的测试点ID（4阶段pipeline）")
+    test_type: Optional[str] = Field(default=None, description="测试类别（继承自测试点，如 functional/performance/security）")
+    design_method: Optional[str] = Field(default=None, description="测试设计方法（继承自测试点，如 equivalence_partitioning/boundary_value）")
 
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
+
+class RequirementPoint(BaseModel, table=True):
+    """需求点数据模型（4阶段pipeline阶段1产物）"""
+    session_id: Optional[int] = Field(default=None, foreign_key="session.id", index=True)
+    content: str = Field(default="", description="需求点描述")
+    module: str = Field(default="", description="所属功能模块名称")
+    priority: str = Field(default="medium", description="优先级: high/medium/low")
+    order_index: int = Field(default=0, description="排序序号")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+    # 关系
+    session: Optional[Session] = Relationship(back_populates="requirement_points")
+    test_points: List["TestPoint"] = Relationship(back_populates="requirement_point")
+
+
+class TestPoint(BaseModel, table=True):
+    """测试点数据模型（4阶段pipeline阶段2产物）"""
+    requirement_point_id: Optional[int] = Field(default=None, foreign_key="requirementpoint.id", index=True)
+    session_id: Optional[int] = Field(default=None, foreign_key="session.id", index=True)
+    content: str = Field(default="", description="测试点描述")
+    test_type: str = Field(default="functional", description="测试类别: functional/performance/security/compatibility")
+    design_method: str = Field(default="", description="测试设计方法: equivalence_partitioning/boundary_value/decision_table/state_transition")
+    priority: str = Field(default="medium", description="优先级: high/medium/low")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+    # 关系
+    requirement_point: Optional[RequirementPoint] = Relationship(back_populates="test_points")
+    session: Optional[Session] = Relationship(back_populates="test_points")
+
 
 class Module(BaseModel, table=True):
     """模块数据模型"""

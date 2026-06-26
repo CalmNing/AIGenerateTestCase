@@ -16,6 +16,7 @@ from app.routes.scheduled_task import router as scheduled_task_router
 from app.routes.session import router as session_router
 from app.routes.skills import router as skills_router
 from app.routes.testcase import router as testcase_router
+from app.routes.pipeline import router as pipeline_router
 
 api_router = APIRouter()
 
@@ -94,6 +95,18 @@ api_router.include_router(
                 get=[Permission.TESTCASE_READ],
                 post=[Permission.TESTCASE_CREATE, Permission.TESTCASE_GENERATE],
                 delete=[Permission.TESTCASE_DELETE],
+            )
+        )
+    ],
+)
+api_router.include_router(
+    pipeline_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[Permission.TESTCASE_READ],
+                post=[Permission.TESTCASE_CREATE, Permission.TESTCASE_GENERATE],
+                put=[Permission.TESTCASE_UPDATE],
             )
         )
     ],
