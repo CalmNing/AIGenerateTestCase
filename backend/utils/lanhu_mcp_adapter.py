@@ -514,19 +514,25 @@ class MCPClient:
         import sys as _sys
         import shutil as _shutil
 
-        # Windows: resolve .cmd extensions for npx/npm/node etc.
+        # Windows: .cmd files need cmd.exe /c wrapper for create_subprocess_exec
         cmd = command
-        if _sys.platform == "win32" and not cmd.endswith((".cmd", ".exe", ".bat")):
-            resolved = _shutil.which(cmd)
-            if resolved:
-                cmd = resolved
-            elif _shutil.which(cmd + ".cmd"):
-                cmd = cmd + ".cmd"
+        cmd_args = list(args or [])
+        if _sys.platform == "win32":
+            if not cmd.endswith((".exe",)):
+                resolved = _shutil.which(cmd)
+                if not resolved:
+                    resolved = _shutil.which(cmd + ".cmd") or _shutil.which(cmd + ".CMD")
+                if resolved:
+                    if resolved.lower().endswith((".cmd", ".bat")):
+                        cmd = "cmd.exe"
+                        cmd_args = ["/c", resolved] + cmd_args
+                    else:
+                        cmd = resolved
 
         try:
             self._proc = await _asyncio.create_subprocess_exec(
                 cmd,
-                *(args or []),
+                *cmd_args,
                 stdin=_asyncio.subprocess.PIPE,
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,

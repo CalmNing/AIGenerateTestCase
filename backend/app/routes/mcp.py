@@ -284,32 +284,44 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
 
     env = _build_env(server)
 
-    # Windows: resolve .cmd extensions for npx/npm/node etc.
+    # Windows: .cmd files need cmd.exe /c wrapper for create_subprocess_exec
     import sys as _sys
     import shutil as _shutil
     cmd = server.command
-    if _sys.platform == "win32" and not cmd.endswith((".cmd", ".exe", ".bat")):
-        resolved = _shutil.which(cmd)
-        if resolved:
-            cmd = resolved
-        elif _shutil.which(cmd + ".cmd"):
-            cmd = cmd + ".cmd"
+    cmd_args = list(server.args)
+    if _sys.platform == "win32":
+        if not cmd.endswith((".exe",)):
+            resolved = _shutil.which(cmd)
+            if not resolved:
+                resolved = _shutil.which(cmd + ".cmd") or _shutil.which(cmd + ".CMD")
+            if resolved:
+                logger.info("[耗时] Windows 命令解析: %s -> %s", server.command, resolved)
+                if resolved.lower().endswith((".cmd", ".bat")):
+                    # .cmd/.bat files must be invoked via cmd.exe
+                    cmd = "cmd.exe"
+                    cmd_args = ["/c", resolved] + cmd_args
+                else:
+                    cmd = resolved
+            else:
+                logger.warning("[耗时] Windows 命令未找到: %s", server.command)
 
     try:
         proc = await asyncio.create_subprocess_exec(
             cmd,
-            *server.args,
+            *cmd_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
             start_new_session=True,
         )
-        logger.info("[耗时] _list_tools_stdio 进程启动: %.2fs %s", time.monotonic() - t0, server.name)
+        logger.info("[耗时] _list_tools_stdio 进程启动: %.2fs %s (cmd=%s)", time.monotonic() - t0, server.name, cmd)
     except FileNotFoundError:
+        logger.warning("[耗时] STDIO 命令不存在: cmd=%s (原始: %s)", cmd, server.command)
         return {"name": server.name, "type": "stdio", "available": False, "tools": [],
-                "error": f"命令不存在: {server.command}"}
+                "error": f"命令不存在: {cmd}"}
     except Exception as e:
+        logger.warning("[耗时] STDIO 进程启动异常: cmd=%s error=%s", cmd, e)
         return {"name": server.name, "type": "stdio", "available": False, "tools": [], "error": str(e)}
 
     # 用于收集 stderr 的列表
