@@ -237,6 +237,53 @@ export const testcaseApi = {
   // 推断测试用例的接口依赖关系
   inferDependencies: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ added_post_actions: number; replaced_fields: number; extra_endpoint_ids: number[] }>> =>
     api.post(`/testcases/${sessionId}/testcases/${testcaseId}/infer-dependencies`),
+
+  // ========== 4阶段 Pipeline 深度生成 ==========
+
+  /** 启动 4 阶段深度生成 */
+  generateV2: (sessionId: number, requirementText: string, selectedSkills?: string[]): Promise<ApiResponse<{ task_id: string }>> => {
+    const formData = new FormData();
+    formData.append("session_id", sessionId.toString());
+    formData.append("requirement_text", requirementText);
+    if (selectedSkills && selectedSkills.length > 0) {
+      formData.append("selected_skills", JSON.stringify(selectedSkills));
+    }
+    return api.post('/testcases/generate-v2', formData);
+  },
+
+  /** 查询 pipeline 进度 */
+  getPipelineStatus: (taskId: string): Promise<ApiResponse<{
+    task_id: string;
+    status: string;
+    current_phase: number;
+    total_phases: number;
+    phase_name: string;
+    progress: number;
+    message: string;
+    result: any;
+    error: string | null;
+  }>> => api.get(`/testcases/pipeline/${taskId}/status`),
+
+  /** 获取需求点列表 */
+  getRequirementPoints: (sessionId: number): Promise<ApiResponse<Array<{
+    id: number;
+    content: string;
+    module: string;
+    priority: string;
+    order_index: number;
+    created_at: string;
+  }>>> => api.get(`/testcases/sessions/${sessionId}/requirement-points`),
+
+  /** 获取测试点列表 */
+  getTestPoints: (sessionId: number): Promise<ApiResponse<Array<{
+    id: number;
+    requirement_point_id: number;
+    content: string;
+    test_type: string;
+    design_method: string;
+    priority: string;
+    created_at: string;
+  }>>> => api.get(`/testcases/sessions/${sessionId}/test-points`),
 };
 
 // 模块管理API

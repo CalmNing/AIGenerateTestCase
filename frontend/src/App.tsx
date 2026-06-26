@@ -1141,6 +1141,21 @@ const App: React.FC = () => {
       setSettingButtonStatus(false); // 最终总会恢复按钮状态
     }
   };
+
+  // 监听 4 阶段 Pipeline 完成事件，刷新测试用例列表
+  useEffect(() => {
+    const handlePipelineCompleted = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.sessionId && selectedSession && selectedSession.id === detail.sessionId) {
+        loadTestcases(selectedSession.id, filters);
+        setHistoryPromptRefreshKey(prev => prev + 1);
+      }
+    };
+
+    window.addEventListener('pipeline-completed', handlePipelineCompleted);
+    return () => window.removeEventListener('pipeline-completed', handlePipelineCompleted);
+  }, [selectedSession?.id, filters]);
+
   const [nextButtonDisabled, setNextButtonDisabled] = useState(false);
   const [prevButtonDisabled, setPrevButtonDisabled] = useState(false);
   const [currentIndex, setCurrentIndex] = useState<number>(0);

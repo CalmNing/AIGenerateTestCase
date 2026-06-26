@@ -1,6 +1,11 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal } from 'antd';
-import { ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined, FileTextOutlined, EditOutlined, RocketOutlined } from '@ant-design/icons';
+import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal, Progress, Steps, Collapse } from 'antd';
+import {
+  ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined,
+  FileTextOutlined, EditOutlined, RocketOutlined, ExperimentOutlined,
+  CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined,
+  UnorderedListOutlined, BranchesOutlined,
+} from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../../types';
 import HistoryPromptSidebar from '../HistoryPromptSidebar';
 import './TestCaseGenerator.css';
@@ -13,6 +18,7 @@ interface TestCaseGeneratorProps {
   loading: boolean;
   onRequirementChange: (value: string) => void;
   onGenerate: () => void;
+  onGenerateV2?: (requirementText: string) => Promise<string>; // 返回 task_id
   historyPromptRefreshKey?: number;
   selectedApiEndpointId?: number[];
   onApiEndpointChange?: (ids: number[]) => void;
@@ -21,6 +27,8 @@ interface TestCaseGeneratorProps {
   apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
   onApiEndpointOverridesChange?: (overrides: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>) => void;
 }
+
+type GenerationMode = 'quick' | 'deep';
 
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   selectedSession,
@@ -46,6 +54,20 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const [overrideEditorVisible, setOverrideEditorVisible] = useState(false);
   const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
   const [previewVisible, setPreviewVisible] = useState(false);
+
+  // 4阶段 Pipeline 状态
+  const [generationMode, setGenerationMode] = useState<GenerationMode>('quick');
+  const [pipelineTaskId, setPipelineTaskId] = useState<string | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<{
+    status: string;
+    current_phase: number;
+    phase_name: string;
+    progress: number;
+    message: string;
+    result: any;
+    error: string | null;
+  } | null>(null);
+  const [pipelinePolling, setPipelinePolling] = useState(false);
 
   // 更新指定接口的 override 字段
   const updateOverride = useCallback((eid: number, field: string, value: any) => {
@@ -112,7 +134,75 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     if (onApiEndpointChange) onApiEndpointChange(vals);
   };
 
+  // Pipeline 进度轮询
+  useEffect(() => {
+    if (!pipelineTaskId || !pipelinePolling) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const { testcaseApi } = await import('../../services/api');
+        const res = await testcaseApi.getPipelineStatus(pipelineTaskId);
+        if (res.code === 200 && res.data) {
+          setPipelineStatus(res.data);
+
+          if (res.data.status === 'completed' || res.data.status === 'failed') {
+            setPipelinePolling(false);
+            clearInterval(pollInterval);
+
+            if (res.data.status === 'completed') {
+              antMessage.success('深度生成完成！');
+              // 通过自定义事件通知父组件刷新测试用例列表
+              window.dispatchEvent(new CustomEvent('pipeline-completed', {
+                detail: { sessionId: selectedSession?.id, result: res.data.result }
+              }));
+            } else if (res.data.status === 'failed') {
+              antMessage.error(`深度生成失败：${res.data.error || res.data.message}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Poll pipeline status failed:', e);
+      }
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [pipelineTaskId, pipelinePolling, selectedSession?.id]);
+
+  const handleDeepGenerate = async () => {
+    if (!selectedSession || !requirement.trim()) return;
+
+    setPipelinePolling(true);
+    setPipelineStatus({
+      status: 'running',
+      current_phase: 0,
+      phase_name: '初始化',
+      progress: 0,
+      message: '正在启动深度生成...',
+      result: null,
+      error: null,
+    });
+
+    try {
+      const { testcaseApi } = await import('../../services/api');
+      const res = await testcaseApi.generateV2(selectedSession.id, requirement.trim());
+      if (res.code === 200 && res.data?.task_id) {
+        setPipelineTaskId(res.data.task_id);
+      } else {
+        throw new Error(res.message || '启动失败');
+      }
+    } catch (e: any) {
+      console.error('Deep generate failed:', e);
+      antMessage.error('深度生成启动失败：' + (e?.message || '未知错误'));
+      setPipelinePolling(false);
+      setPipelineStatus(null);
+    }
+  };
+
   const handleGenerateWithPreview = () => {
+    if (generationMode === 'deep') {
+      handleDeepGenerate();
+      return;
+    }
     if (selectedApiEndpointId && selectedApiEndpointId.length > 0) {
       setPreviewVisible(true);
     } else {
@@ -192,6 +282,23 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
             <div className="tcg-card-header">
               <BulbOutlined style={{ color: 'var(--color-primary)' }} />
               生成测试用例
+              {/* 生成模式切换 */}
+              <div className="tcg-mode-toggle" style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+                <button
+                  className={`tcg-mode-btn ${generationMode === 'quick' ? 'is-active' : ''}`}
+                  onClick={() => setGenerationMode('quick')}
+                  title="单次调用，快速生成测试用例"
+                >
+                  <ThunderboltOutlined /> 快速
+                </button>
+                <button
+                  className={`tcg-mode-btn ${generationMode === 'deep' ? 'is-active' : ''}`}
+                  onClick={() => setGenerationMode('deep')}
+                  title="4阶段Pipeline：需求拆分→测试点→用例设计→优化"
+                >
+                  <ExperimentOutlined /> 深度
+                </button>
+              </div>
             </div>
             <div className="tcg-card-body" style={{ display: 'flex', flexDirection: 'column' }}>
               {/* Context Info */}
@@ -324,22 +431,97 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
 
               {/* Generate Button */}
               <button
-                className={`tcg-generate-btn ${loading ? 'is-loading' : ''}`}
+                className={`tcg-generate-btn ${loading || pipelinePolling ? 'is-loading' : ''}`}
                 onClick={handleGenerateWithPreview}
-                disabled={!requirement.trim() || loading}
+                disabled={!requirement.trim() || loading || pipelinePolling}
               >
-                {loading ? (
+                {loading || pipelinePolling ? (
                   <>
                     <Spin size="small" style={{ color: 'var(--color-primary)' }} />
-                    AI 正在生成中...
+                    {pipelinePolling ? `深度生成中... ${pipelineStatus?.progress || 0}%` : 'AI 正在生成中...'}
                   </>
                 ) : (
                   <>
-                    <ThunderboltOutlined />
-                    AI 生成测试用例
+                    {generationMode === 'deep' ? <ExperimentOutlined /> : <ThunderboltOutlined />}
+                    {generationMode === 'deep' ? '深度生成（4阶段）' : 'AI 生成测试用例'}
                   </>
                 )}
               </button>
+
+              {/* Pipeline 进度面板 */}
+              {pipelinePolling && pipelineStatus && (
+                <div className="tcg-pipeline-panel" style={{
+                  marginTop: 12,
+                  padding: '12px 16px',
+                  background: 'var(--color-bg-elevated)',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border-secondary)',
+                }}>
+                  <Steps
+                    current={pipelineStatus.current_phase - 1}
+                    size="small"
+                    direction="vertical"
+                    style={{ marginBottom: 8 }}
+                    items={[
+                      {
+                        title: '需求拆分',
+                        icon: pipelineStatus.current_phase === 1
+                          ? <LoadingOutlined />
+                          : pipelineStatus.current_phase > 1
+                            ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                            : undefined,
+                        description: pipelineStatus.current_phase === 1 ? pipelineStatus.message : undefined,
+                      },
+                      {
+                        title: '测试点生成',
+                        icon: pipelineStatus.current_phase === 2
+                          ? <LoadingOutlined />
+                          : pipelineStatus.current_phase > 2
+                            ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                            : undefined,
+                        description: pipelineStatus.current_phase === 2 ? pipelineStatus.message : undefined,
+                      },
+                      {
+                        title: '用例设计',
+                        icon: pipelineStatus.current_phase === 3
+                          ? <LoadingOutlined />
+                          : pipelineStatus.current_phase > 3
+                            ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                            : undefined,
+                        description: pipelineStatus.current_phase === 3 ? pipelineStatus.message : undefined,
+                      },
+                      {
+                        title: '用例优化',
+                        icon: pipelineStatus.current_phase === 4
+                          ? <LoadingOutlined />
+                          : pipelineStatus.current_phase > 4
+                            ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                            : undefined,
+                        description: pipelineStatus.current_phase === 4 ? pipelineStatus.message : undefined,
+                      },
+                    ]}
+                  />
+                  <Progress
+                    percent={pipelineStatus.progress}
+                    size="small"
+                    status={pipelineStatus.status === 'failed' ? 'exception' : 'active'}
+                    strokeColor={pipelineStatus.status === 'failed' ? '#ff4d4f' : undefined}
+                  />
+                  {pipelineStatus.status === 'failed' && pipelineStatus.error && (
+                    <div style={{ marginTop: 8, color: '#ff4d4f', fontSize: 12 }}>
+                      <CloseCircleOutlined /> {pipelineStatus.error}
+                    </div>
+                  )}
+                  {pipelineStatus.status === 'completed' && pipelineStatus.result && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                      <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 4 }} />
+                      生成完成：{pipelineStatus.result.requirement_points_count} 个需求点，
+                      {pipelineStatus.result.test_points_count} 个测试点，
+                      {pipelineStatus.result.test_cases_count} 个测试用例
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
