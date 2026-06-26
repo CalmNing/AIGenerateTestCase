@@ -246,8 +246,12 @@ async def _send_stdio_request(
         logger.warning(f"STDIO[{server_name}] 进程已退出，跳过请求: {method}")
         return None
 
-    proc.stdin.write((req + "\n").encode())
-    await proc.stdin.drain()
+    try:
+        proc.stdin.write((req + "\n").encode())
+        await proc.stdin.drain()
+    except (OSError, BrokenPipeError) as e:
+        logger.warning(f"STDIO[{server_name}] stdin 写入失败: {method} err={e}")
+        return None
 
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
@@ -449,8 +453,13 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
                 "clientInfo": {"name": "ai-testcase-backend", "version": "1.0.0"},
             },
         }, ensure_ascii=False)
-        proc.stdin.write((init_req + "\n").encode())
-        await proc.stdin.drain()
+        try:
+            proc.stdin.write((init_req + "\n").encode())
+            await proc.stdin.drain()
+        except (OSError, BrokenPipeError) as e:
+            logger.warning("[耗时] STDIO stdin 写入失败: %.2fs %s err=%s", time.monotonic() - t0, server.name, e)
+            return {"name": server.name, "type": "stdio", "available": False, "tools": [],
+                    "error": f"stdin 写入失败: {e}"}
         logger.info("[耗时] STDIO initialize 已写入: %.2fs %s", time.monotonic() - t0, server.name)
 
         # 初始化状态
@@ -513,8 +522,12 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
                 # 连续多轮无输出且 init 已写入但无响应，重发一次 init
                 if empty_rounds == 8 and init_written:
                     logger.info("[耗时] STDIO 重发initialize: %.2fs %s", time.monotonic() - t0, server.name)
-                    proc.stdin.write((init_req + "\n").encode())
-                    await proc.stdin.drain()
+                    try:
+                        proc.stdin.write((init_req + "\n").encode())
+                        await proc.stdin.drain()
+                    except (OSError, BrokenPipeError) as e:
+                        logger.warning("[耗时] STDIO 重发失败: %s err=%s", server.name, e)
+                        break
 
         # 检查结果
         process_exited = proc.returncode is not None
@@ -522,8 +535,13 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
         # STDIO 模式：发送 notification 并获取 tools/list
         if stdio_initialized:
             notif = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}, ensure_ascii=False)
-            proc.stdin.write((notif + "\n").encode())
-            await proc.stdin.drain()
+            try:
+                proc.stdin.write((notif + "\n").encode())
+                await proc.stdin.drain()
+            except (OSError, BrokenPipeError) as e:
+                logger.warning("[耗时] STDIO notification 写入失败: %s err=%s", server.name, e)
+                return {"name": server.name, "type": "stdio", "available": False, "tools": [],
+                        "error": f"stdin 写入失败: {e}"}
             t_list = time.monotonic()
             tools_result = await _send_stdio_request(proc, server.name, "tools/list", None,
                                                      timeout_sec=min(30.0, remaining if remaining > 0 else 30.0))
