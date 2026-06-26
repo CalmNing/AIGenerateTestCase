@@ -272,6 +272,64 @@ async def _send_stdio_request(
     return None
 
 
+class _AsyncPopenWrapper:
+    """Wraps subprocess.Popen into an asyncio-compatible interface for Windows
+    when ProactorEventLoop is not available."""
+
+    def __init__(self, proc):
+        self._proc = proc
+        self.stdin = _AsyncStreamWriter(proc.stdin)
+        self.stdout = _AsyncStreamReader(proc.stdout)
+        self.stderr = _AsyncStreamReader(proc.stderr)
+
+    @property
+    def pid(self):
+        return self._proc.pid
+
+    @property
+    def returncode(self):
+        return self._proc.returncode
+
+    async def wait(self):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._proc.wait)
+
+    def terminate(self):
+        self._proc.terminate()
+
+    def kill(self):
+        self._proc.kill()
+
+
+class _AsyncStreamReader:
+    """Async wrapper for synchronous pipe read."""
+
+    def __init__(self, pipe):
+        self._pipe = pipe
+
+    async def readline(self):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._pipe.readline)
+
+    async def read(self, n=-1):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self._pipe.read(n))
+
+
+class _AsyncStreamWriter:
+    """Async wrapper for synchronous pipe write."""
+
+    def __init__(self, pipe):
+        self._pipe = pipe
+
+    def write(self, data):
+        self._pipe.write(data)
+
+    async def drain(self):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._pipe.flush)
+
+
 async def _list_tools_stdio(server: McpServerConfig) -> dict:
     """通过 STDIO 协议连接 MCP 服务器并获取工具列表。
 
@@ -284,13 +342,11 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
 
     env = _build_env(server)
 
-    # Windows: .cmd files need shell=True or cmd.exe /c wrapper
+    # Windows: resolve command path, use ProactorEventLoop for subprocess support
     import sys as _sys
     import shutil as _shutil
-    import subprocess as _sp
     cmd = server.command
     cmd_args = list(server.args)
-    use_shell = False
     if _sys.platform == "win32":
         if not cmd.endswith((".exe",)):
             resolved = _shutil.which(cmd)
@@ -298,26 +354,29 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
                 resolved = _shutil.which(cmd + ".cmd") or _shutil.which(cmd + ".CMD")
             if resolved:
                 logger.info("[耗时] Windows 命令解析: %s -> %s", server.command, resolved)
-                if resolved.lower().endswith((".cmd", ".bat")):
-                    # .cmd/.bat: use shell=True which handles them correctly
-                    use_shell = True
-                    cmd = f'"{resolved}"'
-                else:
-                    cmd = resolved
+                cmd = resolved
             else:
                 logger.warning("[耗时] Windows 命令未找到: %s", server.command)
 
     try:
-        if use_shell:
-            # shell=True for .cmd/.bat files on Windows
-            full_cmd = f'{cmd} {" ".join(cmd_args)}'
-            proc = await asyncio.create_subprocess_shell(
-                full_cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
+        loop = asyncio.get_running_loop()
+        if _sys.platform == "win32" and not isinstance(loop, asyncio.ProactorEventLoop):
+            # SelectorEventLoop doesn't support subprocess on Windows
+            # Use subprocess.Popen in a thread executor
+            import subprocess as _sp
+            full_cmd = [cmd] + cmd_args
+            def _start_proc():
+                return _sp.Popen(
+                    full_cmd,
+                    stdin=_sp.PIPE,
+                    stdout=_sp.PIPE,
+                    stderr=_sp.PIPE,
+                    env=env,
+                    creationflags=_sp.CREATE_NEW_PROCESS_GROUP if hasattr(_sp, 'CREATE_NEW_PROCESS_GROUP') else 0,
+                )
+            _sync_proc = await asyncio.get_event_loop().run_in_executor(None, _start_proc)
+            # Wrap sync Popen into asyncio subprocess-like object
+            proc = _AsyncPopenWrapper(_sync_proc)
         else:
             proc = await asyncio.create_subprocess_exec(
                 cmd,
@@ -328,8 +387,8 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
                 env=env,
                 start_new_session=True,
             )
-        logger.info("[耗时] _list_tools_stdio 进程启动: %.2fs %s (cmd=%s shell=%s)",
-                    time.monotonic() - t0, server.name, cmd, use_shell)
+        logger.info("[耗时] _list_tools_stdio 进程启动: %.2fs %s (cmd=%s)",
+                    time.monotonic() - t0, server.name, cmd)
     except FileNotFoundError:
         logger.warning("[耗时] STDIO 命令不存在: cmd=%s (原始: %s)", cmd, server.command)
         return {"name": server.name, "type": "stdio", "available": False, "tools": [],

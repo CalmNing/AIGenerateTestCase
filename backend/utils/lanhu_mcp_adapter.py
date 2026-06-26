@@ -83,6 +83,59 @@ _MAX_TOOL_RESPONSE = 80000
 _STDIO_STREAM_LIMIT = 20 * 1024 * 1024
 
 
+class _McpStreamReader:
+    """Async wrapper for synchronous pipe read."""
+    def __init__(self, pipe):
+        self._pipe = pipe
+    async def readline(self):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._pipe.readline)
+    async def read(self, n=-1):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self._pipe.read(n))
+
+
+class _McpStreamWriter:
+    """Async wrapper for synchronous pipe write."""
+    def __init__(self, pipe):
+        self._pipe = pipe
+    def write(self, data):
+        self._pipe.write(data)
+    async def drain(self):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._pipe.flush)
+
+
+class _McpPopenWrapper:
+    """Wraps subprocess.Popen into an asyncio-compatible interface for Windows."""
+    def __init__(self, proc):
+        self._proc = proc
+        self.stdin = _McpStreamWriter(proc.stdin)
+        self.stdout = _McpStreamReader(proc.stdout)
+        self.stderr = _McpStreamReader(proc.stderr)
+    @property
+    def pid(self):
+        return self._proc.pid
+    @property
+    def returncode(self):
+        return self._proc.returncode
+    async def wait(self):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._proc.wait)
+    async def communicate(self):
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._proc.communicate)
+    def terminate(self):
+        self._proc.terminate()
+    def kill(self):
+        self._proc.kill()
+
+
 class MCPClient:
     """MCP 客户端，支持两种传输：
     1. FastMCP Streamable HTTP (POST {} → session ID → JSON-RPC)
@@ -513,34 +566,35 @@ class MCPClient:
         import asyncio as _asyncio
         import sys as _sys
         import shutil as _shutil
+        import subprocess as _sp
 
-        # Windows: .cmd files need shell=True for subprocess creation
+        # Windows: resolve command path
         cmd = command
         cmd_args = list(args or [])
-        use_shell = False
         if _sys.platform == "win32":
             if not cmd.endswith((".exe",)):
                 resolved = _shutil.which(cmd)
                 if not resolved:
                     resolved = _shutil.which(cmd + ".cmd") or _shutil.which(cmd + ".CMD")
                 if resolved:
-                    if resolved.lower().endswith((".cmd", ".bat")):
-                        use_shell = True
-                        cmd = f'"{resolved}"'
-                    else:
-                        cmd = resolved
+                    cmd = resolved
 
         try:
-            if use_shell:
-                full_cmd = f'{cmd} {" ".join(cmd_args)}'
-                self._proc = await _asyncio.create_subprocess_shell(
-                    full_cmd,
-                    stdin=_asyncio.subprocess.PIPE,
-                    stdout=_asyncio.subprocess.PIPE,
-                    stderr=_asyncio.subprocess.PIPE,
-                    env=env,
-                    limit=_STDIO_STREAM_LIMIT,
-                )
+            loop = _asyncio.get_running_loop()
+            if _sys.platform == "win32" and not isinstance(loop, _asyncio.ProactorEventLoop):
+                # SelectorEventLoop doesn't support subprocess on Windows
+                full_cmd = [cmd] + cmd_args
+                def _start_proc():
+                    return _sp.Popen(
+                        full_cmd,
+                        stdin=_sp.PIPE,
+                        stdout=_sp.PIPE,
+                        stderr=_sp.PIPE,
+                        env=env,
+                        creationflags=_sp.CREATE_NEW_PROCESS_GROUP if hasattr(_sp, 'CREATE_NEW_PROCESS_GROUP') else 0,
+                    )
+                _sync_proc = await loop.run_in_executor(None, _start_proc)
+                self._proc = _McpPopenWrapper(_sync_proc)
             else:
                 self._proc = await _asyncio.create_subprocess_exec(
                     cmd,
