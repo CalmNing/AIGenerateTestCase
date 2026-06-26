@@ -514,9 +514,10 @@ class MCPClient:
         import sys as _sys
         import shutil as _shutil
 
-        # Windows: .cmd files need cmd.exe /c wrapper for create_subprocess_exec
+        # Windows: .cmd files need shell=True for subprocess creation
         cmd = command
         cmd_args = list(args or [])
+        use_shell = False
         if _sys.platform == "win32":
             if not cmd.endswith((".exe",)):
                 resolved = _shutil.which(cmd)
@@ -524,22 +525,33 @@ class MCPClient:
                     resolved = _shutil.which(cmd + ".cmd") or _shutil.which(cmd + ".CMD")
                 if resolved:
                     if resolved.lower().endswith((".cmd", ".bat")):
-                        cmd = "cmd.exe"
-                        cmd_args = ["/c", resolved] + cmd_args
+                        use_shell = True
+                        cmd = f'"{resolved}"'
                     else:
                         cmd = resolved
 
         try:
-            self._proc = await _asyncio.create_subprocess_exec(
-                cmd,
-                *cmd_args,
-                stdin=_asyncio.subprocess.PIPE,
-                stdout=_asyncio.subprocess.PIPE,
-                stderr=_asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=True,
-                limit=_STDIO_STREAM_LIMIT,
-            )
+            if use_shell:
+                full_cmd = f'{cmd} {" ".join(cmd_args)}'
+                self._proc = await _asyncio.create_subprocess_shell(
+                    full_cmd,
+                    stdin=_asyncio.subprocess.PIPE,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                    env=env,
+                    limit=_STDIO_STREAM_LIMIT,
+                )
+            else:
+                self._proc = await _asyncio.create_subprocess_exec(
+                    cmd,
+                    *cmd_args,
+                    stdin=_asyncio.subprocess.PIPE,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                    env=env,
+                    start_new_session=True,
+                    limit=_STDIO_STREAM_LIMIT,
+                )
         except _asyncio.CancelledError:
             raise
         except FileNotFoundError:

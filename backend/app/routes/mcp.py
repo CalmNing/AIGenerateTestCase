@@ -284,11 +284,13 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
 
     env = _build_env(server)
 
-    # Windows: .cmd files need cmd.exe /c wrapper for create_subprocess_exec
+    # Windows: .cmd files need shell=True or cmd.exe /c wrapper
     import sys as _sys
     import shutil as _shutil
+    import subprocess as _sp
     cmd = server.command
     cmd_args = list(server.args)
+    use_shell = False
     if _sys.platform == "win32":
         if not cmd.endswith((".exe",)):
             resolved = _shutil.which(cmd)
@@ -297,32 +299,47 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
             if resolved:
                 logger.info("[耗时] Windows 命令解析: %s -> %s", server.command, resolved)
                 if resolved.lower().endswith((".cmd", ".bat")):
-                    # .cmd/.bat files must be invoked via cmd.exe
-                    cmd = "cmd.exe"
-                    cmd_args = ["/c", resolved] + cmd_args
+                    # .cmd/.bat: use shell=True which handles them correctly
+                    use_shell = True
+                    cmd = f'"{resolved}"'
                 else:
                     cmd = resolved
             else:
                 logger.warning("[耗时] Windows 命令未找到: %s", server.command)
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            cmd,
-            *cmd_args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            start_new_session=True,
-        )
-        logger.info("[耗时] _list_tools_stdio 进程启动: %.2fs %s (cmd=%s)", time.monotonic() - t0, server.name, cmd)
+        if use_shell:
+            # shell=True for .cmd/.bat files on Windows
+            full_cmd = f'{cmd} {" ".join(cmd_args)}'
+            proc = await asyncio.create_subprocess_shell(
+                full_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                cmd,
+                *cmd_args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+            )
+        logger.info("[耗时] _list_tools_stdio 进程启动: %.2fs %s (cmd=%s shell=%s)",
+                    time.monotonic() - t0, server.name, cmd, use_shell)
     except FileNotFoundError:
         logger.warning("[耗时] STDIO 命令不存在: cmd=%s (原始: %s)", cmd, server.command)
         return {"name": server.name, "type": "stdio", "available": False, "tools": [],
                 "error": f"命令不存在: {cmd}"}
     except Exception as e:
-        logger.warning("[耗时] STDIO 进程启动异常: cmd=%s error=%s", cmd, e)
-        return {"name": server.name, "type": "stdio", "available": False, "tools": [], "error": str(e)}
+        import traceback
+        logger.warning("[耗时] STDIO 进程启动异常: cmd=%s type=%s error=%s\n%s",
+                       cmd, type(e).__name__, e, traceback.format_exc())
+        return {"name": server.name, "type": "stdio", "available": False, "tools": [],
+                "error": f"{type(e).__name__}: {e}" if str(e) else repr(e)}
 
     # 用于收集 stderr 的列表
     stderr_lines: list[str] = []
