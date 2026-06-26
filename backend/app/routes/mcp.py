@@ -284,9 +284,20 @@ async def _list_tools_stdio(server: McpServerConfig) -> dict:
 
     env = _build_env(server)
 
+    # Windows: resolve .cmd extensions for npx/npm/node etc.
+    import sys as _sys
+    import shutil as _shutil
+    cmd = server.command
+    if _sys.platform == "win32" and not cmd.endswith((".cmd", ".exe", ".bat")):
+        resolved = _shutil.which(cmd)
+        if resolved:
+            cmd = resolved
+        elif _shutil.which(cmd + ".cmd"):
+            cmd = cmd + ".cmd"
+
     try:
         proc = await asyncio.create_subprocess_exec(
-            server.command,
+            cmd,
             *server.args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

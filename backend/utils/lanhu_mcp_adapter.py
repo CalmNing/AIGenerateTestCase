@@ -511,10 +511,21 @@ class MCPClient:
     async def connect_stdio(self, command: str, args: list[str] | None = None, env: dict | None = None) -> bool:
         """通过 STDIO 连接 MCP 服务器：启动进程、初始化、获取工具列表。"""
         import asyncio as _asyncio
+        import sys as _sys
+        import shutil as _shutil
+
+        # Windows: resolve .cmd extensions for npx/npm/node etc.
+        cmd = command
+        if _sys.platform == "win32" and not cmd.endswith((".cmd", ".exe", ".bat")):
+            resolved = _shutil.which(cmd)
+            if resolved:
+                cmd = resolved
+            elif _shutil.which(cmd + ".cmd"):
+                cmd = cmd + ".cmd"
 
         try:
             self._proc = await _asyncio.create_subprocess_exec(
-                command,
+                cmd,
                 *(args or []),
                 stdin=_asyncio.subprocess.PIPE,
                 stdout=_asyncio.subprocess.PIPE,
