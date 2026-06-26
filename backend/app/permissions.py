@@ -97,7 +97,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 def get_user_permissions(user: UserInfo) -> set[str]:
     permissions: set[str] = set()
     for role in user.roles:
-        permissions.update(ROLE_PERMISSIONS.get(role, set()))
+        # 如果 role 是已知角色名，使用映射
+        if role in ROLE_PERMISSIONS:
+            permissions.update(ROLE_PERMISSIONS[role])
+        # 如果 role 本身就是权限字符串，直接添加
+        elif role in ALL_PERMISSIONS:
+            permissions.add(role)
     return permissions
 
 
