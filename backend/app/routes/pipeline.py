@@ -87,7 +87,7 @@ async def generate_v2(
     task_id = await runner.run(
         session_id=session_id,
         requirement_text=requirement_text,
-        user_id=user.sub if user else None,
+        user_id=user.user_id if user else None,
         selected_skills=skills_list,
     )
 
@@ -267,7 +267,7 @@ async def regenerate_test_point_cases(
                 test_point_id=point.id,
                 test_type=point.test_type,
                 design_method=point.design_method,
-                user_id=user.sub if user else None,
+                user_id=user.user_id if user else None,
             )
             session.add(tc)
             session.commit()
