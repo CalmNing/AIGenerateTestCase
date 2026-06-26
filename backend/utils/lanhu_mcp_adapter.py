@@ -91,6 +91,7 @@ class _McpStreamReader:
         self._pipe = pipe
         self._queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
+        self._loop = asyncio.get_running_loop()
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._thread.start()
 
@@ -100,13 +101,13 @@ class _McpStreamReader:
                 line = self._pipe.readline()
                 if not line:
                     self._closed = True
-                    asyncio.run_coroutine_threadsafe(self._queue.put(b''), asyncio.get_event_loop())
+                    asyncio.run_coroutine_threadsafe(self._queue.put(b''), self._loop)
                     break
-                asyncio.run_coroutine_threadsafe(self._queue.put(line), asyncio.get_event_loop())
+                asyncio.run_coroutine_threadsafe(self._queue.put(line), self._loop)
         except (ValueError, OSError):
             self._closed = True
             try:
-                asyncio.run_coroutine_threadsafe(self._queue.put(b''), asyncio.get_event_loop())
+                asyncio.run_coroutine_threadsafe(self._queue.put(b''), self._loop)
             except RuntimeError:
                 pass
 
