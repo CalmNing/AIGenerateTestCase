@@ -7,6 +7,27 @@
   overflow-y: auto;
 }
 
+/* 自定义滚动条 */
+.variable-assistant-popover::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.variable-assistant-popover::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.variable-assistant-popover::-webkit-scrollbar-thumb {
+  background: var(--color-text-quaternary);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+.variable-assistant-popover::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
 .variable-assistant-popover .ant-popover-inner {
   padding: 0;
 }
@@ -23,6 +44,29 @@
 
 .variable-assistant-tabs .ant-tabs-content-holder {
   padding: var(--space-3);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+/* 标签页内容滚动条 */
+.variable-assistant-tabs .ant-tabs-content-holder::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.variable-assistant-tabs .ant-tabs-content-holder::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.variable-assistant-tabs .ant-tabs-content-holder::-webkit-scrollbar-thumb {
+  background: var(--color-text-quaternary);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+.variable-assistant-tabs .ant-tabs-content-holder::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
 }
 
 /* Variable list */
