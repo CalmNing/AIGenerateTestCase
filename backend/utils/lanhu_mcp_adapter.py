@@ -4,9 +4,11 @@ lanhu-mcp 使用 FastMCP Streamable HTTP 传输。
 该传输在 HTTP POST 请求/响应之上使用 SSE 事件格式（event: message\\ndata: {...}）。
 """
 
+import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any, Optional
 
@@ -84,25 +86,37 @@ _STDIO_STREAM_LIMIT = 20 * 1024 * 1024
 
 
 class _McpStreamReader:
-    """Async wrapper for synchronous pipe read using non-blocking I/O."""
+    """Async wrapper for synchronous pipe read using a dedicated reader thread."""
     def __init__(self, pipe):
         self._pipe = pipe
-        self._fd = pipe.fileno() if hasattr(pipe, 'fileno') else None
-    async def readline(self):
-        import select
-        import asyncio as _asyncio
-        loop = _asyncio.get_running_loop()
-        def _read_with_timeout():
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._closed = False
+        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._thread.start()
+
+    def _reader_loop(self):
+        try:
+            while not self._closed:
+                line = self._pipe.readline()
+                if not line:
+                    self._closed = True
+                    asyncio.run_coroutine_threadsafe(self._queue.put(b''), asyncio.get_event_loop())
+                    break
+                asyncio.run_coroutine_threadsafe(self._queue.put(line), asyncio.get_event_loop())
+        except (ValueError, OSError):
+            self._closed = True
             try:
-                while True:
-                    ready, _, _ = select.select([self._fd], [], [], 1.0)
-                    if ready:
-                        return self._pipe.readline()
-                    if self._pipe.closed:
-                        return b''
-            except (ValueError, OSError):
-                return b''
-        return await loop.run_in_executor(None, _read_with_timeout)
+                asyncio.run_coroutine_threadsafe(self._queue.put(b''), asyncio.get_event_loop())
+            except RuntimeError:
+                pass
+
+    async def readline(self):
+        if self._closed and self._queue.empty():
+            return b''
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout=3.0)
+        except asyncio.TimeoutError:
+            return b''
     async def read(self, n=-1):
         import asyncio as _asyncio
         loop = _asyncio.get_running_loop()

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import signal
+import threading
 import time
 from typing import Optional, List
 
@@ -302,30 +303,42 @@ class _AsyncPopenWrapper:
 
 
 class _AsyncStreamReader:
-    """Async wrapper for synchronous pipe read using non-blocking I/O."""
+    """Async wrapper for synchronous pipe read using a dedicated reader thread.
+    Uses a queue to pass data from the blocking reader thread to the async caller."""
 
     def __init__(self, pipe):
         self._pipe = pipe
-        self._fd = pipe.fileno() if hasattr(pipe, 'fileno') else None
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._closed = False
+        self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._thread.start()
+
+    def _reader_loop(self):
+        """Blocking reader thread - reads lines from pipe and puts them in queue."""
+        try:
+            while not self._closed:
+                line = self._pipe.readline()
+                if not line:
+                    # Pipe closed
+                    self._closed = True
+                    # Put sentinel to unblock waiting async code
+                    asyncio.run_coroutine_threadsafe(self._queue.put(b''), asyncio.get_event_loop())
+                    break
+                asyncio.run_coroutine_threadsafe(self._queue.put(line), asyncio.get_event_loop())
+        except (ValueError, OSError):
+            self._closed = True
+            try:
+                asyncio.run_coroutine_threadsafe(self._queue.put(b''), asyncio.get_event_loop())
+            except RuntimeError:
+                pass
 
     async def readline(self):
-        import select
-        loop = asyncio.get_running_loop()
-        # Use select with timeout in a thread to avoid blocking the event loop
-        # and to support proper cancellation
-        def _read_with_timeout():
-            try:
-                while True:
-                    ready, _, _ = select.select([self._fd], [], [], 1.0)
-                    if ready:
-                        line = self._pipe.readline()
-                        return line
-                    # Check if pipe is closed
-                    if self._pipe.closed:
-                        return b''
-            except (ValueError, OSError):
-                return b''
-        return await loop.run_in_executor(None, _read_with_timeout)
+        if self._closed and self._queue.empty():
+            return b''
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout=3.0)
+        except asyncio.TimeoutError:
+            return b''
 
     async def read(self, n=-1):
         loop = asyncio.get_running_loop()
