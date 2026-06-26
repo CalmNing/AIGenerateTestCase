@@ -761,10 +761,10 @@ const App: React.FC = () => {
     try {
       const res = await testcaseApi.inferDependencies(selectedSession.id, testcase.id);
       if (res.code === 200) {
-        const data = res.data || {};
+        const data = res.data as { added_post_actions?: number; replaced_fields?: number; extra_endpoint_ids?: number[] } || {};
         notification.success({
           message: '依赖推断完成',
-          description: `新增提取 ${data.added_post_actions || 0} 个，替换字段 ${data.replaced_fields || 0} 个`,
+          description: `发现 ${data.extra_endpoint_ids?.length || 0} 个依赖接口`,
           placement: 'topRight',
         });
         loadTestcases(selectedSession.id, filters);
