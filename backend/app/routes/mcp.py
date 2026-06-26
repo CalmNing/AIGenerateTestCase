@@ -302,14 +302,30 @@ class _AsyncPopenWrapper:
 
 
 class _AsyncStreamReader:
-    """Async wrapper for synchronous pipe read."""
+    """Async wrapper for synchronous pipe read using non-blocking I/O."""
 
     def __init__(self, pipe):
         self._pipe = pipe
+        self._fd = pipe.fileno() if hasattr(pipe, 'fileno') else None
 
     async def readline(self):
+        import select
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._pipe.readline)
+        # Use select with timeout in a thread to avoid blocking the event loop
+        # and to support proper cancellation
+        def _read_with_timeout():
+            try:
+                while True:
+                    ready, _, _ = select.select([self._fd], [], [], 1.0)
+                    if ready:
+                        line = self._pipe.readline()
+                        return line
+                    # Check if pipe is closed
+                    if self._pipe.closed:
+                        return b''
+            except (ValueError, OSError):
+                return b''
+        return await loop.run_in_executor(None, _read_with_timeout)
 
     async def read(self, n=-1):
         loop = asyncio.get_running_loop()

@@ -84,13 +84,25 @@ _STDIO_STREAM_LIMIT = 20 * 1024 * 1024
 
 
 class _McpStreamReader:
-    """Async wrapper for synchronous pipe read."""
+    """Async wrapper for synchronous pipe read using non-blocking I/O."""
     def __init__(self, pipe):
         self._pipe = pipe
+        self._fd = pipe.fileno() if hasattr(pipe, 'fileno') else None
     async def readline(self):
+        import select
         import asyncio as _asyncio
         loop = _asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._pipe.readline)
+        def _read_with_timeout():
+            try:
+                while True:
+                    ready, _, _ = select.select([self._fd], [], [], 1.0)
+                    if ready:
+                        return self._pipe.readline()
+                    if self._pipe.closed:
+                        return b''
+            except (ValueError, OSError):
+                return b''
+        return await loop.run_in_executor(None, _read_with_timeout)
     async def read(self, n=-1):
         import asyncio as _asyncio
         loop = _asyncio.get_running_loop()
