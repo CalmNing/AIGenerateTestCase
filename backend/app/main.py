@@ -126,3 +126,13 @@ api_router.include_router(
 
 # Public runtime route: mock callbacks must be callable by external systems.
 api_router.include_router(mock_server_router)
+
+
+# Public config lookup: bug link template is needed by all users viewing test cases.
+@api_router.get("/config/bug-link-template")
+async def get_bug_link_template():
+    """获取 Bug 链接模板配置"""
+    from config import config_manager
+    from utils.base_response import Response
+    template = config_manager.get("bug_link_template", "")
+    return Response(data={"template": template})

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Table, Button, TableProps, message, Modal, Tooltip } from 'antd';
-import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
-import { TestCase, TestCaseStatus } from '../types';
+import { Table, Button, TableProps, message, Modal, Tooltip, Tag } from 'antd';
+import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined, HistoryOutlined, BranchesOutlined } from '@ant-design/icons';
+import { TestCase, TestCaseStatus } from '../../types';
 
 interface TestCaseTableProps {
   testcases: TestCase[];
@@ -12,6 +12,8 @@ interface TestCaseTableProps {
   onBatchDelete: (ids: number[]) => void;
   onMove: (testcase: TestCase) => void;
   onApiExecute?: (testcase: TestCase) => void;
+  onViewExecutionLogs?: (testcase: TestCase) => void;
+  onInferDependencies?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
 }
 
@@ -30,6 +32,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onBatchDelete,
   onMove,
   onApiExecute,
+  onViewExecutionLogs,
+  onInferDependencies,
   onBatchMove
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
@@ -64,6 +68,70 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (level: number) => {
         const cls = `tcm-level-badge tcm-level-badge--${level || 4}`;
         return <span className={cls}>P{level || 4}</span>;
+      },
+    },
+    {
+      title: '接口',
+      key: 'api_steps',
+      width: 260,
+      render: (_: any, record: TestCase) => {
+        // 优先从 scenario_steps 读取（新逻辑）
+        const scenarioSteps = record.scenario_steps || [];
+        if (scenarioSteps.length > 0) {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {scenarioSteps.map((step, i: number) => {
+                const method = step.method ? step.method.toUpperCase() : '';
+                const path = step.path || '';
+                const label = method && path ? `${method} ${path}` : (step.name || `步骤 ${i + 1}`);
+                return (
+                  <Tooltip key={i} title={label}>
+                    <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 230, display: 'inline-flex', alignItems: 'center' }}>
+                      <ApiOutlined style={{ marginRight: 4, flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
+                    </Tag>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          );
+        }
+
+        // 回退：旧用例从 steps/preset_conditions 读取 api_call 步骤
+        const allSteps = [
+          ...((record.preset_conditions || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
+          ...((record.steps || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
+        ];
+        if (allSteps.length === 0) {
+          if (!record.api_endpoint_id) return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
+          const ids = String(record.api_endpoint_id).split(',').map(s => s.trim()).filter(Boolean);
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {ids.map((id, i) => (
+                <Tag key={i} color="default" style={{ fontSize: 11, margin: 0 }}>
+                  <ApiOutlined style={{ marginRight: 4 }} />接口 #{id}
+                </Tag>
+              ))}
+            </div>
+          );
+        }
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {allSteps.map((step: any, i: number) => {
+              const method = step.method ? step.method.toUpperCase() : '';
+              const path = step.path || step.url || '';
+              const label = method && path ? `${method} ${path}` : (step.description || step.name || `步骤 ${i + 1}`);
+              return (
+                <Tooltip key={i} title={label}>
+                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 230, display: 'inline-flex', alignItems: 'center' }}>
+                    <ApiOutlined style={{ marginRight: 4, flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
+                  </Tag>
+                </Tooltip>
+              );
+            })}
+          </div>
+        );
       },
     },
     {
@@ -122,7 +190,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
     {
       title: '操作',
       key: 'action',
-      width: 170,
+      width: 224,
       align: 'center' as const,
       render: (_: any, record: TestCase) => (
         <div className="tcm-actions">
@@ -145,6 +213,20 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             <Tooltip title="API 执行" placement="top">
               <button className="tcm-action-btn tcm-action-btn--api" onClick={() => onApiExecute(record)}>
                 <ApiOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onViewExecutionLogs && record.api_endpoint_id && (
+            <Tooltip title="执行日志" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--log" onClick={() => onViewExecutionLogs(record)}>
+                <HistoryOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onInferDependencies && record.api_endpoint_id && (
+            <Tooltip title="推断依赖" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--infer" onClick={() => onInferDependencies(record)}>
+                <BranchesOutlined />
               </button>
             </Tooltip>
           )}

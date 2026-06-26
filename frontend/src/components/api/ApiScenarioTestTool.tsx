@@ -25,6 +25,9 @@ import {
 import {
   ArrowUpOutlined,
   ArrowDownOutlined,
+  BranchesOutlined,
+  CheckSquareOutlined,
+  CloseSquareOutlined,
   CopyOutlined,
   SnippetsOutlined,
   DeleteOutlined,
@@ -42,8 +45,8 @@ import {
 } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
-import { apiTestApi, globalParameterApi } from '../services/api';
-import { ApiEndpoint, ApiProject, ApiScenario, ApiScenarioResult, ApiScenarioStep, GlobalParameter } from '../types';
+import { apiTestApi, globalParameterApi } from '../../services/api';
+import { ApiEndpoint, ApiProject, ApiScenario, ApiScenarioResult, ApiScenarioStep, GlobalParameter } from '../../types';
 
 const { TextArea } = Input;
 const REMOVED_FROM_SPEC_TAG = '__removed_from_spec__';
@@ -226,6 +229,21 @@ function getScenarioResultSummary(result: any) {
 function formatScenarioResultRecordLabel(record: ApiScenarioResult) {
   const { total, passed } = getScenarioResultSummary(record.result);
   return `${new Date(record.created_at).toLocaleString()} - ${passed}/${total}`;
+}
+
+function formatScenarioResultTime(record: ApiScenarioResult | undefined) {
+  if (!record) return '';
+  return new Date(record.created_at).toLocaleString();
+}
+
+function latestScenarioResultLabel(record: ApiScenarioResult | undefined) {
+  if (!record) return '未执行';
+  return record.passed ? '通过' : '不通过';
+}
+
+function latestScenarioResultColor(record: ApiScenarioResult | undefined) {
+  if (!record) return 'default';
+  return record.passed ? 'success' : 'error';
 }
 
 function endpointLabel(endpoint: ApiEndpoint): string {
@@ -424,6 +442,13 @@ function endpointToFormValues(endpoint: ApiEndpoint) {
   };
 }
 
+function formatInferDependencySummary(data?: Record<string, any>) {
+  const addedPostActions = Number(data?.added_post_actions || 0);
+  const replacedFields = Number(data?.replaced_fields || 0);
+  const skippedExisting = Number(data?.skipped_existing || 0);
+  return `依赖推断完成：新增提取 ${addedPostActions} 个，填充字段 ${replacedFields} 个，跳过已有 ${skippedExisting} 个`;
+}
+
 const ApiScenarioTestTool: React.FC = () => {
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
@@ -436,6 +461,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [syncingProjectId, setSyncingProjectId] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
   const [endpointRunning, setEndpointRunning] = useState(false);
   const [bodyGenerating, setBodyGenerating] = useState(false);
   const [scenarioStepBodyGenerating, setScenarioStepBodyGenerating] = useState<number | null>(null);
@@ -443,6 +469,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [copyingScenarioId, setCopyingScenarioId] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
   const [scenarioResultHistory, setScenarioResultHistory] = useState<Record<number, ApiScenarioResult[]>>({});
+  const [selectedScenarioIds, setSelectedScenarioIds] = useState<number[]>([]);
   const [selectedScenarioResultRecordId, setSelectedScenarioResultRecordId] = useState<number | null>(null);
   const [endpointResult, setEndpointResult] = useState<any>(null);
   const [bodyPreview, setBodyPreview] = useState('');
@@ -536,13 +563,18 @@ const ApiScenarioTestTool: React.FC = () => {
       apiTestApi.getScenarios(projectId),
     ]);
     if (endpointRes.code === 200) setEndpoints(endpointRes.data || []);
-    if (scenarioRes.code === 200) setScenarios(scenarioRes.data || []);
+    if (scenarioRes.code === 200) {
+      const nextScenarios = scenarioRes.data || [];
+      setScenarios(nextScenarios);
+      loadLatestScenarioResults(nextScenarios).catch(() => message.error('加载场景最新执行结果失败'));
+    }
     setSelectedEndpoint(null);
     setSelectedScenario(null);
     selectedScenarioIdRef.current = null;
     setResult(null);
     setScenarioResultHistory({});
     setSelectedScenarioResultRecordId(null);
+    setSelectedScenarioIds([]);
     setEndpointResult(null);
   };
 
@@ -568,6 +600,24 @@ const ApiScenarioTestTool: React.FC = () => {
     return records;
   };
 
+  const loadLatestScenarioResults = async (items: ApiScenario[]) => {
+    if (items.length === 0) return;
+    const pairs = await Promise.all(
+      items.map(async (scenario) => {
+        const res = await apiTestApi.getScenarioResults(scenario.id, 1);
+        if (res.code !== 200) return [scenario.id, []] as const;
+        return [scenario.id, res.data || []] as const;
+      }),
+    );
+    setScenarioResultHistory((history) => {
+      const next = { ...history };
+      pairs.forEach(([scenarioId, records]) => {
+        next[scenarioId] = [...records];
+      });
+      return next;
+    });
+  };
+
   const loadEnvironments = async () => {
     const res = await globalParameterApi.getEnvironments();
     if (res.code === 200 && res.data) {
@@ -584,6 +634,7 @@ const ApiScenarioTestTool: React.FC = () => {
         api_key: (settings.api_key || '').trim(),
         api_base_url: (settings.api_base_url || '').trim(),
         api_proxy_url: (settings.api_proxy_url || '').trim(),
+        api_model: (settings.api_model || 'deepseek-v4-flash').trim(),
         ollama_url: (settings.ollama_url || '').trim(),
         ollama_model: (settings.ollama_model || '').trim(),
       };
@@ -654,6 +705,28 @@ const ApiScenarioTestTool: React.FC = () => {
       scenarioForm.setFieldsValue(scenarioToFormValues(scenario, endpoints));
     }, 0);
     loadScenarioResults(scenario.id, true).catch(() => message.error('加载场景执行结果失败'));
+  };
+
+  const toggleScenarioSelection = (scenarioId: number, checked: boolean) => {
+    setSelectedScenarioIds((ids) => {
+      if (checked) return ids.includes(scenarioId) ? ids : [...ids, scenarioId];
+      return ids.filter((id) => id !== scenarioId);
+    });
+  };
+
+  const selectAllScenarios = () => {
+    setSelectedScenarioIds(scenarios.map((scenario) => scenario.id));
+  };
+
+  const clearScenarioSelection = () => {
+    setSelectedScenarioIds([]);
+  };
+
+  // Get scenario status CSS class for visual indicator
+  const getScenarioStatusClass = (scenario: ApiScenario): string => {
+    const latestRecord = scenarioResultHistory[scenario.id]?.[0];
+    if (!latestRecord) return 'scenario-status-unknown';
+    return latestRecord.passed ? 'scenario-status-passed' : 'scenario-status-failed';
   };
 
   const handleImport = async () => {
@@ -733,6 +806,7 @@ const ApiScenarioTestTool: React.FC = () => {
     selectedScenarioIdRef.current = null;
     setResult(null);
     setSelectedScenarioResultRecordId(null);
+    setSelectedScenarioIds([]);
     setEndpointResult(null);
   };
 
@@ -762,6 +836,7 @@ const ApiScenarioTestTool: React.FC = () => {
           setResult(null);
           setScenarioResultHistory({});
           setSelectedScenarioResultRecordId(null);
+          setSelectedScenarioIds([]);
           setEndpointResult(null);
         }
         message.success('接口项目已删除');
@@ -935,6 +1010,63 @@ const ApiScenarioTestTool: React.FC = () => {
     }
   };
 
+  const handleInferProjectDependencies = async () => {
+    if (!selectedProjectId) return;
+    const currentEndpointId = selectedEndpoint?.id;
+    const currentScenarioId = selectedScenario?.id;
+    try {
+      const res = await apiTestApi.inferProjectDependencies(selectedProjectId);
+      if (res.code !== 200) {
+        message.error(res.message || '依赖推断失败');
+        return;
+      }
+      const [endpointRes, scenarioRes] = await Promise.all([
+        apiTestApi.getEndpoints(selectedProjectId),
+        apiTestApi.getScenarios(selectedProjectId),
+      ]);
+      const nextEndpoints = endpointRes.code === 200 ? endpointRes.data || [] : endpoints;
+      const nextScenarios = scenarioRes.code === 200 ? scenarioRes.data || [] : scenarios;
+      setEndpoints(nextEndpoints);
+      setScenarios(nextScenarios);
+      if (currentEndpointId) {
+        setSelectedEndpoint(nextEndpoints.find((endpoint) => endpoint.id === currentEndpointId) || null);
+      }
+      if (currentScenarioId) {
+        const nextScenario = nextScenarios.find((scenario) => scenario.id === currentScenarioId) || null;
+        setSelectedScenario(nextScenario);
+        selectedScenarioIdRef.current = nextScenario?.id || null;
+      }
+      message.success(formatInferDependencySummary(res.data));
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '依赖推断失败');
+    }
+  };
+
+  const handleInferScenarioDependencies = async () => {
+    if (!selectedScenario || !selectedProjectId) return;
+    try {
+      const res = await apiTestApi.inferScenarioDependencies(selectedScenario.id);
+      if (res.code !== 200) {
+        message.error(res.message || '场景依赖推断失败');
+        return;
+      }
+      const scenarioRes = await apiTestApi.getScenarios(selectedProjectId);
+      if (scenarioRes.code === 200) {
+        const nextScenarios = scenarioRes.data || [];
+        const nextScenario = nextScenarios.find((scenario) => scenario.id === selectedScenario.id) || null;
+        setScenarios(nextScenarios);
+        setSelectedScenario(nextScenario);
+        selectedScenarioIdRef.current = nextScenario?.id || null;
+        if (nextScenario) {
+          scenarioForm.setFieldsValue(scenarioToFormValues(nextScenario, endpoints));
+        }
+      }
+      message.success(formatInferDependencySummary(res.data));
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '场景依赖推断失败');
+    }
+  };
+
   const handleCreateScenario = async () => {
     if (!selectedProjectId) return;
     const res = await apiTestApi.createScenario(selectedProjectId, {
@@ -1025,18 +1157,69 @@ const ApiScenarioTestTool: React.FC = () => {
       const res = await apiTestApi.runScenario(runningScenario.id);
       if (res.code === 200 && res.data) {
         const record = res.data;
-        setScenarioResultHistory((history) => ({
-          ...history,
-          [runningScenario.id]: [record, ...(history[runningScenario.id] || [])].slice(0, MAX_SCENARIO_RESULT_RECORDS),
-        }));
-        setSelectedScenarioResultRecordId(record.id);
-        setResult(record.result);
+        mergeBatchResults([record]);
         message.success('场景执行完成');
       } else {
         message.error(res.message || '场景执行失败');
       }
     } finally {
       setRunning(false);
+    }
+  };
+
+  const mergeBatchResults = (records: ApiScenarioResult[]) => {
+    setScenarioResultHistory((history) => {
+      const next = { ...history };
+      records.forEach((record) => {
+        const existing = next[record.scenario_id] || [];
+        next[record.scenario_id] = [record, ...existing.filter((item) => item.id !== record.id)].slice(0, MAX_SCENARIO_RESULT_RECORDS);
+      });
+      return next;
+    });
+
+    const selectedRecord = selectedScenarioIdRef.current
+      ? records.find((record) => record.scenario_id === selectedScenarioIdRef.current)
+      : undefined;
+    if (selectedRecord) {
+      setSelectedScenarioResultRecordId(selectedRecord.id);
+      setResult(selectedRecord.result);
+    }
+  };
+
+  const handleRunScenarioBatch = async (runAll: boolean) => {
+    if (!selectedProjectId) return;
+    if (!runAll && selectedScenarioIds.length === 0) {
+      message.warning('请选择要执行的场景');
+      return;
+    }
+
+    setBatchRunning(true);
+    try {
+      const res = await apiTestApi.runScenarios(selectedProjectId, {
+        run_all: runAll,
+        scenario_ids: runAll ? [] : selectedScenarioIds,
+      });
+      if (res.code !== 200 || !res.data) {
+        message.error(res.message || '批量执行失败');
+        return;
+      }
+
+      const records: ApiScenarioResult[] = res.data.results.map((item) => ({
+        id: item.record_id,
+        scenario_id: item.scenario_id,
+        project_id: selectedProjectId,
+        scenario_name: item.scenario_name,
+        passed: item.passed,
+        result: item.result,
+        created_at: item.created_at,
+        updated_at: item.created_at,
+      }));
+      mergeBatchResults(records);
+      message.success(`批量执行完成：共 ${res.data.total} 个，通过 ${res.data.passed} 个，不通过 ${res.data.failed} 个`);
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '批量执行失败');
+    } finally {
+      setBatchRunning(false);
     }
   };
 
@@ -2080,13 +2263,67 @@ const ApiScenarioTestTool: React.FC = () => {
                   label: `场景 ${scenarios.length}`,
                   children: (
                     <div style={assetTabPaneStyle}>
-                      <Button icon={<PlusOutlined />} onClick={handleCreateScenario} block>新建场景</Button>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <Button icon={<PlusOutlined />} onClick={handleCreateScenario} block>新建场景</Button>
+                        <div className="scenario-batch-toolbar">
+                          <div className="scenario-batch-toolbar-left">
+                            <Tooltip title="全选">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<CheckSquareOutlined />}
+                                onClick={selectAllScenarios}
+                                disabled={scenarios.length === 0 || selectedScenarioIds.length === scenarios.length}
+                              />
+                            </Tooltip>
+                            <Tooltip title="取消选择">
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<CloseSquareOutlined />}
+                                onClick={clearScenarioSelection}
+                                disabled={selectedScenarioIds.length === 0}
+                              />
+                            </Tooltip>
+                            {selectedScenarioIds.length > 0 && (
+                              <span className="scenario-selection-badge">{selectedScenarioIds.length}</span>
+                            )}
+                          </div>
+                          <div className="scenario-batch-toolbar-right">
+                            <Tooltip title="批量执行选中场景">
+                              <Button
+                                type="primary"
+                                size="small"
+                                icon={<PlayCircleOutlined />}
+                                loading={batchRunning}
+                                disabled={selectedScenarioIds.length === 0}
+                                onClick={() => handleRunScenarioBatch(false)}
+                              >
+                                批量
+                              </Button>
+                            </Tooltip>
+                            <Tooltip title="执行项目下全部场景">
+                              <Button
+                                size="small"
+                                icon={<SyncOutlined />}
+                                loading={batchRunning}
+                                disabled={scenarios.length === 0}
+                                onClick={() => handleRunScenarioBatch(true)}
+                              >
+                                全部
+                              </Button>
+                            </Tooltip>
+                          </div>
+                        </div>
+                      </div>
                       <List
                         style={assetListScrollStyle}
                         dataSource={scenarios}
                         renderItem={(scenario) => (
                           <List.Item
-                            className={`asset-list-item ${scenario.id === selectedScenario?.id ? 'asset-list-item-selected' : ''}`}
+                            className={`asset-list-item scenario-list-item ${
+                              scenario.id === selectedScenario?.id ? 'asset-list-item-selected scenario-list-item-selected' : ''
+                            } ${getScenarioStatusClass(scenario)}`}
                             actions={[
                               <Tooltip title="复制场景" key="copy">
                                 <Button
@@ -2103,13 +2340,38 @@ const ApiScenarioTestTool: React.FC = () => {
                             ]}
                             onClick={() => selectScenario(scenario)}
                           >
+                            <Checkbox
+                              checked={selectedScenarioIds.includes(scenario.id)}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => toggleScenarioSelection(scenario.id, event.target.checked)}
+                              style={{ marginRight: 8 }}
+                            />
                             <List.Item.Meta
                               title={scenario.name}
                               description={
-                                <span className="scenario-item-steps">
-                                  <PlayCircleOutlined style={{ fontSize: 11 }} />
-                                  {scenario.steps?.length || 0} 个步骤
-                                </span>
+                                <Space direction="vertical" size={4}>
+                                  <span className="scenario-item-steps">
+                                    <PlayCircleOutlined style={{ fontSize: 11 }} />
+                                    {scenario.steps?.length || 0} 个步骤
+                                  </span>
+                                  {(() => {
+                                    const latestRecord = scenarioResultHistory[scenario.id]?.[0];
+                                    return (
+                                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                                        <span className={`scenario-status-tag ${
+                                          latestRecord?.passed ? 'scenario-status-tag-passed' :
+                                          latestRecord ? 'scenario-status-tag-failed' : 'scenario-status-tag-unknown'
+                                        }`}>
+                                          <span className="scenario-status-icon">
+                                            {latestRecord?.passed ? '✓' : latestRecord ? '✗' : '○'}
+                                          </span>
+                                          {latestScenarioResultLabel(latestRecord)}
+                                        </span>
+                                        {latestRecord && <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11 }}>{formatScenarioResultTime(latestRecord)}</span>}
+                                      </span>
+                                    );
+                                  })()}
+                                </Space>
                               }
                             />
                           </List.Item>
@@ -2245,6 +2507,7 @@ const ApiScenarioTestTool: React.FC = () => {
             />
             <Space wrap style={scenarioActionsStyle}>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveEndpoint}>保存接口</Button>
+              <Button icon={<BranchesOutlined />} onClick={handleInferProjectDependencies}>推断项目依赖</Button>
               <Button icon={<SwapOutlined />} onClick={() => handleReplaceVariables('endpoint')}>替换变量</Button>
               <Button icon={<PlayCircleOutlined />} loading={endpointRunning} onClick={handleRunEndpoint}>调试接口</Button>
               <Button icon={<ExperimentOutlined />} loading={scenarioGenerating} onClick={handleGenerateScenarioTests}>生成接口单测</Button>
@@ -2380,8 +2643,9 @@ const ApiScenarioTestTool: React.FC = () => {
             />
             <Space wrap style={scenarioActionsStyle}>
               <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveScenario}>保存场景</Button>
+              <Button icon={<BranchesOutlined />} onClick={handleInferScenarioDependencies}>推断场景依赖</Button>
               <Button icon={<SwapOutlined />} onClick={() => handleReplaceVariables('scenario')}>替换变量</Button>
-              <Button icon={<PlayCircleOutlined />} loading={running} onClick={handleRunScenario}>串行执行</Button>
+              <Button icon={<PlayCircleOutlined />} loading={running} disabled={batchRunning} onClick={handleRunScenario}>串行执行</Button>
               <Button
                 danger
                 icon={<DeleteOutlined />}
@@ -2392,6 +2656,7 @@ const ApiScenarioTestTool: React.FC = () => {
                     const deletedScenarioId = selectedScenario.id;
                     await apiTestApi.deleteScenario(deletedScenarioId);
                     setScenarios(scenarios.filter((scenario) => scenario.id !== deletedScenarioId));
+                    setSelectedScenarioIds((ids) => ids.filter((id) => id !== deletedScenarioId));
                     setSelectedScenario(null);
                     selectedScenarioIdRef.current = null;
                     setResult(null);

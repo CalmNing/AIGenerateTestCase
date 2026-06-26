@@ -1,22 +1,131 @@
+"""AI 测试用例生成核心模块。"""
+
+import json
 import logging
-import os
 import re
 import time
 import uuid
-from typing import List, Optional, Literal
+from typing import List, Optional, Union, Any
 
-import yaml
 from langchain.agents import create_agent
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, SecretStr
 
-from sqlmodel import select, desc
+from sqlmodel import select
 
-from db.models import TestCase as DBTestCase, HistoryPrompt
-from utils.history_prompt_cleaner import clean_history_prompt_content
+from db.models import TestCase as DBTestCase, ApiScenario, ApiEndpoint
+
+# 从拆分模块导入
+from utils.prompts import PromptConfig
+from utils.models import (
+    AllowedValue, AssertionRule, ApiCallKeyValue, ApiCallStep,
+    TestCase, ResponseFormat, TestCaseDesignMethod,
+)
+from utils.helpers import (
+    ModelServiceUnavailableError,
+    _McpPermissionError,
+    _McpToolValidationError,
+    _is_model_service_unavailable,
+    _extract_mcp_permission_error,
+    _extract_mcp_validation_error,
+    _load_json_object,
+    _extract_json_with_response,
+    _extract_content_json,
+    _repair_json,
+    _normalize_level,
+    _normalize_testcase_dict,
+    _normalize_extracted_json,
+    _is_history_noise_segment,
+    _clean_history_prompt_content,
+    _normalize_history_module_id,
+    _upsert_history_prompt,
+    _TokenUsageCallback,
+    _load_skill_bodies,
+    _build_history_context,
+    _HISTORY_PROMPT_LIMIT,
+)
+
+
+def _parse_step_from_string(step_str: str) -> dict | str:
+    """解析步骤字符串，尝试将其转换为字典格式。
+
+    AI 可能返回 Python 对象的字符串表示，如：
+    "endpoint_ref=1 description='...' headers=None body='...'"
+
+    此函数尝试解析这种格式并返回字典。
+    """
+    if not isinstance(step_str, str):
+        return step_str
+
+    # 如果已经是 JSON 格式，尝试解析
+    step_str = step_str.strip()
+    if step_str.startswith('{') and step_str.endswith('}'):
+        try:
+            return json.loads(step_str)
+        except json.JSONDecodeError:
+            pass
+
+    # 尝试解析 Python 对象格式
+    # 匹配 "key=value" 模式
+    if 'endpoint_ref=' in step_str or 'description=' in step_str:
+        result = {}
+        # 提取 endpoint_ref
+        match = re.search(r'endpoint_ref=(\d+)', step_str)
+        if match:
+            result['endpoint_ref'] = int(match.group(1))
+            result['type'] = 'api_call'
+
+        # 提取 description
+        match = re.search(r"description='([^']*)'", step_str)
+        if match:
+            result['description'] = match.group(1)
+
+        # 提取 body
+        match = re.search(r"body='([^']*)'", step_str)
+        if match:
+            body_str = match.group(1).replace("\\'", "'")
+            result['body'] = body_str
+
+        # 提取 headers
+        match = re.search(r'headers=(\[.*?\]|None)', step_str)
+        if match and match.group(1) != 'None':
+            try:
+                result['headers'] = json.loads(match.group(1).replace("'", '"'))
+            except:
+                pass
+
+        # 提取 parameters
+        match = re.search(r'parameters=(\[.*?\]|None)', step_str)
+        if match and match.group(1) != 'None':
+            try:
+                result['parameters'] = json.loads(match.group(1).replace("'", '"'))
+            except:
+                pass
+
+        if 'endpoint_ref' in result:
+            return result
+
+    # 无法解析，返回原字符串
+    return step_str
+
+
+def _normalize_steps(steps: list) -> list:
+    """规范化步骤列表，确保所有步骤都是正确的格式。"""
+    normalized = []
+    for step in steps:
+        if isinstance(step, dict):
+            normalized.append(step)
+        elif isinstance(step, str):
+            parsed = _parse_step_from_string(step)
+            normalized.append(parsed)
+        else:
+            normalized.append(step)
+    return normalized
+
+# 保持兼容性 re-export
+SYSTEM_PROMPT = PromptConfig.SYSTEM_PROMPT
 
 try:
     from utils.lanhu_mcp_adapter import build_langchain_tools, build_tools_from_configs
@@ -24,10 +133,8 @@ except ImportError:
     build_langchain_tools = None
     build_tools_from_configs = None
 
-# 简单的 agent 缓存，key -> agent
-_AGENT_CACHE: dict = {}
-
 logger = logging.getLogger(__name__)
+checkpointer = InMemorySaver()
 
 # 蓝湖 URL 匹配：提取页面链接，用于预检文档大小
 _LANHU_URL_RE = re.compile(
@@ -184,26 +291,6 @@ async def _fetch_lanhu_page_content(url: str, page_names: list[str]) -> str:
         return ""
 
 
-def _load_json_object(text: str) -> dict | None:
-    import json as _json
-
-    stripped = (text or "").strip()
-    if not stripped:
-        return None
-    try:
-        data = _json.loads(stripped)
-        return data if isinstance(data, dict) else None
-    except _json.JSONDecodeError:
-        match = re.search(r"\{.*\}", stripped, re.DOTALL)
-        if not match:
-            return None
-        try:
-            data = _json.loads(match.group(0))
-            return data if isinstance(data, dict) else None
-        except _json.JSONDecodeError:
-            return None
-
-
 async def _fetch_feishu_document_content(requirement: str, mcp_configs: list | None) -> str | None:
     """Read Feishu wiki/docx links directly via MCP and skip agent tool loops."""
     match = _FEISHU_URL_RE.search(requirement or "")
@@ -251,341 +338,100 @@ async def _fetch_feishu_document_content(requirement: str, mcp_configs: list | N
     return None
 
 
-class _McpPermissionError(ValueError):
-    """MCP tool returned a permission error that should be shown to the API caller."""
+async def _structured_output_robust(
+    model: ChatOpenAI,
+    schema: type[BaseModel],
+    messages: list,
+    **kwargs,
+) -> BaseModel | dict | None:
+    """尝试多种方法获取结构化输出，处理 DeepSeek 不支持 tool_choice 指定函数名的问题。
 
-
-class _McpToolValidationError(ValueError):
-    """MCP tool schema validation repeatedly failed and should stop the agent loop."""
-
-
-class ModelServiceUnavailableError(ValueError):
-    """Upstream LLM service is temporarily unavailable or overloaded."""
-
-
-def _is_model_service_unavailable(error: Exception) -> bool:
-    cause = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
-    text = f"{error!r}\n{cause!r}"
-    markers = (
-        "503",
-        "Service Temporarily Unavailable",
-        "service_unavailable_error",
-        "Service is too busy",
-        "temporarily switch to alternative LLM API service providers",
-    )
-    return any(marker in text for marker in markers)
-
-
-def _extract_mcp_permission_error(output: object) -> str | None:
-    text = str(output).strip()
-    # 只在 MCP 错误响应（JSON 格式）中检测权限错误，避免误伤正常文档内容
-    if not text or not text.startswith("{"):
-        return None
-    markers = (
-        "权限不足",
-        "缺少以下权限",
-        "Access denied",
-        "One of the following scopes is required",
-        "应用尚未开通所需",
-    )
-    if not any(marker in text for marker in markers):
-        return None
-
-    for prefix in ("content='", 'content="'):
-        if text.startswith(prefix):
-            text = text[len(prefix):]
-            break
-    return text[:4000]
-
-
-def _extract_mcp_validation_error(output: object) -> str | None:
-    text = str(output).strip()
-    markers = (
-        "MCP error -32602",
-        "Input validation error",
-        "Invalid arguments for tool",
-        "Expected string",
-        "Expected object",
-        "Expected number",
-        "不能同时提供",
-    )
-    if not text or not any(marker in text for marker in markers):
-        return None
-    return text[:2000]
-
-
-def _extract_content_json(text: str) -> str | None:
-    """Extract the real document body from MCP JSON payloads like {"content": "..."}."""
-    import json as _json
-
-    stripped = text.strip()
-    if not stripped.startswith("{"):
-        return None
-    try:
-        data = _json.loads(stripped)
-    except _json.JSONDecodeError:
-        prefix = '{"content":"'
-        if stripped.startswith(prefix) and stripped.endswith('"}'):
-            body = stripped[len(prefix):-2]
-            try:
-                return _json.loads(f'"{body}"').strip()
-            except _json.JSONDecodeError:
-                return body.replace("\\n", "\n").replace('\\"', '"').strip()
-        return None
-    content = data.get("content") if isinstance(data, dict) else None
-    if isinstance(content, str) and content.strip():
-        return content.strip()
-    return None
-
-
-def _is_history_noise_segment(text: str) -> bool:
-    markers = (
-        "MCP error -32602",
-        "Input validation error",
-        "Invalid arguments for tool",
-        "Invalid input: expected",
-        "Invalid access token for authorization",
-        "Please make a request with token attached",
-        '"code":99991663',
-        '"troubleshooter"',
-        "Returning structured response:",
-        "response=[TestCase(",
-    )
-    return any(marker in text for marker in markers)
-
-
-def _clean_history_prompt_content(content: str | None) -> str:
-    return clean_history_prompt_content(content)
-
-
-def _normalize_history_module_id(module_id) -> int | None:
-    if module_id in (None, "", 0, "0"):
-        return None
-    try:
-        return int(module_id)
-    except (TypeError, ValueError):
-        return None
-
-
-def _upsert_history_prompt(db_session, *, content: str | None, module_id, session_id: int, user_id: str | None = None) -> HistoryPrompt | None:
-    """Save one cleaned history prompt per request scope/content."""
-    cleaned_content = _clean_history_prompt_content(content)
-    if not cleaned_content or db_session is None:
-        return None
-
-    normalized_module_id = _normalize_history_module_id(module_id)
-    filters = [
-        HistoryPrompt.content == cleaned_content,
-        HistoryPrompt.session_id == session_id,
-    ]
-    if normalized_module_id is None:
-        filters.append(HistoryPrompt.module_id.is_(None))
-    else:
-        filters.append(HistoryPrompt.module_id == normalized_module_id)
-    if user_id is None:
-        filters.append(HistoryPrompt.user_id.is_(None))
-    else:
-        filters.append(HistoryPrompt.user_id == user_id)
-
-    existing = db_session.exec(select(HistoryPrompt).where(*filters)).first()
-    if existing:
-        return existing
-
-    history = HistoryPrompt(
-        content=cleaned_content,
-        module_id=normalized_module_id,
-        session_id=session_id,
-        user_id=user_id,
-    )
-    db_session.add(history)
-    db_session.commit()
-    db_session.refresh(history)
-    return history
-
-
-def _repair_json(text: str) -> str:
-    """Repair common JSON formatting issues from model output.
-
-    Handles unescaped double quotes within Chinese text content,
-    which is a common issue when models generate JSON with Chinese quotations.
+    尝试顺序：
+    1. method="function_calling"（标准方式，强制模型调用指定工具）
+    2. method="json_mode"（需要模型支持 response_format: json_object）
+    3. 直接模型调用 + 手动 JSON 解析（最通用的方式）
     """
     import json as _json
+    import logging
 
-    # Fast path: if it already parses, return as-is
+    _log = logging.getLogger(__name__)
+
+    # 方法1: function_calling（标准方式）
     try:
-        _json.loads(text)
-        return text
-    except _json.JSONDecodeError:
-        pass
+        _log.info("尝试结构化输出方法: function_calling")
+        structured = model.with_structured_output(schema, method="function_calling")
+        result = await structured.ainvoke(messages, **kwargs)
+        if result is not None:
+            _log.info("结构化输出方法 function_calling 成功")
+            return result
+        _log.warning("结构化输出方法 function_calling 返回 None，尝试 json_mode")
+    except Exception as e:
+        _log.warning(f"结构化输出方法 function_calling 失败: {e}，尝试 json_mode")
 
-    # Try to fix unescaped quotes within CJK context.
-    # Pattern: a CJK char or common Chinese punctuation, followed by ",
-    # then text without structural chars, then " followed by CJK char.
-    # We only fix quotes that are clearly inside string content.
-    def _fix_inner_quotes(s: str) -> str:
-        """Replace unescaped double quotes that appear between CJK characters
-        with Unicode full-width quotation marks (U+201C/U+201D)."""
-        import unicodedata
-
-        chars = list(s)
-        result = []
-        i = 0
-        while i < len(chars):
-            ch = chars[i]
-            if ch == '"':
-                # Check if this looks like an inner quote surrounded by CJK context
-                prev_char = chars[i - 1] if i > 0 else None
-                next_char = chars[i + 1] if i + 1 < len(chars) else None
-
-                def _is_cjk(c: str | None) -> bool:
-                    if c is None:
-                        return False
-                    cp = ord(c)
-                    return bool(
-                        (0x4E00 <= cp <= 0x9FFF)
-                        or (0x3000 <= cp <= 0x303F)  # CJK symbols/punctuation
-                        or (0xFF00 <= cp <= 0xFFEF)  # Fullwidth forms
-                        or c in "，。、；：？！）】】》」’"
-                    )
-
-                prev_is_cjk = _is_cjk(prev_char)
-                next_is_cjk = _is_cjk(next_char)
-
-                if prev_is_cjk:
-                    # " after CJK text → opening quote or emphasis
-                    result.append("“")  # left double quotation
-                    i += 1
-                    continue
-                elif next_is_cjk:
-                    # " before CJK text → closing quote
-                    result.append("”")  # right double quotation
-                    i += 1
-                    continue
-
-            result.append(ch)
-            i += 1
-        return "".join(result)
-
-    # Apply fix iteratively: after replacing CJK quotes, the JSON structure
-    # around the fix (the outer quotes) may now be clean.
-    fixed = _fix_inner_quotes(text)
+    # 方法2: json_mode（需要模型支持）
     try:
-        _json.loads(fixed)
-        return fixed
-    except _json.JSONDecodeError:
-        pass
+        _log.info("尝试结构化输出方法: json_mode")
+        structured = model.with_structured_output(schema, method="json_mode")
+        result = await structured.ainvoke(messages, **kwargs)
+        if result is not None:
+            _log.info("结构化输出方法 json_mode 成功")
+            return result
+        _log.warning("结构化输出方法 json_mode 也返回 None，尝试直接模型调用")
+    except Exception as e:
+        _log.warning(f"结构化输出方法 json_mode 失败: {e}，尝试直接模型调用")
 
-    # Last resort: return original and let the caller handle the error
-    return text
-
-
-class _TokenUsageCallback(BaseCallbackHandler):
-    """在 LLM 调用前记录消息总字符数，用于诊断上下文超限问题。"""
-    def __init__(self):
-        super().__init__()
-        self.raise_error = True
-        self.mcp_permission_error: str | None = None
-        self.mcp_validation_error: str | None = None
-        self._mcp_validation_error_count = 0
-        self._last_mcp_validation_error: str | None = None
-
-    def on_chat_model_start(self, serialized, messages, **kwargs):
-        total = 0
-        for msg_list in messages:
-            for m in msg_list:
-                total += len(m.content) if isinstance(m.content, str) else len(str(m.content))
-        logger.warning(f"[诊断] 即将发送到 LLM 的消息总字符数: {total} (约 {total//4} tokens)")
-        kw = kwargs.get("kwargs", {})
-        if "tools" in kw:
-            tools_str = str(kw["tools"])
-            logger.warning(f"[诊断] tools 定义大小: {len(tools_str)} chars")
-            total += len(tools_str)
-        logger.warning(f"[诊断] 预估总计: {total} chars / {total//4} tokens / {total//2} CJK tokens")
-
-    def on_tool_start(self, serialized, input_str, **kwargs):
-        name = serialized.get("name") if isinstance(serialized, dict) else None
-        logger.info(f"[诊断] MCP 工具调用开始: tool={name} input={str(input_str)[:500]}")
-
-    def on_tool_end(self, output, **kwargs):
-        logger.info(f"[诊断] MCP 工具调用结束: output_preview={str(output)[:800]}")
-        permission_error = _extract_mcp_permission_error(output)
-        if permission_error:
-            self.mcp_permission_error = permission_error
-            raise _McpPermissionError(permission_error)
-        validation_error = _extract_mcp_validation_error(output)
-        if validation_error:
-            self._mcp_validation_error_count += 1
-            self._last_mcp_validation_error = validation_error
-            if self._mcp_validation_error_count >= 3:
-                self.mcp_validation_error = validation_error
-                raise _McpToolValidationError(
-                    "MCP 工具参数校验连续失败，已停止继续调用工具。"
-                    f"最后一次错误：{validation_error}"
-                )
+    # 方法3: 直接模型调用 + JSON 解析
+    try:
+        _log.info("尝试直接模型调用 + JSON 解析")
+        schema_json = schema.model_json_schema()
+        schema_str = _json.dumps(schema_json, ensure_ascii=False)
+        json_prompt = (
+            "\n\n请严格按照以下 JSON Schema 输出，不要添加任何其他文字：\n"
+            f"{schema_str}\n\n"
+            "注意：整个响应必须是一个合法的 JSON 对象，不要使用 markdown 代码块包裹。"
+        )
+        # 在最后追加格式要求（避免修改原 messages 的内容）
+        enhanced_messages = list(messages) + [
+            ("human", json_prompt)
+        ]
+        raw_result = await model.ainvoke(enhanced_messages, **kwargs)
+        content = raw_result.content if hasattr(raw_result, 'content') and raw_result.content else str(raw_result)
+        # 尝试解析 JSON
+        data = _extract_json_with_response(content)
+        if data:
+            _log.info("直接模型调用 JSON 解析成功")
+            # 标准化字段名（test_cases→response, name→case_name 等）
+            data = _normalize_extracted_json(data)
+            try:
+                parsed = schema.model_validate(data)
+                return parsed
+            except Exception as ve:
+                _log.warning(f"标准化后的 JSON 验证失败（可能是字段类型不匹配）: {ve}")
+                _log.warning(f"标准化后的数据预览: {str(data)[:500]}")
         else:
-            # 调用成功后重置计数，只有连续错误才累积
-            self._mcp_validation_error_count = 0
+            _log.warning(f"无法从模型响应中提取 JSON，响应预览: {str(content)[:500]}")
+        # 尝试将内容整体作为 JSON 解析并标准化
+        try:
+            data = _json.loads(content)
+            if isinstance(data, dict):
+                data = _normalize_extracted_json(data)
+            elif isinstance(data, list):
+                # 顶层数组 → 包装为 {"test_cases": [...]}
+                data = _normalize_extracted_json({"test_cases": data})
+            else:
+                data = None
+            if data:
+                parsed = schema.model_validate(data)
+                if parsed:
+                    return parsed
+        except _json.JSONDecodeError:
+            _log.warning("模型响应不是有效的 JSON（无法进行 json.loads 解析）")
+        except Exception as pe:
+            _log.warning(f"整体 JSON 解析后验证失败: {pe}")
+    except Exception as e:
+        _log.warning(f"直接模型调用失败: {e}")
 
-# 定义系统提示词
-SYSTEM_PROMPT = """你是一位软件测试专家，你的任务是帮助用户设计测试用例。
-你需要根据用户的需求，设计出符合要求的测试用例。
-你需要理解需求，使用合适的测试用例设计方法来设计用例。
-
-测试用例应该包含以下信息：
-- 用例名称
-- 用例级别
-- 前置条件
-- 用例步骤
-- 预期结果
-
-软件测试用例设计方法：
-- 等价类划分法: 等价类划分法是一种黑盒测试方法，通过将输入数据划分为若干等价类，从每个类中选取具有代表性的数据进行测试。有效等价类包含合理的输入数据，无效等价类则包含不合理的数据。此方法适用于输入数据范围明确的场景，例如输入框的长度限制。"),
-- 边界值分析法: 边界值分析法专注于测试输入或输出的边界点，因为大量错误往往发生在边界附近。此方法通常与等价类划分法结合使用，测试边界上的点、边界内的点以及边界外的点。例如，测试密码长度为6-18位时，边界值包括6、18以及5、19。"),
-- 判定表法: 判定表法适用于输入条件和输出结果存在多种组合的场景。通过列出所有可能的条件组合及其对应的结果，生成判定表并转化为测试用例。例如，订单优惠条件的判定可以通过此方法明确各种输入组合下的输出结果。"),
-- 因果图法: 因果图法通过图形化的方式分析复杂的输入和输出条件组合，适用于条件间存在逻辑关系的场景。此方法通常与判定表法结合使用，以提高分析的直观性。"),
-- 场景法 : 场景法以用户操作流程为导向，模拟实际使用场景，适用于系统测试或验收测试阶段。通过分析基本流和备选流，设计覆盖用户正常操作和异常操作的测试用例。例如，模拟ATM取款的各种可能场景。"),
-- 错误推测法: 错误推测法基于测试人员的经验和直觉，推测可能存在的错误并设计针对性的测试用例。此方法适用于补充其他方法未覆盖的测试场景，例如特殊字符处理或异常数据输入。"),
-- 流程图法: 流程图法通过绘制流程图展示用户操作路径，并基于流程路径设计测试用例。此方法适用于复杂业务流程的测试，例如ATM取款功能的业务流程图。"),
-
-
-测试用例设计需要结合实际需求，综合运用软件测试用例设计方法以确保测试的全面性和有效性。同时，还需关注安全性、性能和兼容性等非功能性需求，设计出覆盖全面的测试用例。
-限制：
-- 用例名称中不能出现用例编号
-- 用例名称不能为空
-- 前置条件不能为空
-"""
-
-# 定义字面量类型：仅允许 1/2/3/4
-AllowedValue = Literal[1, 2, 3, 4]
-checkpointer = InMemorySaver()
-
-
-# 定义测试用例数据类
-class TestCase(BaseModel):
-    """自定义 TestCase schema."""
-    case_name: str = Field(..., description="用例名称")
-    steps: List[str] = Field(..., description="用例步骤")
-    preset_conditions: List[str] = Field(..., description="前置条件")
-    expected_results: List[str] = Field(..., description="预期结果")
-    case_level: Optional[AllowedValue] = Field(default=4, description="用例级别")
-
-    def __post_init__(self):
-        """验证case_level只允许1、2、3、4"""
-        allowed_levels = [1, 2, 3, 4]
-        if self.case_level is not None and self.case_level not in allowed_levels:
-            raise ValueError(f"case_level必须是{allowed_levels}中的一个，当前值：{self.case_level}")
-
-
-# 定义响应格式数据类
-class ResponseFormat(BaseModel):
-    """agent 的响应格式"""
-    response: List[TestCase]
-
-
-class TestCaseDesignMethod(BaseModel):
-    """自定义 TestCaseDesignMethod schema."""
-    method: str
-    description: str | None = None
+    return None
 
 
 # 初始化模型
@@ -612,31 +458,41 @@ async def create_testcase_agent(
         api_key: str = None,
         api_base_url: str = "",
         api_proxy_url: str = "",
+        api_model: str = "deepseek-v4-flash",
         with_mcp_tools: bool = True,
         custom_tools: list | None = None,
 ):
     """创建测试用例生成agent，自动集成蓝湖 MCP 工具（如果可用）。"""
 
     if model_type == "api":
-        # 使用API模型（DeepSeek）
+        # 使用API模型（OpenAI 兼容接口）
         api_key = api_key.strip() if api_key else ""
         if not api_key:
             raise ValueError("API Key未配置，请先在配置页面设置")
         api_base_url = api_base_url.strip() if api_base_url else None
         api_proxy_url = api_proxy_url.strip() if api_proxy_url else None
+        api_model = api_model.strip() if api_model else "deepseek-v4-flash"
 
-        model = ChatDeepSeek(
-            model="deepseek-chat",
+        # 构建 ChatOpenAI 的额外参数
+        extra_kwargs = {}
+        if api_proxy_url:
+            import httpx
+            extra_kwargs["http_async_client"] = httpx.AsyncClient(
+                proxy=api_proxy_url,
+                timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
+            )
+
+        model = ChatOpenAI(
+            model=api_model,
             temperature=0,
             api_key=SecretStr(api_key),
-            base_url=api_base_url,
+            base_url=api_base_url or "https://api.deepseek.com",
             max_tokens=None,
             timeout=None,
             max_retries=2,
+            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
+            **extra_kwargs,
         )
-        # DeepSeek API 不支持 response_format=json_object，强制使用 ToolStrategy（工具调用）
-        if model.profile:
-            model.profile = {**model.profile, "structured_output": False}
 
         # 尝试加载蓝湖 MCP 工具
         mcp_tools = []
@@ -679,98 +535,24 @@ async def create_testcase_agent(
                 "- 如果工具返回信息不足，可以结合自己的知识对需求做适当的合理补充。",
             ])
             TOOL_SYSTEM_PROMPT = SYSTEM_PROMPT + f"""
-可用工具列表：
-{tool_names}
-
-注意事项：
-{chr(10).join(tool_notes)}
-"""
+                                                可用工具列表：
+                                                {tool_names}
+                                                注意事项：
+                                                {chr(10).join(tool_notes)}
+                                                """
         else:
             TOOL_SYSTEM_PROMPT = SYSTEM_PROMPT + """
-重要：你没有可用的工具，不需要调用任何工具，直接回答用户的问题即可。
-不要生成任何tool_calls相关的内容。
-"""
+                                                重要：你没有可用的工具，不需要调用任何工具，直接回答用户的问题即可。
+                                                不要生成任何tool_calls相关的内容。
+                                                """
 
         agent = create_agent(
             model=model,
             system_prompt=TOOL_SYSTEM_PROMPT,
             response_format=ResponseFormat,
-            checkpointer=checkpointer,
             tools=all_tools
         )
         return agent
-
-
-_HISTORY_PROMPT_LIMIT = 20
-
-_SKILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "skills")
-
-
-def _load_skill_bodies(skill_names: list[str]) -> str:
-    """Load markdown bodies of selected skills for prompt injection."""
-    if not skill_names:
-        return ""
-
-    parts = []
-    for name in skill_names:
-        safe_name = os.path.basename(name)
-        md_path = os.path.join(_SKILLS_DIR, safe_name, "SKILL.md")
-        if not os.path.isfile(md_path):
-            logger.warning(f"Skill file not found: {md_path}")
-            continue
-        try:
-            with open(md_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception:
-            logger.warning(f"Failed to read skill file: {md_path}")
-            continue
-
-        m = re.match(r"^---\s*\n.*?\n---\s*\n", content, re.DOTALL)
-        body = content[m.end():].strip() if m else content
-
-        display = name.replace("-", " ").title()
-        parts.append(f"## Skill: {display}\n{body}")
-
-    if not parts:
-        return ""
-
-    header = (
-        "## 激活的测试方法论技能\n\n"
-        "请在设计测试用例时严格遵循以下选中的方法论。"
-        "各技能的方法论是互补的，请综合运用：\n\n"
-    )
-    return header + "\n\n---\n\n".join(parts)
-
-
-def _build_history_context(db_session, module_id: int) -> str:
-    """获取当前模块下最近 N 条历史需求描述，作为上下文供 agent 理解功能背景。
-
-    历史需求仅用于辅助理解，不参与用例生成。
-    无历史记录或 db_session 不可用时返回空字符串。
-    """
-    if db_session is None or module_id is None:
-        return ""
-
-    try:
-        prompts = db_session.exec(
-            select(HistoryPrompt.content)
-            .where(HistoryPrompt.module_id == module_id)
-            .order_by(desc(HistoryPrompt.created_at))
-            .limit(_HISTORY_PROMPT_LIMIT)
-        ).all()
-    except Exception:
-        logger.warning("查询历史提示词失败", exc_info=True)
-        return ""
-
-    if not prompts:
-        return ""
-
-    lines = ["## 历史需求上下文（仅供参考，不作为本次用例生成的需求）"]
-    for i, content in enumerate(reversed(prompts), 1):
-        cleaned_content = _clean_history_prompt_content(content)
-        if cleaned_content:
-            lines.append(f"{i}. {cleaned_content}")
-    return "\n".join(lines) + "\n\n"
 
 
 # 生成测试用例
@@ -782,6 +564,7 @@ async def generate_testcases(
         api_key: str = "",
         api_base_url: str = "",
         api_proxy_url: str = "",
+        api_model: str = "deepseek-v4-flash",
         ollama_url: str = "",
         ollama_model: str = "",
         mcp_configs: list | None = None,
@@ -798,6 +581,7 @@ async def generate_testcases(
     api_key = api_key.strip() if api_key else ""
     api_base_url = api_base_url.strip() if api_base_url else ""
     api_proxy_url = api_proxy_url.strip() if api_proxy_url else ""
+    api_model = api_model.strip() if api_model else "deepseek-v4-flash"
     ollama_url = ollama_url.strip() if ollama_url else ""
     ollama_model = ollama_model.strip() if ollama_model else ""
 
@@ -896,19 +680,28 @@ async def generate_testcases(
             if parsed_content:
                 # 外部文档内容已预取到 prompt，直接调用模型结构化输出，跳过 agent ReAct 循环。
                 logger.info("文档内容已预取，直接调用模型（跳过 agent）")
-                model = ChatDeepSeek(
-                    model="deepseek-chat",
+                direct_extra_kwargs = {}
+                if api_proxy_url:
+                    import httpx
+                    direct_extra_kwargs["http_async_client"] = httpx.AsyncClient(
+                        proxy=api_proxy_url,
+                        timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
+                    )
+                model = ChatOpenAI(
+                    model=api_model,
                     temperature=0,
                     api_key=SecretStr(api_key),
-                    base_url=api_base_url or None,
+                    base_url=api_base_url or "https://api.deepseek.com",
                     max_tokens=None,
                     timeout=None,
                     max_retries=2,
+                    model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
+                    **direct_extra_kwargs,
                 )
-                # DeepSeek API 不支持 response_format=json_object，使用 function_calling
-                structured_model = model.with_structured_output(ResponseFormat, method="function_calling")
                 _diagnostic_cb = _TokenUsageCallback()
-                response = await structured_model.ainvoke(
+                response = await _structured_output_robust(
+                    model,
+                    ResponseFormat,
                     [("system", SYSTEM_PROMPT), ("human", requirement)],
                     config={"callbacks": [_diagnostic_cb]},
                 )
@@ -917,35 +710,61 @@ async def generate_testcases(
                 if _diagnostic_cb.mcp_validation_error:
                     raise _McpToolValidationError(_diagnostic_cb.mcp_validation_error)
             else:
-                # 所有模型类型都使用Agent调用，因为必须使用Agent规定响应格式
-                # 有蓝湖内容时不给 agent 默认 MCP 工具，避免 ReAct 循环
-                agent = await create_testcase_agent(
-                    model_type=model_type,
-                    api_key=api_key,
-                    api_base_url=api_base_url,
-                    api_proxy_url=api_proxy_url,
-                    with_mcp_tools=has_lanhu_url,
-                    custom_tools=custom_mcp_tools,
-                )
-                # 调用agent，使用规定的响应格式
-                logger.info(f"调用agent: requirement size={len(requirement)} preview={requirement[:300]}... tail={requirement[-200:]}")
-                # 每次请求使用唯一 thread_id，避免历史消息累积超出上下文限制。
-                # recursion_limit 限制 ReAct 循环最大步数，防止 MCP 工具调用死循环。
-                _diagnostic_cb = _TokenUsageCallback()
-                response = await agent.ainvoke(
-                    {"messages": [{"role": "user", "content": requirement}]},
-                    config={
-                        "configurable": {
-                            "thread_id": f"{session_id}-{uuid.uuid4().hex[:12]}",
+                if custom_mcp_tools:
+                    # 有 MCP 工具时使用 agent
+                    agent = await create_testcase_agent(
+                        model_type=model_type,
+                        api_key=api_key,
+                        api_base_url=api_base_url,
+                        api_proxy_url=api_proxy_url,
+                        api_model=api_model,
+                        with_mcp_tools=has_lanhu_url,
+                        custom_tools=custom_mcp_tools,
+                    )
+                    logger.info(f"调用agent: requirement size={len(requirement)} preview={requirement[:300]}... tail={requirement[-200:]}")
+                    _diagnostic_cb = _TokenUsageCallback()
+                    response = await agent.ainvoke(
+                        {"messages": [{"role": "user", "content": requirement}]},
+                        config={
+                            "configurable": {
+                                "thread_id": f"{session_id}-{uuid.uuid4().hex[:12]}",
+                            },
+                            "recursion_limit": 60,
+                            "callbacks": [_diagnostic_cb],
                         },
-                        "recursion_limit": 60,
-                        "callbacks": [_diagnostic_cb],
-                    },
-                )
-                if _diagnostic_cb.mcp_permission_error:
-                    raise _McpPermissionError(_diagnostic_cb.mcp_permission_error)
-                if _diagnostic_cb.mcp_validation_error:
-                    raise _McpToolValidationError(_diagnostic_cb.mcp_validation_error)
+                    )
+                    if _diagnostic_cb.mcp_permission_error:
+                        raise _McpPermissionError(_diagnostic_cb.mcp_permission_error)
+                    if _diagnostic_cb.mcp_validation_error:
+                        raise _McpToolValidationError(_diagnostic_cb.mcp_validation_error)
+                else:
+                    # 无 MCP 工具时直接调用模型结构化输出，跳过 agent
+                    logger.info("无 MCP 工具，直接调用模型结构化输出（跳过 agent）")
+                    direct_extra_kwargs = {}
+                    if api_proxy_url:
+                        import httpx
+                        direct_extra_kwargs["http_async_client"] = httpx.AsyncClient(
+                            proxy=api_proxy_url,
+                            timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
+                        )
+                    model = ChatOpenAI(
+                        model=api_model,
+                        temperature=0,
+                        api_key=SecretStr(api_key),
+                        base_url=api_base_url or "https://api.deepseek.com",
+                        max_tokens=None,
+                        timeout=None,
+                        max_retries=2,
+                        model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
+                        **direct_extra_kwargs,
+                    )
+                    _diagnostic_cb = _TokenUsageCallback()
+                    response = await _structured_output_robust(
+                        model,
+                        ResponseFormat,
+                        [("system", SYSTEM_PROMPT), ("human", requirement)],
+                        config={"callbacks": [_diagnostic_cb]},
+                    )
         except _McpPermissionError:
             raise
         except _McpToolValidationError:
@@ -1037,31 +856,85 @@ async def generate_testcases(
                 # 格式2: 直接包含response字段
                 local_testcases = response['response']
             elif 'messages' in response:
-                # 格式3: agent 返回的 messages（含 invalid_tool_calls）
+                # 格式3: agent 返回的 messages（含 invalid_tool_calls 或最终 JSON 内容）
                 messages = response.get('messages', [])
-                if messages and hasattr(messages[-1], 'invalid_tool_calls') and messages[-1].invalid_tool_calls:
-                    for tc in messages[-1].invalid_tool_calls:
-                        if tc.get('name') == 'ResponseFormat' and tc.get('args'):
-                            repaired = _repair_json(tc['args'])
+                if local_testcases is None:
+                    # 尝试从最后一条 AIMessage 的 content 中提取 JSON
+                    for msg in reversed(messages):
+                        if hasattr(msg, 'content') and msg.content:
+                            text = msg.content if isinstance(msg.content, str) else str(msg.content)
+                            import json as _json
+                            # 直接解析完整内容
                             try:
-                                import json as _json
-                                data = _json.loads(repaired)
-                                if 'response' in data and isinstance(data['response'], list):
-                                    # 重建为 TestCase 对象列表
+                                data = _json.loads(text)
+                                if isinstance(data, dict) and 'response' in data:
                                     testcase_dicts = data['response']
-                                    rebuilt = []
-                                    for d in testcase_dicts:
-                                        rebuilt.append(TestCase(
-                                            case_name=d.get('case_name', ''),
-                                            steps=d.get('steps', []),
-                                            preset_conditions=d.get('preset_conditions', []),
-                                            expected_results=d.get('expected_results', []),
-                                            case_level=d.get('case_level', 4),
-                                        ))
+                                    if isinstance(testcase_dicts, list):
+                                        rebuilt = []
+                                        for d in testcase_dicts:
+                                            rebuilt.append(TestCase(**d))
+                                        local_testcases = rebuilt
+                                        break
+                            except _json.JSONDecodeError:
+                                pass
+                            if local_testcases is None:
+                                # 使用括号深度跟踪提取嵌套 JSON
+                                data = _extract_json_with_response(text)
+                                if data and 'response' in data and isinstance(data['response'], list):
+                                    rebuilt = [TestCase(**d) for d in data['response']]
                                     local_testcases = rebuilt
                                     break
-                            except Exception:
-                                continue
+                if local_testcases is None and messages:
+                    # 尝试从 tool_calls 或 invalid_tool_calls 提取
+                    last_msg = messages[-1]
+                    # valid tool_calls
+                    if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+                        for tc in last_msg.tool_calls:
+                            if tc.get('name') == 'ResponseFormat' and tc.get('args'):
+                                args = tc['args']
+                                if isinstance(args, str):
+                                    repaired = _repair_json(args)
+                                    try:
+                                        import json as _json
+                                        data = _json.loads(repaired)
+                                        if 'response' in data and isinstance(data['response'], list):
+                                            testcase_dicts = data['response']
+                                            rebuilt = []
+                                            for d in testcase_dicts:
+                                                rebuilt.append(TestCase(
+                                                    case_name=d.get('case_name', ''),
+                                                    steps=_normalize_steps(d.get('steps', [])),
+                                                    preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
+                                                    expected_results=d.get('expected_results', []),
+                                                    case_level=d.get('case_level', 4),
+                                                ))
+                                            local_testcases = rebuilt
+                                            break
+                                    except Exception:
+                                        continue
+                    # invalid_tool_calls (fallback)
+                    if local_testcases is None and hasattr(last_msg, 'invalid_tool_calls') and last_msg.invalid_tool_calls:
+                        for tc in last_msg.invalid_tool_calls:
+                            if tc.get('name') == 'ResponseFormat' and tc.get('args'):
+                                repaired = _repair_json(tc['args'])
+                                try:
+                                    import json as _json
+                                    data = _json.loads(repaired)
+                                    if 'response' in data and isinstance(data['response'], list):
+                                        testcase_dicts = data['response']
+                                        rebuilt = []
+                                        for d in testcase_dicts:
+                                            rebuilt.append(TestCase(
+                                                case_name=d.get('case_name', ''),
+                                                steps=_normalize_steps(d.get('steps', [])),
+                                                preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
+                                                expected_results=d.get('expected_results', []),
+                                                case_level=d.get('case_level', 4),
+                                            ))
+                                        local_testcases = rebuilt
+                                        break
+                                except Exception:
+                                    continue
                 if local_testcases is None:
                     raise ValueError(
                         "模型生成了无效的结构化输出（JSON 格式错误），"
@@ -1070,6 +943,15 @@ async def generate_testcases(
         elif isinstance(response, ResponseFormat):
             # 格式3: ResponseFormat对象
             local_testcases = response.response
+        elif response is None:
+            # 格式4: 模型未返回有效结果（NoneType）
+            logger.error(
+                "模型返回了 None（所有结构化输出方法均失败）。"
+                "API Key/Base URL/模型名称可能不正确。"
+            )
+            raise ValueError(
+                "模型调用未返回有效结果，请检查 API Key、Base URL 和模型名称设置后重试。"
+            )
         elif hasattr(response, 'response'):
             # 格式4: 具有response属性的对象
             local_testcases = response.response
@@ -1085,16 +967,177 @@ async def generate_testcases(
 
         # 转换为DBTestCase对象
         db_testcases = []
+        endpoint_index_to_id = kwargs.get("endpoint_index_to_id", {})
+        db_session = kwargs.get("db_session")
+        user_id = kwargs.get("user_id")
+        api_project_id = kwargs.get("api_project_id")
         for tc in local_testcases:
+            # 处理按需关联接口
+            attached_ids = None
+            if hasattr(tc, 'api_endpoint_ref') and tc.api_endpoint_ref and endpoint_index_to_id:
+                resolved = []
+                for ref in tc.api_endpoint_ref:
+                    if ref in endpoint_index_to_id:
+                        resolved.append(str(endpoint_index_to_id[ref]))
+                if resolved:
+                    attached_ids = ",".join(resolved)
+
+            # 序列化断言规则
+            serialized_assertions = None
+            if hasattr(tc, 'assertions') and tc.assertions:
+                serialized_assertions = [a.model_dump() for a in tc.assertions]
+
+            # 转换步骤：将 ApiCallStep 对象转为 dict
+            converted_steps = []
+            # 预加载步骤涉及的接口信息，用于丰富 method/path 字段（供前端展示）
+            _step_eids = set()
+            for step in tc.steps:
+                if isinstance(step, ApiCallStep):
+                    eid = endpoint_index_to_id.get(step.endpoint_ref)
+                    if eid:
+                        _step_eids.add(eid)
+            _step_endpoint_map: dict[int, ApiEndpoint] = {}
+            if _step_eids and db_session:
+                _rows = db_session.exec(
+                    select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_step_eids)))
+                ).all()
+                _step_endpoint_map = {e.id: e for e in _rows}
+
+            for step in tc.steps:
+                if isinstance(step, ApiCallStep):
+                    step_dict = {"type": "api_call"}
+                    eid = endpoint_index_to_id.get(step.endpoint_ref)
+                    if eid:
+                        step_dict["endpoint_id"] = eid
+                        # 从数据库加载 method/path/name，供前端展示
+                        _ep = _step_endpoint_map.get(eid)
+                        if _ep:
+                            step_dict["method"] = _ep.method
+                            step_dict["path"] = _ep.path
+                            step_dict["endpoint_name"] = _ep.name
+                    if step.description:
+                        step_dict["name"] = step.description
+                    if step.headers:
+                        step_dict["headers"] = [h.model_dump(by_alias=True) for h in step.headers]
+                    if step.parameters:
+                        step_dict["parameters"] = [p.model_dump(by_alias=True) for p in step.parameters]
+                    if step.body:
+                        step_dict["body"] = step.body
+                    if step.variables:
+                        step_dict["variables"] = [v.model_dump(by_alias=True) for v in step.variables]
+                    if step.assertions:
+                        step_dict["assertions"] = [a.model_dump() for a in step.assertions]
+                    converted_steps.append(step_dict)
+                else:
+                    converted_steps.append(str(step))
+
+            # 转换前置条件：将 ApiCallStep 对象转为 dict
+            converted_preset_conditions = []
+            # 预加载前置条件涉及的接口信息
+            _pc_eids = set()
+            for pc in tc.preset_conditions:
+                if isinstance(pc, ApiCallStep):
+                    eid = endpoint_index_to_id.get(pc.endpoint_ref)
+                    if eid:
+                        _pc_eids.add(eid)
+            _pc_endpoint_map: dict[int, ApiEndpoint] = {}
+            if _pc_eids and db_session:
+                _pc_rows = db_session.exec(
+                    select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_pc_eids)))
+                ).all()
+                _pc_endpoint_map = {e.id: e for e in _pc_rows}
+
+            for pc in tc.preset_conditions:
+                if isinstance(pc, ApiCallStep):
+                    pc_dict = {"type": "api_call"}
+                    eid = endpoint_index_to_id.get(pc.endpoint_ref)
+                    if eid:
+                        pc_dict["endpoint_id"] = eid
+                        # 从数据库加载 method/path/name，供前端展示
+                        _pc_ep = _pc_endpoint_map.get(eid)
+                        if _pc_ep:
+                            pc_dict["method"] = _pc_ep.method
+                            pc_dict["path"] = _pc_ep.path
+                            pc_dict["endpoint_name"] = _pc_ep.name
+                    if pc.description:
+                        pc_dict["name"] = pc.description
+                    if pc.headers:
+                        pc_dict["headers"] = [h.model_dump(by_alias=True) for h in pc.headers]
+                    if pc.parameters:
+                        pc_dict["parameters"] = [p.model_dump(by_alias=True) for p in pc.parameters]
+                    if pc.body:
+                        pc_dict["body"] = pc.body
+                    if pc.variables:
+                        pc_dict["variables"] = [v.model_dump(by_alias=True) for v in pc.variables]
+                    if pc.assertions:
+                        pc_dict["assertions"] = [a.model_dump() for a in pc.assertions]
+                    converted_preset_conditions.append(pc_dict)
+                else:
+                    converted_preset_conditions.append(str(pc))
+
+            # 创建关联的接口场景（如果有 API 调用步骤且有项目ID）
+            scenario_id = None
+            api_call_preset = [s for s in converted_preset_conditions if isinstance(s, dict) and s.get("endpoint_id")]
+            api_call_steps = [s for s in converted_steps if isinstance(s, dict) and s.get("endpoint_id")]
+            all_api_call_steps = api_call_preset + api_call_steps
+            if all_api_call_steps and api_project_id and db_session:
+                # 预加载步骤涉及的接口信息，用于丰富场景步骤的 method/path/name 字段（供前端展示）
+                endpoint_ids = [s["endpoint_id"] for s in all_api_call_steps]
+                endpoint_map: dict[int, ApiEndpoint] = {}
+                if endpoint_ids:
+                    rows = db_session.exec(
+                        select(ApiEndpoint).where(ApiEndpoint.id.in_(endpoint_ids))
+                    ).all()
+                    endpoint_map = {e.id: e for e in rows}
+
+                scenario_steps: list[dict] = []
+                for s in all_api_call_steps:
+                    step_copy = dict(s)
+                    ep = endpoint_map.get(s["endpoint_id"])
+                    if ep:
+                        step_copy.setdefault("method", ep.method)
+                        step_copy.setdefault("path", ep.path)
+                        step_copy.setdefault("url", ep.url or ep.path)
+                        step_copy.setdefault("endpoint_name", ep.name)
+                        step_copy.setdefault("enabled", True)
+                        step_copy.setdefault("continue_on_failure", True)
+                    # 标记前置条件步骤
+                    if s in api_call_preset:
+                        step_copy["is_preset"] = True
+                    scenario_steps.append(step_copy)
+
+                scenario = ApiScenario(
+                    project_id=api_project_id,
+                    name=f"{tc.case_name}_场景",
+                    description=f"测试用例 {tc.case_name} 的接口场景",
+                    steps=scenario_steps,
+                    user_id=user_id,
+                )
+                db_session.add(scenario)
+                db_session.flush()  # 获取场景ID
+                scenario_id = scenario.id
+
+            # 过滤 api_call 步骤：用例只存文本步骤，api_call 步骤在场景中
+            if scenario_id:
+                converted_preset_conditions = [
+                    s for s in converted_preset_conditions
+                    if not (isinstance(s, dict) and s.get("endpoint_id"))
+                ]
+                # 注意：不要从 converted_steps 中移除 API 调用步骤，它们需要保存到数据库
+                # converted_steps 保持不变，包含所有步骤（包括 API 调用步骤）
+
             # 创建DBTestCase对象，转换属性
             db_tc = DBTestCase(
                 case_name=tc.case_name,
                 case_level=tc.case_level,
-                preset_conditions=tc.preset_conditions,
-                steps=tc.steps,
+                preset_conditions=converted_preset_conditions,
+                steps=converted_steps,
                 session_id=session_id,
                 module_id=module_id,
-                expected_results=tc.expected_results
+                expected_results=tc.expected_results,
+                api_endpoint_id=attached_ids,
+                assertions=serialized_assertions,
+                scenario_id=scenario_id,
             )
             db_testcases.append(db_tc)
 

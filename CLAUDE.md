@@ -6,6 +6,20 @@
 
 AI 驱动的测试用例生成与管理工具。使用 LangChain 代理配合 DeepSeek/Ollama 模型，从自然语言需求描述中生成软件测试用例。同时包含 IoT 数据推送平台、Mock API 服务器和定时任务管理平台。
 
+## 工作规范
+
+### 编码前必须使用 Superpowers 技能
+
+每次执行编码任务（新增功能、修改逻辑、修复 Bug、重构代码）前，必须按以下顺序使用 Superpowers 技能：
+
+1. **规划阶段** — 先调用 `superpowers:brainstorming` 技能，明确需求、设计和技术方案后再动手编码
+   - 复杂任务需进一步调用 `superpowers:writing-plans` 编写书面实现计划
+2. **执行阶段** — 按规划逐步实现。多步骤独立任务使用 `superpowers:subagent-driven-development` 或 `superpowers:dispatching-parallel-agents` 并行执行
+3. **验证阶段** — 实现完成后调用 `superpowers:verification-before-completion` 确认工作完整性
+4. **整合阶段** — 分支开发完成时调用 `superpowers:finishing-a-development-branch` 决定合并/PR/清理
+
+**禁止**：未调用技能直接开始编码。即使看起来简单的任务也必须先使用 brainstorming。
+
 ## 开发命令
 
 ### 后端 (Python 3.11, FastAPI)

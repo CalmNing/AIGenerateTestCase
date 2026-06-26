@@ -20,8 +20,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    with op.batch_alter_table('apiproject', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('environment_id', sa.Integer(), nullable=True))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("apiproject")}
+    if "environment_id" not in columns:
+        with op.batch_alter_table('apiproject', schema=None) as batch_op:
+            batch_op.add_column(sa.Column('environment_id', sa.Integer(), nullable=True))
 
 
 def downgrade() -> None:

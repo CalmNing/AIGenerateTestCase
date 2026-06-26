@@ -31,6 +31,7 @@ from db.models import (
     ScheduledTask,
     Session,
     TestCase,
+    TestCaseExecutionLog,
 )
 
 # 创建所有表

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiImportResult, ApiSyncResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -100,13 +100,15 @@ export const testcaseApi = {
     api_key?: string;
     api_base_url?: string;
     api_proxy_url?: string;
+    api_model?: string;
     ollama_url?: string;
     ollama_model?: string;
   }, imageBase64?: string | null,
     moduleId?: number | null,
     selectedSkills?: string[],
     apiEndpointId?: number[] | number | null,
-    apiProjectId?: number | null): Promise<ApiResponse<TestCase[]>> => {
+    apiProjectId?: number | null,
+    apiEndpointOverrides?: Record<number, any> | null): Promise<ApiResponse<TestCase[]>> => {
     // 创建FormData
     const formData = new FormData();
 
@@ -134,6 +136,9 @@ export const testcaseApi = {
       }
       if (modelConfig.api_proxy_url) {
         formData.append('api_proxy_url', modelConfig.api_proxy_url);
+      }
+      if (modelConfig.api_model) {
+        formData.append('api_model', modelConfig.api_model);
       }
       if (modelConfig.ollama_url) {
         formData.append('ollama_url', modelConfig.ollama_url);
@@ -194,6 +199,11 @@ export const testcaseApi = {
       formData.append("api_project_id", String(apiProjectId));
     }
 
+    // 添加端点覆盖配置
+    if (apiEndpointOverrides && Object.keys(apiEndpointOverrides).length > 0) {
+      formData.append("api_endpoint_overrides", JSON.stringify(apiEndpointOverrides));
+    }
+
     return api.post(`/testcases/${sessionId}/testcases`, formData);
   },
 
@@ -219,6 +229,14 @@ export const testcaseApi = {
   /** ?????????? API ?? */
   executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any }>> =>
     api.post(`/testcases/${sessionId}/testcases/${testcaseId}/execute`),
+
+  // 获取测试用例执行日志
+  getExecutionLogs: (sessionId: number, testcaseId: number): Promise<ApiResponse<any[]>> =>
+    api.get(`/testcases/${sessionId}/testcases/${testcaseId}/execution-logs`),
+
+  // 推断测试用例的接口依赖关系
+  inferDependencies: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ added_post_actions: number; replaced_fields: number; extra_endpoint_ids: number[] }>> =>
+    api.post(`/testcases/${sessionId}/testcases/${testcaseId}/infer-dependencies`),
 };
 
 // 模块管理API
@@ -298,10 +316,23 @@ export const globalParameterApi = {
   extractAndSaveVariables: (data: ExtractVariablesRequest): Promise<ApiResponse<Record<string, string>>> => api.post('/global-parameters/extract-and-save', data)
 };
 
+interface TestVariableRequest {
+  expression: string;
+  environment_id?: number;
+}
+
+interface TestVariableResponse {
+  expression: string;
+  result: string;
+  unresolved: string[];
+}
+
 // 代理转发API
 export const proxyApi = {
   // 转发请求
-  forwardRequest: (request: ProxyRequest): Promise<ProxyResponse<ApiResponse<any>>> => api.post('/proxy/forward', request)
+  forwardRequest: (request: ProxyRequest): Promise<ProxyResponse<ApiResponse<any>>> => api.post('/proxy/forward', request),
+  // 测试变量
+  testVariable: (request: TestVariableRequest): Promise<ApiResponse<TestVariableResponse>> => api.post('/proxy/test-variable', request)
 };
 
 // 定时任务API
@@ -354,6 +385,9 @@ export const skillsApi = {
 export const configApi = {
   getLanhuCookie: (): Promise<ApiResponse<{ cookie: string; has_cookie: boolean }>> => api.get('/config/lanhu-cookie'),
   setLanhuCookie: (cookie: string): Promise<ApiResponse> => api.post('/config/lanhu-cookie', { cookie }),
+  getBugLinkTemplate: (): Promise<ApiResponse<{ template: string }>> => api.get('/config/bug-link-template'),
+  listModels: (apiKey: string, apiBaseUrl: string): Promise<ApiResponse<{ id: string; owned_by: string }[]>> =>
+    api.get('/config/models', { params: { api_key: apiKey, api_base_url: apiBaseUrl } }),
 };
 
 // Mock配置API
@@ -404,9 +438,13 @@ export const apiTestApi = {
   updateScenario: (scenarioId: number, scenario: Partial<ApiScenario>): Promise<ApiResponse<ApiScenario>> =>
     api.put(`/api-test/scenarios/${scenarioId}`, scenario),
   deleteScenario: (scenarioId: number): Promise<ApiResponse> => api.delete(`/api-test/scenarios/${scenarioId}`),
-  getScenarioResults: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
-    api.get(`/api-test/scenarios/${scenarioId}/results`),
+  getScenario: (scenarioId: number): Promise<ApiResponse<ApiScenario>> =>
+    api.get(`/api-test/scenarios/${scenarioId}`),
+  getScenarioResults: (scenarioId: number, limit?: number): Promise<ApiResponse<ApiScenarioResult[]>> =>
+    api.get(`/api-test/scenarios/${scenarioId}/results${limit ? `?limit=${limit}` : ''}`),
   runScenario: (scenarioId: number): Promise<ApiResponse<ApiScenarioResult>> => api.post(`/api-test/scenarios/${scenarioId}/run`),
+  runScenarios: (projectId: number, payload: ApiScenarioBatchRunRequest): Promise<ApiResponse<ApiScenarioBatchRunResult>> =>
+    api.post(`/api-test/projects/${projectId}/scenarios/run-batch`, payload),
   matchEndpoint: (data: { requirement: string; project_id?: number }): Promise<ApiResponse<{ matches: any[]; total_matches: number }>> =>
     api.post("/api-test/match-endpoint", data),
 };

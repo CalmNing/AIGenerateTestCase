@@ -13,6 +13,8 @@ default_model_type: Literal["api", "ollama"] = "api"
 default_config = {
     "model_type": default_model_type,
     "api_key": "",
+    "api_base_url": "https://api.deepseek.com",
+    "api_model": "deepseek-v4-flash",
     "ollama_model": "llama3",
     "ollama_base_url": "http://localhost:11434",
     "ollama_url": "http://localhost:11434",
@@ -20,6 +22,7 @@ default_config = {
     "mcp_server_url": "http://lanhu-mcp:8000/mcp",
     "mcp_server_url_fallback": "http://localhost:8002/mcp",
     "lanhu_cookie": "",
+    "bug_link_template": "",
 }
 
 class ConfigManager:

@@ -705,7 +705,7 @@ def _extract_post_actions(actions: list[dict] | None, response_data: Any, variab
     return extracted
 
 
-def _run_assertions(assertions: list[dict] | None, response_data: Any, status_code: int, elapsed_ms: int) -> list[dict]:
+def _run_assertions(assertions: list[dict] | None, response_data: Any, status_code: int, elapsed_ms: int, variables: dict | None = None) -> list[dict]:
     results = []
     for assertion in assertions or []:
         if not isinstance(assertion, dict):
@@ -715,8 +715,24 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
         actual = None
         expected = None
         try:
+            # 对断言的 value 字段进行变量替换
+            raw_value = assertion.get("value")
+            if isinstance(raw_value, str) and "{{" in raw_value and variables:
+                unresolved: set[str] = set()
+                expected_str = substitute_variables(raw_value, variables, unresolved)
+                # 尝试转为数字（如果原始值是数字）
+                try:
+                    expected = int(expected_str)
+                except (ValueError, TypeError):
+                    try:
+                        expected = float(expected_str)
+                    except (ValueError, TypeError):
+                        expected = expected_str
+            else:
+                expected = raw_value
+
             if kind == "status_code":
-                expected = int(assertion.get("value", 200))
+                expected = int(expected if expected is not None else 200)
                 actual = status_code
                 ok = actual == expected
             elif kind == "status_code_range":
@@ -726,7 +742,7 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
                 actual = status_code
                 ok = lo <= status_code <= hi
             elif kind == "response_time_lt":
-                expected = int(assertion.get("value", 3000))
+                expected = int(expected if expected is not None else 3000)
                 actual = elapsed_ms
                 ok = elapsed_ms < expected
             elif kind == "jsonpath_exists":
@@ -735,7 +751,7 @@ def _run_assertions(assertions: list[dict] | None, response_data: Any, status_co
                 ok = actual > 0
             elif kind == "jsonpath_equals":
                 expr = assertion.get("jsonpath")
-                expected = str(assertion.get("value", ""))
+                expected = str(expected) if expected is not None else ""
                 matches = parse_jsonpath(expr).find(response_data) if expr else []
                 actual = str(matches[0].value) if matches else None
                 ok = actual == expected
@@ -854,6 +870,7 @@ async def _execute_endpoint_step(
             response_data,
             response.status_code,
             elapsed_ms,
+            variables,
         )
         extracted = _extract_post_actions(merged.get("post_actions"), response_data, variables)
         step_passed = (
@@ -901,6 +918,63 @@ async def run_endpoint(db: Session, project: ApiProject, endpoint: ApiEndpoint, 
             index=1,
         )
     return {"passed": passed, "variables": variables, "step": step}
+
+
+async def run_endpoint_steps(db: Session, executable_steps: list[dict]) -> dict:
+    if not executable_steps:
+        return {"passed": False, "variables": {}, "steps": []}
+
+    first = executable_steps[0]
+    first_overrides = first.get("overrides") or {}
+    first_endpoint = first.get("endpoint")
+    first_project = first.get("project")
+    env_id = (
+        first_overrides.get("environment_id")
+        or getattr(first_endpoint, "environment_id", None)
+        or getattr(first_project, "environment_id", None)
+    )
+    variables = build_param_map(db, env_id, first_overrides.get("variables") or [])
+    results = []
+    passed = True
+
+    async with httpx.AsyncClient(limits=API_TEST_HTTP_LIMITS) as client:
+        for index, item in enumerate(executable_steps, 1):
+            endpoint = item.get("endpoint")
+            project = item.get("project")
+            overrides = item.get("overrides") or {}
+            if not endpoint or not project:
+                results.append({
+                    "index": index,
+                    "status": "error",
+                    "detail": "接口步骤配置不完整",
+                    "testcase_step": item.get("testcase_step"),
+                })
+                passed = False
+                break
+
+            default_base_url = (overrides.get("base_url") or project.base_url or "").rstrip("/")
+            step_result, step_passed = await _execute_endpoint_step(
+                client,
+                project=project,
+                endpoint=endpoint,
+                step=overrides,
+                variables=variables,
+                default_base_url=default_base_url,
+                index=index,
+            )
+            step_result["endpoint_id"] = endpoint.id
+            step_result["endpoint_name"] = endpoint.name
+            step_result["endpoint_method"] = endpoint.method
+            step_result["endpoint_path"] = endpoint.path
+            step_result["project_id"] = project.id
+            step_result["project_name"] = project.name
+            step_result["testcase_step"] = item.get("testcase_step")
+            results.append(step_result)
+            passed = passed and step_passed
+            if not step_passed and not overrides.get("continue_on_failure"):
+                break
+
+    return {"passed": passed, "variables": variables, "steps": results}
 
 
 def build_body_from_schema(schema: dict) -> str:
@@ -991,6 +1065,7 @@ async def generate_body_from_schema(
     api_key: str = "",
     api_base_url: str = "",
     api_proxy_url: str = "",
+    api_model: str = "deepseek-v4-flash",
     ollama_url: str = "",
     ollama_model: str = "",
 ) -> dict:
@@ -1000,6 +1075,7 @@ async def generate_body_from_schema(
     api_key = api_key.strip() if api_key else ""
     api_base_url = api_base_url.strip() if api_base_url else ""
     api_proxy_url = api_proxy_url.strip() if api_proxy_url else ""
+    api_model = api_model.strip() if api_model else "deepseek-v4-flash"
     ollama_url = ollama_url.strip() if ollama_url else ""
     ollama_model = ollama_model.strip() if ollama_model else ""
 
@@ -1024,15 +1100,23 @@ async def generate_body_from_schema(
 
             model = ChatOllama(base_url=ollama_url, model=ollama_model, temperature=0)
         else:
-            from langchain_deepseek import ChatDeepSeek
+            from langchain_openai import ChatOpenAI
             from pydantic import SecretStr
 
-            model = ChatDeepSeek(
-                model="deepseek-chat",
+            extra_kwargs = {}
+            if api_proxy_url:
+                import httpx
+                extra_kwargs["http_async_client"] = httpx.AsyncClient(
+                    proxy=api_proxy_url,
+                    timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
+                )
+            model = ChatOpenAI(
+                model=api_model,
                 temperature=0,
                 api_key=SecretStr(api_key),
-                base_url=api_base_url or None,
+                base_url=api_base_url or "https://api.deepseek.com",
                 max_retries=2,
+                **extra_kwargs,
             )
         response = await model.ainvoke(prompt)
         content = response.content if hasattr(response, "content") else str(response)
@@ -1040,7 +1124,6 @@ async def generate_body_from_schema(
         body = json.dumps(body_obj, ensure_ascii=False, indent=2)
         body = _apply_global_tokens_to_body(body, variables)
         return {"body": body, "used_ai": True, "message": "AI generated successfully"}
-        return {"body": json.dumps(body_obj, ensure_ascii=False, indent=2), "used_ai": True, "message": "AI 生成成功"}
     except Exception as exc:
         return {"body": rule_body, "used_ai": False, "message": f"AI 生成失败，已使用 schema 规则生成: {exc}"}
 
@@ -1085,6 +1168,207 @@ def _body_to_text(body: Any) -> str | None:
     if isinstance(body, str):
         return body
     return json.dumps(body, ensure_ascii=False, indent=2)
+
+
+GENERIC_DEPENDENCY_FIELD_NAMES = {
+    "code",
+    "msg",
+    "message",
+    "success",
+    "data",
+    "result",
+    "results",
+    "list",
+    "items",
+    "rows",
+    "total",
+    "page",
+    "size",
+    "status",
+    "timestamp",
+}
+PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+
+def _dependency_name_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _dependency_aliases(name: str) -> set[str]:
+    key = _dependency_name_key(name)
+    aliases = {key} if key else set()
+    if key.endswith("id") and len(key) > 2:
+        aliases.add(key[:-2])
+    else:
+        aliases.add(key + "id")
+    return {item for item in aliases if item}
+
+
+def _dependency_variable_name(name: str) -> str:
+    raw = re.sub(r"[^A-Za-z0-9_]", "_", str(name or "")).strip("_")
+    if not raw:
+        return "value"
+    if raw[0].isdigit():
+        raw = "v_" + raw
+    return raw[0].lower() + raw[1:]
+
+
+def _is_dependency_placeholder(value: Any) -> bool:
+    return isinstance(value, str) and bool(PLACEHOLDER_RE.fullmatch(value.strip()))
+
+
+def _is_dependency_fillable(value: Any) -> bool:
+    if _is_dependency_placeholder(value):
+        return False
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() in {"", "string", "null", "undefined", "0"}
+    if isinstance(value, (int, float)) and value == 0:
+        return True
+    return False
+
+
+def _iter_response_schema_fields(schema: Any, path: str = "$") -> list[dict]:
+    if not isinstance(schema, dict):
+        return []
+    if schema.get("type") == "array" and isinstance(schema.get("items"), dict):
+        return _iter_response_schema_fields(schema["items"], path + "[0]")
+    props = _schema_properties(schema)
+    if not props:
+        return []
+    fields: list[dict] = []
+    for key, prop in props.items():
+        child_path = f"{path}.{key}"
+        child_fields = _iter_response_schema_fields(prop, child_path)
+        if child_fields:
+            fields.extend(child_fields)
+        elif _dependency_name_key(key) not in GENERIC_DEPENDENCY_FIELD_NAMES:
+            fields.append({
+                "name": key,
+                "variable": _dependency_variable_name(key),
+                "jsonpath": child_path,
+                "aliases": _dependency_aliases(key),
+            })
+    return fields
+
+
+def _body_from_step_for_inference(step: dict) -> Any:
+    body = step.get("body")
+    if not body:
+        return _schema_example({}, step.get("request_schema") or {})
+    try:
+        return json.loads(body) if isinstance(body, str) else deepcopy(body)
+    except Exception:
+        return _schema_example({}, step.get("request_schema") or {})
+
+
+def _infer_body_dependencies(value: Any, candidates: dict[str, list[dict]], summary: dict) -> Any:
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            matched = None
+            if _is_dependency_fillable(item):
+                for alias in _dependency_aliases(key):
+                    matches = candidates.get(alias) or []
+                    if matches:
+                        matched = matches[-1]
+                        break
+            if matched:
+                result[key] = "{{" + matched["variable"] + "}}"
+                matched["used"] = True
+                summary["replaced_fields"] += 1
+            else:
+                result[key] = _infer_body_dependencies(item, candidates, summary)
+        return result
+    if isinstance(value, list):
+        return [_infer_body_dependencies(item, candidates, summary) for item in value]
+    return value
+
+
+def _infer_pair_dependencies(items: list[dict] | None, candidates: dict[str, list[dict]], summary: dict) -> list[dict]:
+    result = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        row = deepcopy(item)
+        key = row.get("key")
+        if key and _is_dependency_fillable(row.get("value")):
+            for alias in _dependency_aliases(key):
+                matches = candidates.get(alias) or []
+                if matches:
+                    matched = matches[-1]
+                    row["value"] = "{{" + matched["variable"] + "}}"
+                    matched["used"] = True
+                    summary["replaced_fields"] += 1
+                    break
+        result.append(row)
+    return result
+
+
+def _has_post_action(actions: list[dict] | None, variable: str, jsonpath: str) -> bool:
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        key = action.get("key") or action.get("variable")
+        if key == variable or action.get("jsonpath") == jsonpath:
+            return True
+    return False
+
+
+def infer_step_dependencies(steps: list[dict]) -> dict:
+    candidates: dict[str, list[dict]] = {}
+    candidate_order: list[dict] = []
+    summary = {
+        "steps": len(steps),
+        "added_post_actions": 0,
+        "replaced_fields": 0,
+        "skipped_existing": 0,
+    }
+
+    for index, step in enumerate(steps):
+        body = _body_from_step_for_inference(step)
+        inferred_body = _infer_body_dependencies(body, candidates, summary)
+        if inferred_body != body:
+            step["body"] = json.dumps(inferred_body, ensure_ascii=False, indent=2)
+
+        headers = _infer_pair_dependencies(step.get("headers"), candidates, summary)
+        if headers != (step.get("headers") or []):
+            step["headers"] = headers
+        parameters = _infer_pair_dependencies(step.get("parameters"), candidates, summary)
+        if parameters != (step.get("parameters") or []):
+            step["parameters"] = parameters
+
+        used_before = {id(item) for item in candidate_order if item.get("used")}
+        for candidate in candidate_order:
+            if id(candidate) not in used_before:
+                continue
+            producer = steps[candidate["producer_index"]]
+            actions = list(producer.get("post_actions") or [])
+            if _has_post_action(actions, candidate["variable"], candidate["jsonpath"]):
+                summary["skipped_existing"] += 1
+                candidate["used"] = False
+                continue
+            actions.append({
+                "type": "extract_jsonpath",
+                "key": candidate["variable"],
+                "jsonpath": candidate["jsonpath"],
+            })
+            producer["post_actions"] = actions
+            summary["added_post_actions"] += 1
+            candidate["used"] = False
+
+        for field in _iter_response_schema_fields(step.get("response_schema") or {}):
+            candidate = {
+                **field,
+                "producer_index": index,
+                "used": False,
+            }
+            candidate_order.append(candidate)
+            for alias in field["aliases"]:
+                candidates.setdefault(alias, []).append(candidate)
+
+    return summary
 
 
 def _success_assertions() -> list[dict]:
@@ -1556,6 +1840,14 @@ async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) 
     results = []
     passed = True
 
+    # 收集需要从响应中提取的变量（值以 $. 开头的视为 jsonpath 表达式）
+    pending_extractions: dict[str, str] = {}  # variable_name -> jsonpath_expression
+    for var in (scenario.variables or []):
+        if isinstance(var, dict) and var.get("key") and var.get("value", "").startswith("$."):
+            pending_extractions[var["key"]] = var["value"]
+            # 临时移除，等提取后再赋值
+            variables.pop(var["key"], None)
+
     async with httpx.AsyncClient(limits=API_TEST_HTTP_LIMITS) as client:
         for index, step in enumerate(scenario.steps or [], 1):
             if not isinstance(step, dict) or step.get("enabled", True) is False:
@@ -1580,6 +1872,25 @@ async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) 
             )
             results.append(result)
             passed = passed and step_passed
+
+            # 从当前步骤的响应中提取待提取的变量
+            if step_passed and pending_extractions:
+                response_data = result.get("response", {}).get("body")
+                if isinstance(response_data, (dict, list)):
+                    extracted_keys = []
+                    for var_name, jsonpath_expr in pending_extractions.items():
+                        try:
+                            matches = parse_jsonpath(jsonpath_expr).find(response_data)
+                            if matches:
+                                value = matches[0].value
+                                variables[var_name] = str(value) if not isinstance(value, str) else value
+                                extracted_keys.append(var_name)
+                        except Exception:
+                            pass
+                    # 移除已提取的变量
+                    for key in extracted_keys:
+                        del pending_extractions[key]
+
             if not step_passed and not step.get("continue_on_failure"):
                 break
 

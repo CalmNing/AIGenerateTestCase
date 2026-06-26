@@ -206,7 +206,7 @@ async def install_skill(req: InstallRequest):
             continue
         # Prevent path traversal in additional files
         safe_file_path = os.path.normpath(file_path)
-        if safe_file_path.startswith(".."):
+        if safe_file_path.startswith("..") or os.path.isabs(safe_file_path):
             logger.warning(f"Skipping file with unsafe path: {file_path}")
             continue
         target = os.path.join(skill_dir, safe_file_path)

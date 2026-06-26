@@ -11,6 +11,7 @@ from app.services.api_test_tool import (
     detect_base_url,
     endpoints_from_spec,
     generate_body_from_schema,
+    infer_step_dependencies,
     parse_spec_text,
     run_endpoint,
     run_scenario,
@@ -50,6 +51,27 @@ class RunEndpointRequest(BaseModel):
     assertions: Optional[List[dict]] = None
 
 
+class RunScenarioBatchRequest(BaseModel):
+    scenario_ids: List[int] = Field(default_factory=list)
+    run_all: bool = False
+
+
+class ScenarioBatchResultItem(BaseModel):
+    scenario_id: int
+    scenario_name: str
+    record_id: int
+    passed: bool
+    created_at: str
+    result: dict
+
+
+class RunScenarioBatchResponse(BaseModel):
+    total: int
+    passed: int
+    failed: int
+    results: List[ScenarioBatchResultItem]
+
+
 class GenerateBodyRequest(BaseModel):
     instruction: str = ""
     current_body: str = ""
@@ -58,6 +80,7 @@ class GenerateBodyRequest(BaseModel):
     api_key: str = ""
     api_base_url: str = ""
     api_proxy_url: str = ""
+    api_model: str = "deepseek-v4-flash"
     ollama_url: str = ""
     ollama_model: str = ""
 
@@ -95,7 +118,7 @@ def _calculate_match_score(requirement: str, endpoint: ApiEndpoint) -> float:
                 score += 15.0
 
     # Match on summary/description
-    summary = endpoint.summary or endpoint.description or ""
+    summary = endpoint.name or ""
     if summary:
         summary_lower = summary.lower()
         req_words = set(req_lower.split())
@@ -117,7 +140,7 @@ def match_endpoint(
     if request.project_id:
         project = session.get(ApiProject, request.project_id)
         if not project or project.user_id != user.user_id:
-            return Response(code=status.HTTP_404_NOT_FOUND, message="???????")
+            return Response(code=status.HTTP_404_NOT_FOUND, message="项目不存在")
         query = query.where(ApiEndpoint.project_id == request.project_id)
     else:
         projects = session.exec(
@@ -318,6 +341,91 @@ def update_endpoint(endpoint_id: int, endpoint: ApiEndpoint, session: SessionDep
     return Response(data=db_endpoint, message="接口已更新")
 
 
+def _endpoint_inference_step(endpoint: ApiEndpoint) -> dict:
+    return {
+        "endpoint_id": endpoint.id,
+        "name": endpoint.name,
+        "headers": list(endpoint.headers or []),
+        "parameters": list(endpoint.parameters or []),
+        "body": endpoint.body,
+        "post_actions": list(endpoint.post_actions or []),
+        "request_schema": endpoint.request_schema or {},
+        "response_schema": endpoint.response_schema or {},
+    }
+
+
+def _apply_inference_step_to_endpoint(endpoint: ApiEndpoint, step: dict) -> None:
+    endpoint.headers = step.get("headers") or []
+    endpoint.parameters = step.get("parameters") or []
+    endpoint.body = step.get("body") or ""
+    endpoint.post_actions = step.get("post_actions") or []
+
+
+def _scenario_inference_step(step: dict, endpoint: ApiEndpoint | None) -> dict:
+    return {
+        **step,
+        "headers": step["headers"] if "headers" in step else list(getattr(endpoint, "headers", []) or []),
+        "parameters": step["parameters"] if "parameters" in step else list(getattr(endpoint, "parameters", []) or []),
+        "body": step.get("body") if "body" in step else getattr(endpoint, "body", None),
+        "post_actions": step["post_actions"] if "post_actions" in step else list(getattr(endpoint, "post_actions", []) or []),
+        "request_schema": getattr(endpoint, "request_schema", {}) or {},
+        "response_schema": getattr(endpoint, "response_schema", {}) or {},
+    }
+
+
+@router.post("/projects/{project_id}/infer-dependencies", response_model=Response[dict])
+def infer_project_dependencies(project_id: int, session: SessionDep, user: CurrentUser):
+    project = session.get(ApiProject, project_id)
+    if not project or project.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
+    endpoints = session.exec(
+        select(ApiEndpoint)
+        .where(ApiEndpoint.project_id == project_id)
+        .where(ApiEndpoint.user_id == user.user_id)
+        .order_by(ApiEndpoint.id)
+    ).all()
+    steps = [_endpoint_inference_step(endpoint) for endpoint in endpoints]
+    summary = infer_step_dependencies(steps)
+    for endpoint, step in zip(endpoints, steps):
+        _apply_inference_step_to_endpoint(endpoint, step)
+        session.add(endpoint)
+    session.commit()
+    return Response(data={**summary, "target": "project", "project_id": project_id}, message="依赖推断完成")
+
+
+@router.post("/scenarios/{scenario_id}/infer-dependencies", response_model=Response[dict])
+def infer_scenario_dependencies(scenario_id: int, session: SessionDep, user: CurrentUser):
+    scenario = session.get(ApiScenario, scenario_id)
+    if not scenario or scenario.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
+    endpoints = {
+        endpoint.id: endpoint
+        for endpoint in session.exec(
+            select(ApiEndpoint)
+            .where(ApiEndpoint.project_id == scenario.project_id)
+            .where(ApiEndpoint.user_id == user.user_id)
+        ).all()
+    }
+    original_steps = []
+    inference_steps = []
+    for raw_step in scenario.steps or []:
+        if not isinstance(raw_step, dict) or raw_step.get("enabled", True) is False:
+            continue
+        endpoint = endpoints.get(raw_step.get("endpoint_id"))
+        original_steps.append(raw_step)
+        inference_steps.append(_scenario_inference_step(raw_step, endpoint))
+    summary = infer_step_dependencies(inference_steps)
+    for original, inferred in zip(original_steps, inference_steps):
+        for key in ("headers", "parameters", "body", "post_actions"):
+            if key in inferred:
+                original[key] = inferred[key]
+    scenario.steps = list(scenario.steps or [])
+    session.add(scenario)
+    session.commit()
+    session.refresh(scenario)
+    return Response(data={**summary, "target": "scenario", "scenario_id": scenario_id}, message="依赖推断完成")
+
+
 @router.delete("/endpoints/{endpoint_id}", response_model=Response)
 def delete_endpoint(endpoint_id: int, session: SessionDep, user: CurrentUser):
     db_endpoint = session.get(ApiEndpoint, endpoint_id)
@@ -357,6 +465,7 @@ async def generate_endpoint_body(endpoint_id: int, request: GenerateBodyRequest,
         api_key=request.api_key,
         api_base_url=request.api_base_url,
         api_proxy_url=request.api_proxy_url,
+        api_model=request.api_model,
         ollama_url=request.ollama_url,
         ollama_model=request.ollama_model,
     )
@@ -386,6 +495,15 @@ def list_scenarios(project_id: int, session: SessionDep, user: CurrentUser):
         .order_by(ApiScenario.updated_at.desc())
     ).all()
     return Response(data=scenarios)
+
+
+@router.get("/scenarios/{scenario_id}", response_model=Response[ApiScenario])
+def get_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
+    """获取场景详情"""
+    scenario = session.get(ApiScenario, scenario_id)
+    if not scenario or scenario.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
+    return Response(data=scenario)
 
 
 @router.post("/projects/{project_id}/scenarios", response_model=Response[ApiScenario])
@@ -450,6 +568,104 @@ def list_scenario_results(
     return Response(data=results)
 
 
+@router.post("/projects/{project_id}/scenarios/run-batch", response_model=Response[RunScenarioBatchResponse])
+async def run_api_scenarios_batch(
+    project_id: int,
+    request: RunScenarioBatchRequest,
+    session: SessionDep,
+    user: CurrentUser,
+):
+    project = session.get(ApiProject, project_id)
+    if not project or project.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
+
+    if not request.run_all and not request.scenario_ids:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="请选择要执行的场景")
+
+    query = (
+        select(ApiScenario)
+        .where(ApiScenario.project_id == project_id)
+        .where(ApiScenario.user_id == user.user_id)
+        .order_by(ApiScenario.updated_at.desc(), ApiScenario.id.desc())
+    )
+    scenarios = session.exec(query).all()
+
+    if not request.run_all:
+        requested_ids = set(request.scenario_ids)
+        found_ids = {scenario.id for scenario in scenarios}
+        missing_ids = [scenario_id for scenario_id in request.scenario_ids if scenario_id not in found_ids]
+        if missing_ids:
+            missing_text = ", ".join(str(scenario_id) for scenario_id in missing_ids)
+            return Response(
+                code=status.HTTP_400_BAD_REQUEST,
+                message=f"场景不存在或无权限: {missing_text}",
+            )
+        scenarios = [scenario for scenario in scenarios if scenario.id in requested_ids]
+
+    result_items: List[ScenarioBatchResultItem] = []
+    passed_count = 0
+
+    for scenario in scenarios:
+        try:
+            result = await run_scenario(session, scenario, project)
+        except Exception as exc:
+            result = {"passed": False, "error": str(exc), "steps": []}
+
+        record = _store_scenario_result(session, scenario, project, user.user_id, result)
+        if record.passed:
+            passed_count += 1
+        result_items.append(
+            ScenarioBatchResultItem(
+                scenario_id=scenario.id,
+                scenario_name=scenario.name,
+                record_id=record.id,
+                passed=record.passed,
+                created_at=record.created_at.isoformat(),
+                result=record.result,
+            )
+        )
+
+    response = RunScenarioBatchResponse(
+        total=len(result_items),
+        passed=passed_count,
+        failed=len(result_items) - passed_count,
+        results=result_items,
+    )
+    return Response(data=response, message="场景批量执行完成")
+
+
+def _store_scenario_result(
+    session: SessionDep,
+    scenario: ApiScenario,
+    project: ApiProject,
+    user_id: str,
+    result: dict,
+) -> ApiScenarioResult:
+    record = ApiScenarioResult(
+        scenario_id=scenario.id,
+        project_id=project.id,
+        scenario_name=scenario.name,
+        passed=bool(result.get("passed")),
+        result=result,
+        user_id=user_id,
+    )
+    session.add(record)
+    session.flush()
+
+    records = session.exec(
+        select(ApiScenarioResult)
+        .where(ApiScenarioResult.scenario_id == scenario.id)
+        .where(ApiScenarioResult.user_id == user_id)
+        .order_by(ApiScenarioResult.created_at.desc(), ApiScenarioResult.id.desc())
+    ).all()
+    for old_record in records[MAX_SCENARIO_RESULT_RECORDS:]:
+        session.delete(old_record)
+
+    session.commit()
+    session.refresh(record)
+    return record
+
+
 @router.post("/scenarios/{scenario_id}/run", response_model=Response[ApiScenarioResult])
 async def run_api_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
     scenario = session.get(ApiScenario, scenario_id)
@@ -459,26 +675,5 @@ async def run_api_scenario(scenario_id: int, session: SessionDep, user: CurrentU
     if not project or project.user_id != user.user_id:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     result = await run_scenario(session, scenario, project)
-    record = ApiScenarioResult(
-        scenario_id=scenario.id,
-        project_id=project.id,
-        scenario_name=scenario.name,
-        passed=bool(result.get("passed")),
-        result=result,
-        user_id=user.user_id,
-    )
-    session.add(record)
-    session.flush()
-
-    records = session.exec(
-        select(ApiScenarioResult)
-        .where(ApiScenarioResult.scenario_id == scenario.id)
-        .where(ApiScenarioResult.user_id == user.user_id)
-        .order_by(ApiScenarioResult.created_at.desc(), ApiScenarioResult.id.desc())
-    ).all()
-    for old_record in records[MAX_SCENARIO_RESULT_RECORDS:]:
-        session.delete(old_record)
-
-    session.commit()
-    session.refresh(record)
+    record = _store_scenario_result(session, scenario, project, user.user_id, result)
     return Response(data=record, message="场景执行完成")

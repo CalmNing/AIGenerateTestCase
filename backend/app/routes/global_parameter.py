@@ -5,24 +5,24 @@ from typing import List, Optional
 
 from app.deps import SessionDep, CurrentUser
 from db.models import GlobalParameter
-from utils.base_response import Response as BaseResponse
+from utils.base_response import Response
 
 router = APIRouter(prefix="/global-parameters", tags=["global-parameters"])
 
 
-@router.get("", response_model=BaseResponse)
+@router.get("", response_model=Response)
 def get_global_parameters(session: SessionDep, user: CurrentUser):
     """获取所有全局参数配置"""
     try:
         global_parameters = session.exec(
             select(GlobalParameter)
         ).all()
-        return BaseResponse(code=200, msg="Success", success=True, data=global_parameters)
+        return Response(code=200, message="Success", data=global_parameters)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取全局参数配置失败: {str(e)}")
 
 
-@router.post("", response_model=BaseResponse)
+@router.post("", response_model=Response)
 def create_global_parameter(global_parameter: GlobalParameter, session: SessionDep, user: CurrentUser):
     """创建全局参数配置"""
     try:
@@ -37,13 +37,13 @@ def create_global_parameter(global_parameter: GlobalParameter, session: SessionD
         session.add(global_parameter)
         session.commit()
         session.refresh(global_parameter)
-        return BaseResponse(code=200, msg="Success", success=True, data=global_parameter)
+        return Response(code=200, message="Success", data=global_parameter)
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"创建全局参数配置失败: {str(e)}")
 
 
-@router.put("/{parameter_id}", response_model=BaseResponse)
+@router.put("/{parameter_id}", response_model=Response)
 def update_global_parameter(parameter_id: int, global_parameter: GlobalParameter, session: SessionDep, user: CurrentUser):
     """更新全局参数配置"""
     try:
@@ -64,7 +64,7 @@ def update_global_parameter(parameter_id: int, global_parameter: GlobalParameter
         session.add(db_global_parameter)
         session.commit()
         session.refresh(db_global_parameter)
-        return BaseResponse(code=200, msg="Success", success=True, data=db_global_parameter)
+        return Response(code=200, message="Success", data=db_global_parameter)
     except HTTPException:
         raise
     except Exception as e:
@@ -72,7 +72,7 @@ def update_global_parameter(parameter_id: int, global_parameter: GlobalParameter
         raise HTTPException(status_code=500, detail=f"更新全局参数配置失败: {str(e)}")
 
 
-@router.delete("/{parameter_id}", response_model=BaseResponse)
+@router.delete("/{parameter_id}", response_model=Response)
 def delete_global_parameter(parameter_id: int, session: SessionDep, user: CurrentUser):
     """删除全局参数配置"""
     try:
@@ -82,7 +82,7 @@ def delete_global_parameter(parameter_id: int, session: SessionDep, user: Curren
         
         session.delete(db_global_parameter)
         session.commit()
-        return BaseResponse(code=200, msg="Success", success=True, data=None)
+        return Response(code=200, message="Success", data=None)
     except HTTPException:
         raise
     except Exception as e:
@@ -90,7 +90,7 @@ def delete_global_parameter(parameter_id: int, session: SessionDep, user: Curren
         raise HTTPException(status_code=500, detail=f"删除全局参数配置失败: {str(e)}")
 
 
-@router.get("/default", response_model=BaseResponse)
+@router.get("/default", response_model=Response)
 def get_default_global_parameter(session: SessionDep, user: CurrentUser):
     """获取默认全局参数配置"""
     try:
@@ -104,7 +104,7 @@ def get_default_global_parameter(session: SessionDep, user: CurrentUser):
             default_parameter = session.exec(
                 select(GlobalParameter)
             ).first()
-        return BaseResponse(code=200, msg="Success", success=True, data=default_parameter)
+        return Response(code=200, message="Success", data=default_parameter)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取默认全局参数配置失败: {str(e)}")
 
@@ -122,7 +122,7 @@ class ExtractAndSaveRequest(BaseModel):
     extractions: List[ExtractionRule]
 
 
-@router.post("/extract-and-save", response_model=BaseResponse)
+@router.post("/extract-and-save", response_model=Response)
 def extract_and_save(request: ExtractAndSaveRequest, session: SessionDep, user: CurrentUser):
     """从响应数据中通过 JSONPath 提取变量，保存到指定环境参数中"""
     try:
@@ -163,7 +163,7 @@ def extract_and_save(request: ExtractAndSaveRequest, session: SessionDep, user: 
         session.commit()
         session.refresh(env)
 
-        return BaseResponse(code=200, msg="Success", success=True, data=extracted)
+        return Response(code=200, message="Success", data=extracted)
     except HTTPException:
         raise
     except Exception as e:

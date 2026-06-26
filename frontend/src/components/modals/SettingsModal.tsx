@@ -1,5 +1,6 @@
 import React, {useEffect} from 'react';
-import { Modal, Form, Input, Radio, Divider } from 'antd';
+import { Modal, Form, Input, Radio, Divider, AutoComplete, Button, Space } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 
 interface SettingsModalProps {
   visible: boolean;
@@ -9,6 +10,9 @@ interface SettingsModalProps {
   onCancel: () => void;
   onFinish: (values: any) => void;
   onSettingTypeChange: (e: any) => void;
+  modelList: string[];
+  modelListLoading: boolean;
+  onFetchModels: () => void;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -18,11 +22,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   loading,
   onCancel,
   onFinish,
-  onSettingTypeChange
+  onSettingTypeChange,
+  modelList,
+  modelListLoading,
+  onFetchModels,
 }) => {
   useEffect(() => {
     settingForm.setFieldsValue({
       api_base_url: settingForm.getFieldValue('api_base_url') || 'https://api.deepseek.com',
+      api_model: settingForm.getFieldValue('api_model') || 'deepseek-v4-flash',
       ollama_url: settingForm.getFieldValue('ollama_url') || 'http://localhost:11434',
       ollama_model: settingForm.getFieldValue('ollama_model') || 'gpt-oss:120b-cloud'
     });
@@ -60,10 +68,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           <>
             <Form.Item
               name="api_key"
-              label="DeepSeek API密钥"
-              rules={[{ required: true, message: '请输入 DeepSeek API密钥' }]}
+              label="API KEY"
+              rules={[{ required: true, message: '请输入 API KEY' }]}
             >
-              <Input.Password placeholder="请输入 DeepSeek API密钥" />
+              <Input.Password placeholder="请输入 API KEY" />
             </Form.Item>
 
             <Form.Item
@@ -72,6 +80,40 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               tooltip="OpenAI-compatible API 地址。默认直连 DeepSeek；也可填写 OneAPI/New API/LiteLLM 等兼容网关地址。"
             >
               <Input placeholder="https://api.deepseek.com" />
+            </Form.Item>
+
+            <Form.Item
+              name="api_model"
+              label="模型名称"
+              rules={[{ required: true, message: '请输入模型名称' }]}
+              tooltip="选择或输入模型名称。支持 OpenAI 兼容接口（DeepSeek、OpenAI、OneAPI 等）。点击右侧按钮获取可用模型列表。"
+            >
+              <Space.Compact style={{ width: '100%' }}>
+                <AutoComplete
+                  style={{ flex: 1 }}
+                  placeholder="deepseek-v4-flash"
+                  options={modelList.map(m => ({ label: m, value: m }))}
+                  filterOption={(inputValue, option) =>
+                    option?.value?.toLowerCase().includes(inputValue.toLowerCase()) ?? false
+                  }
+                  disabled={modelListLoading}
+                  onSelect={(value) => {
+                    settingForm.setFieldsValue({ api_model: value });
+                  }}
+                  onChange={(value) => {
+                    settingForm.setFieldsValue({ api_model: value });
+                  }}
+                />
+                <Button
+                  icon={<ReloadOutlined spin={modelListLoading} />}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onFetchModels();
+                  }}
+                  loading={modelListLoading}
+                  title="获取模型列表"
+                />
+              </Space.Compact>
             </Form.Item>
 
             <Form.Item
