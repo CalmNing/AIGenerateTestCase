@@ -591,9 +591,9 @@ async def generate_testcases(
         except (json.JSONDecodeError, ValueError, TypeError):
             logger.warning("端点覆盖配置解析失败，继续使用数据库默认值")
 
+    endpoint_index_to_id: dict[int, int] = {}
     if api_endpoint_ids:
         api_sections = []
-        endpoint_index_to_id = {}
         for idx, eid in enumerate(api_endpoint_ids, 1):
             try:
                 endpoint_db = session.get(ApiEndpoint, eid)
