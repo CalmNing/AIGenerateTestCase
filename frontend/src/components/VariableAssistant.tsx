@@ -142,41 +142,41 @@ const VariableAssistant: React.FC<VariableAssistantProps> = ({
     const testResult = testResults[item.syntax];
     return (
       <div key={item.syntax} className="variable-item">
-        <span
-          className="variable-syntax"
-          onClick={() => handleInsert(item.syntax)}
-          title="点击插入"
-        >
-          {item.syntax}
-        </span>
-        <span className="variable-description">{item.description}</span>
-        <div className="variable-actions">
-          <Space size={4}>
-            <Button
-              type="link"
-              size="small"
-              icon={<ThunderboltOutlined />}
-              onClick={() => handleTest(item.syntax)}
-              loading={testResult?.loading}
-            >
-              测试
-            </Button>
-            <Button
-              type="link"
-              size="small"
-              icon={<CopyOutlined />}
-              onClick={() => handleCopy(item.syntax)}
-            >
-              复制
-            </Button>
-          </Space>
+        <div className="variable-info">
+          <span
+            className="variable-syntax"
+            onClick={() => handleInsert(item.syntax)}
+            title="点击插入"
+          >
+            {item.syntax}
+          </span>
+          <span className="variable-description">{item.description}</span>
+          {testResult?.result !== undefined && (
+            <div className="variable-test-result">结果: {testResult.result}</div>
+          )}
+          {testResult?.error && (
+            <div className="variable-test-error">错误: {testResult.error}</div>
+          )}
         </div>
-        {testResult?.result !== undefined && (
-          <div className="variable-test-result">结果: {testResult.result}</div>
-        )}
-        {testResult?.error && (
-          <div className="variable-test-error">错误: {testResult.error}</div>
-        )}
+        <div className="variable-actions">
+          <Button
+            type="link"
+            size="small"
+            icon={<ThunderboltOutlined />}
+            onClick={() => handleTest(item.syntax)}
+            loading={testResult?.loading}
+          >
+            测试
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => handleCopy(item.syntax)}
+          >
+            复制
+          </Button>
+        </div>
       </div>
     );
   };

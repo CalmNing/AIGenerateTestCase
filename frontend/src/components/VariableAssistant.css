@@ -2,7 +2,7 @@
 
 /* Popover container */
 .variable-assistant-popover {
-  width: 400px;
+  width: 420px;
   max-height: 500px;
   overflow-y: auto;
 }
@@ -29,85 +29,114 @@
 .variable-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 8px;
 }
 
 /* Variable item row */
 .variable-item {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--color-bg-container);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: all 0.2s ease;
 }
 
 .variable-item:hover {
   border-color: var(--color-primary-border);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* Left section: syntax + description */
+.variable-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Variable syntax text */
 .variable-syntax {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: var(--font-size-sm);
+  font-size: 13px;
+  font-weight: 500;
   color: var(--color-primary);
   cursor: pointer;
   word-break: break-all;
   user-select: all;
+  padding: 4px 8px;
+  background: var(--color-primary-bg);
+  border-radius: var(--radius-sm);
+  display: inline-block;
 }
 
 .variable-syntax:hover {
   text-decoration: underline;
+  background: var(--color-primary-hover-bg);
 }
 
 /* Variable description */
 .variable-description {
-  font-size: var(--font-size-xs);
+  font-size: 12px;
   color: var(--color-text-secondary);
-  line-height: var(--line-height-normal);
+  line-height: 1.4;
+  padding-left: 2px;
 }
 
-/* Action buttons row */
+/* Right section: actions */
 .variable-actions {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-1);
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.variable-actions .ant-btn {
+  padding: 0 8px;
+  height: 24px;
+  font-size: 12px;
 }
 
 /* Test result display */
 .variable-test-result {
-  font-size: var(--font-size-xs);
+  font-size: 12px;
   color: var(--color-success);
   background: var(--color-success-bg);
-  padding: var(--space-1) var(--space-2);
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
-  margin-top: var(--space-1);
+  margin-top: 4px;
   word-break: break-all;
+  border-left: 3px solid var(--color-success);
 }
 
 /* Test error display */
 .variable-test-error {
-  font-size: var(--font-size-xs);
+  font-size: 12px;
   color: var(--color-danger);
   background: var(--color-danger-bg);
-  padding: var(--space-1) var(--space-2);
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
-  margin-top: var(--space-1);
+  margin-top: 4px;
   word-break: break-all;
+  border-left: 3px solid var(--color-danger);
 }
 
 /* Float button custom styles */
 .variable-assistant-float-btn .ant-float-btn-body {
   background-color: var(--color-primary);
+  width: 48px;
+  height: 48px;
 }
 
 .variable-assistant-float-btn .ant-float-btn-icon {
   color: #ffffff;
+  font-size: 20px;
 }
 
 .variable-assistant-float-btn:hover .ant-float-btn-body {
   background-color: var(--color-primary-hover);
+  transform: scale(1.05);
 }
