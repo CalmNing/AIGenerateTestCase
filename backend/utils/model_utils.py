@@ -1046,10 +1046,8 @@ async def generate_testcases(
                     s for s in converted_preset_conditions
                     if not (isinstance(s, dict) and s.get("endpoint_id"))
                 ]
-                converted_steps = [
-                    s for s in converted_steps
-                    if not (isinstance(s, dict) and s.get("endpoint_id"))
-                ]
+                # 注意：不要从 converted_steps 中移除 API 调用步骤，它们需要保存到数据库
+                # converted_steps 保持不变，包含所有步骤（包括 API 调用步骤）
 
             # 创建DBTestCase对象，转换属性
             db_tc = DBTestCase(
