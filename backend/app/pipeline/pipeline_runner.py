@@ -3,6 +3,7 @@ Pipeline 编排器 — 串联 4 个阶段，管理进度和错误处理
 """
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
@@ -16,6 +17,16 @@ from app.pipeline.test_case_optimizer import TestCaseOptimizer
 from app.routes.skills import get_skill_body
 
 logger = logging.getLogger(__name__)
+
+# 蓝湖 / 飞书 URL 匹配
+_LANHU_URL_RE = re.compile(
+    r'https?://lanhuapp\.com/web/#/item/project/[a-z]+[^"\s]*',
+    re.IGNORECASE,
+)
+_FEISHU_URL_RE = re.compile(
+    r'https?://[a-zA-Z0-9-]+\.feishu\.cn/(?:wiki|docx)/([A-Za-z0-9_-]+)',
+    re.IGNORECASE,
+)
 
 # 内存中的 pipeline 任务状态存储
 _pipeline_tasks: Dict[str, Dict[str, Any]] = {}
@@ -36,12 +47,14 @@ class PipelineRunner:
         api_base_url: str = "https://api.deepseek.com",
         api_model: str = "deepseek-v4-flash",
         api_proxy_url: Optional[str] = None,
+        mcp_configs: Optional[List[Dict[str, Any]]] = None,
     ):
         self.db = db_session
         self.api_key = api_key
         self.api_base_url = api_base_url
         self.api_model = api_model
         self.api_proxy_url = api_proxy_url
+        self.mcp_configs = mcp_configs or []
 
         # 初始化 4 个 agent（共享同一模型配置）
         model_kwargs = dict(
@@ -154,6 +167,92 @@ class PipelineRunner:
 
         return task_id
 
+    async def _prefetch_document(self, requirement_text: str) -> str:
+        """预取飞书/蓝湖文档内容，替换需求文本中的链接为实际内容"""
+        # 尝试飞书文档
+        feishu_match = _FEISHU_URL_RE.search(requirement_text)
+        if feishu_match and self.mcp_configs:
+            token = feishu_match.group(1)
+            try:
+                from utils.lanhu_mcp_adapter import connect_single_server
+
+                enabled_configs = [c for c in self.mcp_configs if c.get("enabled", True)]
+                for config in enabled_configs:
+                    server_name, client, error = await connect_single_server(config)
+                    if error or client is None:
+                        continue
+                    try:
+                        tool_names = {t.get("name") for t in client.tools}
+                        document_id = token
+
+                        # wiki 链接需要先获取实际文档 token
+                        if "wiki_v2_space_getNode" in tool_names and "/wiki/" in feishu_match.group(0).lower():
+                            node_raw = await client.call_tool(
+                                "wiki_v2_space_getNode", {"params": {"token": token}}
+                            )
+                            import json as _json
+                            node_data = _json.loads(node_raw) if isinstance(node_raw, str) else (node_raw or {})
+                            node = node_data.get("node") if isinstance(node_data.get("node"), dict) else {}
+                            document_id = node.get("obj_token") or document_id
+
+                        if "docx_v1_document_rawContent" not in tool_names:
+                            continue
+                        raw = await client.call_tool(
+                            "docx_v1_document_rawContent", {"path": {"document_id": document_id}}
+                        )
+                        import json as _json
+                        data = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        content = data.get("content")
+                        if isinstance(content, str) and content.strip():
+                            logger.info(f"Pipeline: 已预取飞书文档 server={server_name} size={len(content)}")
+                            return content
+                    except Exception as e:
+                        logger.warning(f"Pipeline: 飞书预取失败 server={server_name}: {e}")
+                    finally:
+                        try:
+                            await client.disconnect()
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"Pipeline: 飞书 MCP 适配器加载失败: {e}")
+
+        # 尝试蓝湖文档
+        lanhu_match = _LANHU_URL_RE.search(requirement_text)
+        if lanhu_match and self.mcp_configs:
+            try:
+                from utils.lanhu_mcp_adapter import connect_single_server
+
+                enabled_configs = [c for c in self.mcp_configs if c.get("enabled", True)]
+                for config in enabled_configs:
+                    server_name, client, error = await connect_single_server(config)
+                    if error or client is None:
+                        continue
+                    try:
+                        tool_names = {t.get("name") for t in client.tools}
+                        if "get_lanhu_content" not in tool_names:
+                            continue
+                        raw = await client.call_tool(
+                            "get_lanhu_content", {"url": lanhu_match.group(0)}
+                        )
+                        import json as _json
+                        data = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        content = data.get("content") or data.get("text")
+                        if isinstance(content, str) and content.strip():
+                            logger.info(f"Pipeline: 已预取蓝湖文档 server={server_name} size={len(content)}")
+                            return content
+                    except Exception as e:
+                        logger.warning(f"Pipeline: 蓝湖预取失败 server={server_name}: {e}")
+                    finally:
+                        try:
+                            await client.disconnect()
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"Pipeline: 蓝湖 MCP 适配器加载失败: {e}")
+
+        # 无文档链接或预取失败，返回原文
+        return requirement_text
+
     async def _run_pipeline(
         self,
         task_id: str,
@@ -165,6 +264,14 @@ class PipelineRunner:
         from db.models import RequirementPoint, TestPoint, TestCase
 
         try:
+            # 预取飞书/蓝湖文档内容
+            if _FEISHU_URL_RE.search(requirement_text) or _LANHU_URL_RE.search(requirement_text):
+                self._update_progress(task_id, 1, "需求拆分", 2, "正在预取文档内容...")
+                prefetched = await self._prefetch_document(requirement_text)
+                if prefetched != requirement_text:
+                    requirement_text = prefetched
+                    logger.info(f"Pipeline: 文档预取成功，内容长度 {len(requirement_text)}")
+
             # ========== 阶段1: 需求拆分 (0-25%) ==========
             self._update_progress(task_id, 1, "需求拆分", 5, "正在分析需求文档...")
 

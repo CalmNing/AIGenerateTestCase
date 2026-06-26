@@ -12,9 +12,10 @@ from sqlmodel import select
 
 from app.deps import SessionDep, CurrentUser
 from app.pipeline.pipeline_runner import PipelineRunner, get_pipeline_task
-from db.models import RequirementPoint, TestPoint, TestCase
+from db.models import RequirementPoint, TestPoint, TestCase, McpServer
 from utils.base_response import Response
 from config import config_manager
+from app.permissions import Permission, get_user_permissions
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,21 @@ async def generate_v2(
     if model_type == "api" and not api_key:
         raise HTTPException(status_code=400, detail="API Key未配置，请先在配置页面设置")
 
+    # 加载 MCP 服务器配置（用于飞书/蓝湖文档预取）
+    mcp_configs = []
+    if Permission.MCP_MANAGE in get_user_permissions(user):
+        mcp_servers_db = session.exec(
+            select(McpServer).where(
+                McpServer.user_id == user.user_id,
+                McpServer.enabled == True,
+            )
+        ).all()
+        mcp_configs = [
+            server.model_dump(exclude={"id", "created_at", "updated_at", "user_id"})
+            for server in mcp_servers_db
+        ]
+        logger.info(f"Pipeline: 已加载 {len(mcp_configs)} 个 MCP 服务器配置")
+
     # 创建 pipeline runner
     runner = PipelineRunner(
         db_session=session,
@@ -81,6 +97,7 @@ async def generate_v2(
         api_base_url=api_base_url,
         api_model=api_model,
         api_proxy_url=api_proxy_url or None,
+        mcp_configs=mcp_configs,
     )
 
     # 启动 pipeline
