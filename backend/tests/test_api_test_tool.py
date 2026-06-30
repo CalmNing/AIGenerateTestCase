@@ -13,8 +13,8 @@ from app.services.api_test_tool import (
     endpoints_from_spec,
     build_body_from_schema,
     generate_unit_test_steps,
-    _run_assertions,
 )
+from app.services.assertion_engine import _run_assertions
 
 
 _SPEC = {
