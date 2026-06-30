@@ -144,7 +144,6 @@ const App: React.FC = () => {
     try {
       const response: ApiResponse<Session[]> | any = await sessionApi.getSessions();
       if (response.code === 200 && response.data) {
-        console.log('Setting sessions:', response.data);
         setSessions(response.data);
         if (response.data.length > 0) {
           setSelectedSession(response.data[0]);
@@ -1081,14 +1080,6 @@ const App: React.FC = () => {
 
       // 只有当requirement非空或imageBase64非空时才调用API
       if (requirement.trim() || imageBase64) {
-        console.log('调用API前的状态:', {
-          sessionId: selectedSession.id,
-          requirement: requirement.trim(),
-          hasModelConfig: !!modelConfig,
-          hasImageBase64: !!imageBase64,
-          imageBase64Length: imageBase64?.length || 0
-        });
-
         // 调用生成测试用例API（后端会在生成成功后自动保存历史提示词）
         const response: ApiResponse<TestCase> | any = await testcaseApi.generateTestcases(
           selectedSession.id,
@@ -1101,7 +1092,6 @@ const App: React.FC = () => {
           selectedApiProjectId,
           Object.keys(apiEndpointOverrides).length > 0 ? apiEndpointOverrides : null
         );
-        console.log('生成测试用例API响应:', response);
 
         if (response.code === 200) {
           loadTestcases(selectedSession.id);
@@ -1602,9 +1592,6 @@ const App: React.FC = () => {
                                 requirement={requirement}
                                 loading={loading}
                                 onRequirementChange={setRequirement}
-                                onGenerate={handleGenerateTestcases}
-                                // imageBase64={imageBase64}
-                                // onImageChange={setImageBase64}
                                 historyPromptRefreshKey={historyPromptRefreshKey}
                                 selectedApiEndpointId={selectedApiEndpointId}
                                 onApiEndpointChange={(ids: number[]) => setSelectedApiEndpointId(ids)}

@@ -185,6 +185,17 @@ export interface ScheduledTask {
   request_names?: Array<{ id: number; name: string }>;
 }
 
+// 定时任务创建/更新载荷（不含服务端生成字段）
+export type ScheduledTaskInput = Partial<Omit<ScheduledTask, 'id' | 'created_at' | 'updated_at' | 'user_id' | 'request_names'>>;
+
+// MCP 工具信息（list-tools 返回的单个服务器条目）
+export interface McpToolInfo {
+  name: string;
+  description?: string;
+  tools?: Array<{ name: string; description?: string }>;
+  error?: string;
+}
+
 // MCP 服务器配置类型（服务端持久化）
 export interface McpServer {
   id: number;

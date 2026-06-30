@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -148,9 +148,8 @@ export const testcaseApi = {
       }
     }
 
-    // 处理图片数据 - 修复
+    // 处理图片数据
     if (imageBase64) {
-      console.log('准备上传图片，base64长度:', imageBase64.length);
       try {
         // 将base64转换为Blob
         const byteCharacters = atob(imageBase64);
@@ -161,34 +160,16 @@ export const testcaseApi = {
         const byteArray = new Uint8Array(byteNumbers);
         const blob = new Blob([byteArray], { type: 'image/png' });
 
-        console.log('转换后的Blob:', { size: blob.size, type: blob.type });
-
         // 添加到FormData
         formData.append('file', blob, 'image.png');
-        console.log('图片Blob已添加到FormData');
-
-        // 验证FormData中是否包含file字段
-        console.log('FormData中是否包含file:', formData.has('file'));
       } catch (error) {
         console.error('图片转换或添加到FormData失败:', error);
       }
-    } else {
-      console.log('没有图片数据需要上传');
     }
-
-    // 打印FormData中的所有字段，用于调试
-    console.log('FormData内容:');
-    formData.forEach((value, key) => {
-      if (value instanceof Blob) {
-        console.log(`  ${key}: Blob (${value.type}, ${value.size} bytes)`);
-      } else {
-        console.log(`  ${key}: ${value}`);
-      }
-    });
 
     // 发送请求，axios会自动设置正确的Content-Type头
     // 包括multipart/form-data和边界信息
-    // ?????API??ID?????????ID?
+    // 追加 API 接口 ID 与项目 ID 到 FormData
     if (apiEndpointId !== null && apiEndpointId !== undefined) {
       const endpointStr = Array.isArray(apiEndpointId) ? apiEndpointId.join(",") : String(apiEndpointId);
       if (endpointStr) {
@@ -226,7 +207,7 @@ export const testcaseApi = {
   batchMoveTestcase: (testcaseIds: number[], sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
     api.post(`/testcases/move`, { testcase_ids: testcaseIds, session_id: sessionId, module_id: moduleId }),
 
-  /** ?????????? API ?? */
+  /** 执行测试用例对应的 API 调用 */
   executeTestcase: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ passed: boolean; status: string; result: any }>> =>
     api.post(`/testcases/${sessionId}/testcases/${testcaseId}/execute`),
 
@@ -240,13 +221,31 @@ export const testcaseApi = {
 
   // ========== 4阶段 Pipeline 深度生成 ==========
 
-  /** 启动 4 阶段深度生成 */
-  generateV2: (sessionId: number, requirementText: string, selectedSkills?: string[]): Promise<ApiResponse<{ task_id: string }>> => {
+  /** 启动 4 阶段深度生成（支持接口测试和功能测试） */
+  generateV2: (
+    sessionId: number,
+    requirementText: string,
+    options?: {
+      selectedSkills?: string[];
+      apiEndpointIds?: number[];
+      apiProjectId?: number | null;
+      apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
+    }
+  ): Promise<ApiResponse<{ task_id: string }>> => {
     const formData = new FormData();
     formData.append("session_id", sessionId.toString());
     formData.append("requirement_text", requirementText);
-    if (selectedSkills && selectedSkills.length > 0) {
-      formData.append("selected_skills", JSON.stringify(selectedSkills));
+    if (options?.selectedSkills && options.selectedSkills.length > 0) {
+      formData.append("selected_skills", JSON.stringify(options.selectedSkills));
+    }
+    if (options?.apiEndpointIds && options.apiEndpointIds.length > 0) {
+      formData.append("api_endpoint_id", options.apiEndpointIds.join(","));
+    }
+    if (options?.apiProjectId) {
+      formData.append("api_project_id", options.apiProjectId.toString());
+    }
+    if (options?.apiEndpointOverrides && Object.keys(options.apiEndpointOverrides).length > 0) {
+      formData.append("api_endpoint_overrides", JSON.stringify(options.apiEndpointOverrides));
     }
     return api.post('/testcases/generate-v2', formData);
   },
@@ -385,13 +384,13 @@ export const proxyApi = {
 // 定时任务API
 export const scheduledTaskApi = {
   // 获取所有定时任务
-  getTasks: (): Promise<ApiResponse<any[]>> => api.get('/scheduled-tasks'),
+  getTasks: (): Promise<ApiResponse<ScheduledTask[]>> => api.get('/scheduled-tasks'),
 
   // 创建定时任务
-  createTask: (task: any): Promise<ApiResponse<any>> => api.post('/scheduled-tasks', task),
+  createTask: (task: ScheduledTaskInput): Promise<ApiResponse<ScheduledTask>> => api.post('/scheduled-tasks', task),
 
   // 更新定时任务
-  updateTask: (taskId: number, task: any): Promise<ApiResponse<any>> => api.put(`/scheduled-tasks/${taskId}`, task),
+  updateTask: (taskId: number, task: ScheduledTaskInput): Promise<ApiResponse<ScheduledTask>> => api.put(`/scheduled-tasks/${taskId}`, task),
 
   // 删除定时任务
   deleteTask: (taskId: number): Promise<ApiResponse> => api.delete(`/scheduled-tasks/${taskId}`),
@@ -402,7 +401,7 @@ export const scheduledTaskApi = {
 
 // MCP 工具 API
 export const mcpApi = {
-  listTools: (servers: any[]): Promise<ApiResponse<any[]>> => api.post('/mcp/list-tools', servers),
+  listTools: (servers: McpServer[]): Promise<ApiResponse<McpToolInfo[]>> => api.post('/mcp/list-tools', servers),
 };
 
 // MCP 服务器配置持久化 API
