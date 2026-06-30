@@ -6,14 +6,7 @@ import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, TestCaseExecutionLog } from './types';
 import { sessionApi, testcaseApi, moduleApi, globalParameterApi, configApi } from './services/api';
-
-// 环境类型定义
-interface Environment {
-  id: string;
-  name: string;
-  parameters: Array<{ key: string; value: string }>;
-  is_default?: boolean;
-}
+import { useEnvironments, Environment } from './hooks/useEnvironments';
 import HomePage from './components/HomePage';
 import IoTDataPushPlatform from './components/iot/IoTDataPushPlatform';
 import IoTMockPlatform from './components/iot/IoTMockPlatform';
@@ -72,17 +65,32 @@ const App: React.FC = () => {
   const [requirement, setRequirement] = useState('');
   const [loading, setLoading] = useState(false);
   
-  // 全局参数管理
-  const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]);
-  const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>(() => {
-    return localStorage.getItem('currentEnvironmentId') || 'env-1';
-  });
-  const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false);
-  const [newEnvironmentName, setNewEnvironmentName] = useState('');
-  const [isAddEnvModalVisible, setIsAddEnvModalVisible] = useState(false);
-  const [isEditEnvModalVisible, setIsEditEnvModalVisible] = useState(false);
-  const [editingEnvironment, setEditingEnvironment] = useState<Environment | null>(null);
-  const [editEnvironmentName, setEditEnvironmentName] = useState('');
+  // 全局参数管理（迁移到 useEnvironments hook）
+  const {
+    environments,
+    currentEnvironmentId,
+    isGlobalParamsModalVisible,
+    setIsGlobalParamsModalVisible,
+    newEnvironmentName,
+    setNewEnvironmentName,
+    isAddEnvModalVisible,
+    setIsAddEnvModalVisible,
+    isEditEnvModalVisible,
+    setIsEditEnvModalVisible,
+    editingEnvironment,
+    editEnvironmentName,
+    setEditEnvironmentName,
+    getCurrentEnvironment,
+    handleSwitchEnvironment,
+    handleAddEnvironmentParameter,
+    handleRemoveEnvironmentParameter,
+    handleEnvironmentParameterChange,
+    handleAddEnvironment,
+    handleConfirmAddEnvironment,
+    handleRemoveEnvironment,
+    handleOpenEditEnvironment,
+    handleConfirmEditEnvironment,
+  } = useEnvironments(canManageGlobalParams);
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
   const [executionLogTestcase, setExecutionLogTestcase] = useState<TestCase | null>(null);
   const [executionLogs, setExecutionLogs] = useState<TestCaseExecutionLog[]>([]);
@@ -1208,186 +1216,6 @@ const App: React.FC = () => {
     localStorage.setItem('currentPlatform', 'mock-api');
   };
   
-  // 全局参数管理函数
-  const fetchGlobalParameters = async (envId?: string | null) => {
-    try {
-      const response = await globalParameterApi.getEnvironments();
-      if (response.code === 200 && response.data) {
-        const backendEnvironments = response.data.map((env: any) => ({
-          id: env.id.toString(),
-          name: env.name,
-          parameters: env.parameters || [],
-          is_default: env.is_default
-        }));
-        if (backendEnvironments.length > 0) {
-          setEnvironments(backendEnvironments);
-          if (envId) {
-            setCurrentEnvironmentId(envId);
-            return;
-          }
-          // 优先使用 localStorage 中保存的环境，若不存在则使用默认环境
-          const savedEnvId = localStorage.getItem('currentEnvironmentId');
-          if (savedEnvId && backendEnvironments.find((env: any) => env.id === savedEnvId)) {
-            setCurrentEnvironmentId(savedEnvId);
-          } else {
-            const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
-            setCurrentEnvironmentId(defaultEnv.id);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch global parameters:', error);
-    }
-  };
-  
-  // 获取当前环境
-  const getCurrentEnvironment = (): Environment => {
-    return environments.find(env => env.id === currentEnvironmentId) || environments[0];
-  };
-  
-  // 切换环境
-  const handleSwitchEnvironment = (envId: string) => {
-    setCurrentEnvironmentId(envId);
-    localStorage.setItem('currentEnvironmentId', envId);
-  };
-  
-  // 保存环境到后端
-  const saveEnvironmentToBackend = async (environment: Environment) => {
-    try {
-      if (environment.id === 'env-1') {
-        // 创建新环境
-        const response = await globalParameterApi.createEnvironment({
-          name: environment.name,
-          parameters: environment.parameters,
-          is_default: environment.is_default || false
-        });
-        if (response.code === 200 && response.data) {
-          fetchGlobalParameters(response.data.id.toString());
-        }
-      } else {
-        // 更新现有环境
-        const response = await globalParameterApi.updateEnvironment(Number(environment.id), {
-          name: environment.name,
-          parameters: environment.parameters,
-          is_default: environment.is_default || false
-        });
-        if (response.code === 200) {
-          fetchGlobalParameters(environment.id);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to save environment:', error);
-    }
-  };
-  
-  // 添加环境参数
-  const handleAddEnvironmentParameter = async () => {
-    const newEnvironments = [...environments];
-    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
-    if (envIndex !== -1) {
-      const newParameters = [...newEnvironments[envIndex].parameters, { key: '', value: '' }];
-      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
-      setEnvironments(newEnvironments);
-      // 保存到后端
-      await saveEnvironmentToBackend(newEnvironments[envIndex]);
-    }
-  };
-  
-  // 删除环境参数
-  const handleRemoveEnvironmentParameter = async (index: number) => {
-    const newEnvironments = [...environments];
-    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
-    if (envIndex !== -1) {
-      const newParameters = newEnvironments[envIndex].parameters.filter((_, i) => i !== index);
-      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
-      setEnvironments(newEnvironments);
-      // 保存到后端
-      await saveEnvironmentToBackend(newEnvironments[envIndex]);
-    }
-  };
-  
-  // 处理环境参数变更
-  const handleEnvironmentParameterChange = async (index: number, field: 'key' | 'value', value: string) => {
-    const newEnvironments = [...environments];
-    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
-    if (envIndex !== -1) {
-      const newParameters = [...newEnvironments[envIndex].parameters];
-      newParameters[index] = { ...newParameters[index], [field]: value };
-      newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
-      setEnvironments(newEnvironments);
-      // 保存到后端
-      await saveEnvironmentToBackend(newEnvironments[envIndex]);
-    }
-  };
-  
-  // 打开添加环境模态框
-  const handleAddEnvironment = () => {
-    setNewEnvironmentName('');
-    setIsAddEnvModalVisible(true);
-  };
-  
-  // 确认添加环境
-  const handleConfirmAddEnvironment = async () => {
-    if (newEnvironmentName) {
-      try {
-        const response = await globalParameterApi.createEnvironment({
-          name: newEnvironmentName,
-          parameters: [],
-          is_default: environments.length === 0
-        });
-        if (response.code === 200 && response.data) {
-          fetchGlobalParameters(response.data.id.toString());
-          setIsAddEnvModalVisible(false);
-        }
-      } catch (error) {
-        console.error('Failed to add environment:', error);
-      }
-    }
-  };
-  
-  // 删除环境
-  const handleRemoveEnvironment = async (envId: string) => {
-    try {
-      const response = await globalParameterApi.deleteEnvironment(Number(envId));
-      if (response.code === 200) {
-        fetchGlobalParameters();
-      }
-    } catch (error) {
-      console.error('Failed to remove environment:', error);
-    }
-  };
-
-  // 打开编辑环境模态框
-  const handleOpenEditEnvironment = (env: Environment) => {
-    setEditingEnvironment(env);
-    setEditEnvironmentName(env.name);
-    setIsEditEnvModalVisible(true);
-  };
-
-  // 确认编辑环境
-  const handleConfirmEditEnvironment = async () => {
-    if (!editingEnvironment || !editEnvironmentName.trim()) return;
-    try {
-      const response = await globalParameterApi.updateEnvironment(Number(editingEnvironment.id), {
-        name: editEnvironmentName.trim(),
-        parameters: editingEnvironment.parameters,
-        is_default: editingEnvironment.is_default || false
-      });
-        if (response.code === 200 && response.data) {
-          fetchGlobalParameters(editingEnvironment.id);
-          setIsEditEnvModalVisible(false);
-        }
-    } catch (error) {
-      console.error('Failed to update environment:', error);
-    }
-  };
-  
-  // 加载全局参数
-  useEffect(() => {
-    if (canManageGlobalParams) {
-      fetchGlobalParameters();
-    }
-  }, [canManageGlobalParams]);
 
   return (
     <ConfigProvider
