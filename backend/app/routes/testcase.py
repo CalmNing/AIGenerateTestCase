@@ -420,26 +420,22 @@ def get_testcases(
         tc_dict["scenario_steps"] = scenario_steps_map.get(tc.scenario_id, []) if tc.scenario_id else []
         tc_items.append(tc_dict)
 
-    # 构建基础查询条件
-    count_query_base = [TestCase.session_id == session_id]
+    # 统计各状态计数：一次分组查询 + 一次 bug 计数（替代原 5 次 count 往返）
+    status_count_base = [TestCase.session_id == session_id]
     if module_id is not None:
-        count_query_base.append(TestCase.module_id == module_id)
-    totalNumber = session.scalar(select(func.count()).where(*count_query_base))
+        status_count_base.append(TestCase.module_id == module_id)
 
-    passed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.PASSED]
-    if module_id is not None:
-        passed_query.append(TestCase.module_id == module_id)
-    passed = session.scalar(select(func.count()).where(*passed_query))
+    status_rows = session.exec(
+        select(TestCase.status, func.count())
+        .where(*status_count_base)
+        .group_by(TestCase.status)
+    ).all()
+    status_counts = {row[0]: row[1] for row in status_rows}
 
-    failed_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.FAILED]
-    if module_id is not None:
-        failed_query.append(TestCase.module_id == module_id)
-    failed = session.scalar(select(func.count()).where(*failed_query))
-
-    not_run_query = [TestCase.session_id == session_id, TestCase.status == StatusValue.NOT_RUN]
-    if module_id is not None:
-        not_run_query.append(TestCase.module_id == module_id)
-    not_run = session.scalar(select(func.count()).where(*not_run_query))
+    passed = status_counts.get(StatusValue.PASSED.value, 0)
+    failed = status_counts.get(StatusValue.FAILED.value, 0)
+    not_run = status_counts.get(StatusValue.NOT_RUN.value, 0)
+    totalNumber = sum(status_counts.values())
 
     total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None]
     if module_id is not None:

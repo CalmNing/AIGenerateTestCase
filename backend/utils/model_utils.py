@@ -614,6 +614,133 @@ async def create_testcase_agent(
 
 
 # 生成测试用例
+def _parse_response(response) -> list:
+    """Parse a raw model/agent response into a list of TestCase objects.
+
+    Handles: dict with 'structured_response'/'response'/'messages',
+    ResponseFormat/FunctionalResponseFormat objects, objects exposing
+    `.response`, and tool_calls/invalid_tool_calls repair. Raises ValueError
+    on None or unsupported shapes. Pure function (no I/O).
+    """
+    import json as _json
+
+    local_testcases = None
+
+    # 增加更多的响应格式处理逻辑
+    if isinstance(response, dict):
+        if 'structured_response' in response:
+            # 格式1: 使用structured_response字段（API模型，结构化输出成功）
+            local_testcases = response['structured_response'].response
+        elif 'response' in response:
+            # 格式2: 直接包含response字段
+            local_testcases = response['response']
+        elif 'messages' in response:
+            # 格式3: agent 返回的 messages（含 invalid_tool_calls 或最终 JSON 内容）
+            messages = response.get('messages', [])
+            if local_testcases is None:
+                # 尝试从最后一条 AIMessage 的 content 中提取 JSON
+                for msg in reversed(messages):
+                    if hasattr(msg, 'content') and msg.content:
+                        text = msg.content if isinstance(msg.content, str) else str(msg.content)
+                        # 直接解析完整内容
+                        try:
+                            data = _json.loads(text)
+                            if isinstance(data, dict) and 'response' in data:
+                                testcase_dicts = data['response']
+                                if isinstance(testcase_dicts, list):
+                                    rebuilt = []
+                                    for d in testcase_dicts:
+                                        rebuilt.append(TestCase(**d))
+                                    local_testcases = rebuilt
+                                    break
+                        except _json.JSONDecodeError:
+                            pass
+                        if local_testcases is None:
+                            # 使用括号深度跟踪提取嵌套 JSON
+                            data = _extract_json_with_response(text)
+                            if data and 'response' in data and isinstance(data['response'], list):
+                                rebuilt = [TestCase(**d) for d in data['response']]
+                                local_testcases = rebuilt
+                                break
+            if local_testcases is None and messages:
+                # 尝试从 tool_calls 或 invalid_tool_calls 提取
+                last_msg = messages[-1]
+                # valid tool_calls
+                if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+                    for tc in last_msg.tool_calls:
+                        if tc.get('name') in ('ResponseFormat', 'FunctionalResponseFormat') and tc.get('args'):
+                            args = tc['args']
+                            if isinstance(args, str):
+                                repaired = _repair_json(args)
+                                try:
+                                    data = _json.loads(repaired)
+                                    if 'response' in data and isinstance(data['response'], list):
+                                        testcase_dicts = data['response']
+                                        rebuilt = []
+                                        for d in testcase_dicts:
+                                            rebuilt.append(TestCase(
+                                                case_name=d.get('case_name', ''),
+                                                steps=_normalize_steps(d.get('steps', [])),
+                                                preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
+                                                expected_results=d.get('expected_results', []),
+                                                case_level=d.get('case_level', 4),
+                                            ))
+                                        local_testcases = rebuilt
+                                        break
+                                except Exception:
+                                    continue
+                # invalid_tool_calls (fallback)
+                if local_testcases is None and hasattr(last_msg, 'invalid_tool_calls') and last_msg.invalid_tool_calls:
+                    for tc in last_msg.invalid_tool_calls:
+                        if tc.get('name') in ('ResponseFormat', 'FunctionalResponseFormat') and tc.get('args'):
+                            repaired = _repair_json(tc['args'])
+                            try:
+                                data = _json.loads(repaired)
+                                if 'response' in data and isinstance(data['response'], list):
+                                    testcase_dicts = data['response']
+                                    rebuilt = []
+                                    for d in testcase_dicts:
+                                        rebuilt.append(TestCase(
+                                            case_name=d.get('case_name', ''),
+                                            steps=_normalize_steps(d.get('steps', [])),
+                                            preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
+                                            expected_results=d.get('expected_results', []),
+                                            case_level=d.get('case_level', 4),
+                                        ))
+                                    local_testcases = rebuilt
+                                    break
+                            except Exception:
+                                continue
+            if local_testcases is None:
+                raise ValueError(
+                    "模型生成了无效的结构化输出（JSON 格式错误），"
+                    "请重试或简化需求文本。"
+                )
+    elif isinstance(response, (ResponseFormat, FunctionalResponseFormat)):
+        # 格式3: ResponseFormat 或 FunctionalResponseFormat 对象
+        local_testcases = response.response
+    elif response is None:
+        # 格式4: 模型未返回有效结果（NoneType）
+        logger.error(
+            "模型返回了 None（所有结构化输出方法均失败）。"
+            "API Key/Base URL/模型名称可能不正确。"
+        )
+        raise ValueError(
+            "模型调用未返回有效结果，请检查 API Key、Base URL 和模型名称设置后重试。"
+        )
+    elif hasattr(response, 'response'):
+        # 格式4: 具有response属性的对象
+        local_testcases = response.response
+    else:
+        # 格式5: 直接返回的列表
+        logger.warning(f"模型返回了非预期的响应格式: {type(response).__name__}")
+        raise ValueError(f"不支持的响应格式: {type(response).__name__}")
+
+    if local_testcases is None:
+        raise ValueError("模型生成了无效的结构化输出")
+    return local_testcases
+
+
 async def generate_testcases(
         session_id: int,
         module_id: int,
@@ -881,121 +1008,7 @@ async def generate_testcases(
 
     # 获取生成的测试用例
     try:
-        local_testcases = None
-
-        # 增加更多的响应格式处理逻辑
-        if isinstance(response, dict):
-            if 'structured_response' in response:
-                # 格式1: 使用structured_response字段（API模型，结构化输出成功）
-                local_testcases = response['structured_response'].response
-            elif 'response' in response:
-                # 格式2: 直接包含response字段
-                local_testcases = response['response']
-            elif 'messages' in response:
-                # 格式3: agent 返回的 messages（含 invalid_tool_calls 或最终 JSON 内容）
-                messages = response.get('messages', [])
-                if local_testcases is None:
-                    # 尝试从最后一条 AIMessage 的 content 中提取 JSON
-                    for msg in reversed(messages):
-                        if hasattr(msg, 'content') and msg.content:
-                            text = msg.content if isinstance(msg.content, str) else str(msg.content)
-                            import json as _json
-                            # 直接解析完整内容
-                            try:
-                                data = _json.loads(text)
-                                if isinstance(data, dict) and 'response' in data:
-                                    testcase_dicts = data['response']
-                                    if isinstance(testcase_dicts, list):
-                                        rebuilt = []
-                                        for d in testcase_dicts:
-                                            rebuilt.append(TestCase(**d))
-                                        local_testcases = rebuilt
-                                        break
-                            except _json.JSONDecodeError:
-                                pass
-                            if local_testcases is None:
-                                # 使用括号深度跟踪提取嵌套 JSON
-                                data = _extract_json_with_response(text)
-                                if data and 'response' in data and isinstance(data['response'], list):
-                                    rebuilt = [TestCase(**d) for d in data['response']]
-                                    local_testcases = rebuilt
-                                    break
-                if local_testcases is None and messages:
-                    # 尝试从 tool_calls 或 invalid_tool_calls 提取
-                    last_msg = messages[-1]
-                    # valid tool_calls
-                    if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
-                        for tc in last_msg.tool_calls:
-                            if tc.get('name') in ('ResponseFormat', 'FunctionalResponseFormat') and tc.get('args'):
-                                args = tc['args']
-                                if isinstance(args, str):
-                                    repaired = _repair_json(args)
-                                    try:
-                                        import json as _json
-                                        data = _json.loads(repaired)
-                                        if 'response' in data and isinstance(data['response'], list):
-                                            testcase_dicts = data['response']
-                                            rebuilt = []
-                                            for d in testcase_dicts:
-                                                rebuilt.append(TestCase(
-                                                    case_name=d.get('case_name', ''),
-                                                    steps=_normalize_steps(d.get('steps', [])),
-                                                    preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
-                                                    expected_results=d.get('expected_results', []),
-                                                    case_level=d.get('case_level', 4),
-                                                ))
-                                            local_testcases = rebuilt
-                                            break
-                                    except Exception:
-                                        continue
-                    # invalid_tool_calls (fallback)
-                    if local_testcases is None and hasattr(last_msg, 'invalid_tool_calls') and last_msg.invalid_tool_calls:
-                        for tc in last_msg.invalid_tool_calls:
-                            if tc.get('name') in ('ResponseFormat', 'FunctionalResponseFormat') and tc.get('args'):
-                                repaired = _repair_json(tc['args'])
-                                try:
-                                    import json as _json
-                                    data = _json.loads(repaired)
-                                    if 'response' in data and isinstance(data['response'], list):
-                                        testcase_dicts = data['response']
-                                        rebuilt = []
-                                        for d in testcase_dicts:
-                                            rebuilt.append(TestCase(
-                                                case_name=d.get('case_name', ''),
-                                                steps=_normalize_steps(d.get('steps', [])),
-                                                preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
-                                                expected_results=d.get('expected_results', []),
-                                                case_level=d.get('case_level', 4),
-                                            ))
-                                        local_testcases = rebuilt
-                                        break
-                                except Exception:
-                                    continue
-                if local_testcases is None:
-                    raise ValueError(
-                        "模型生成了无效的结构化输出（JSON 格式错误），"
-                        "请重试或简化需求文本。"
-                    )
-        elif isinstance(response, (ResponseFormat, FunctionalResponseFormat)):
-            # 格式3: ResponseFormat 或 FunctionalResponseFormat 对象
-            local_testcases = response.response
-        elif response is None:
-            # 格式4: 模型未返回有效结果（NoneType）
-            logger.error(
-                "模型返回了 None（所有结构化输出方法均失败）。"
-                "API Key/Base URL/模型名称可能不正确。"
-            )
-            raise ValueError(
-                "模型调用未返回有效结果，请检查 API Key、Base URL 和模型名称设置后重试。"
-            )
-        elif hasattr(response, 'response'):
-            # 格式4: 具有response属性的对象
-            local_testcases = response.response
-        else:
-            # 格式5: 直接返回的列表
-            # 这种情况通常不会发生，但为了容错，我们也处理一下
-            logger.warning(f"模型返回了非预期的响应格式: {type(response).__name__}")
-            raise ValueError(f"不支持的响应格式: {type(response).__name__}")
+        local_testcases = _parse_response(response)
 
         # 验证local_testcases是否为列表
         if not isinstance(local_testcases, list):

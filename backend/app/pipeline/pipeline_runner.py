@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # 内存中的 pipeline 任务状态存储
 _pipeline_tasks: Dict[str, Dict[str, Any]] = {}
 
+# 并发度：同时进行的 LLM 调用上限，避免 API 限流
+_PIPELINE_CONCURRENCY = 4
+
 
 def get_pipeline_task(task_id: str) -> Optional[Dict[str, Any]]:
     """获取 pipeline 任务状态"""
@@ -241,35 +244,37 @@ class PipelineRunner:
 
             # ========== 阶段2: 测试点生成 (25-50%) ==========
             all_test_points = []
-            completed = 0
+            sem = asyncio.Semaphore(_PIPELINE_CONCURRENCY)
+            total_rp = len(req_points)
 
-            for i, rp in enumerate(req_points):
-                self._update_progress(
-                    task_id, 2, "测试点生成",
-                    25 + int((i / len(req_points)) * 25),
-                    f"正在为需求点 {i+1}/{len(req_points)} 生成测试点..."
-                )
+            async def _gen_for_point(rp):
+                async with sem:
+                    try:
+                        return rp, await self.tp_generator.generate(rp.content)
+                    except Exception as e:
+                        logger.error(f"需求点 {rp.id} 测试点生成失败: {e}")
+                        return rp, []
 
-                try:
-                    tp_data_list = await self.tp_generator.generate(rp.content)
+            self._update_progress(
+                task_id, 2, "测试点生成", 25,
+                f"正在为 {total_rp} 个需求点并发生成测试点..."
+            )
+            tp_results = await asyncio.gather(*[_gen_for_point(rp) for rp in req_points])
 
-                    for tp_data in tp_data_list:
-                        tp = TestPoint(
-                            requirement_point_id=rp.id,
-                            session_id=session_id,
-                            content=tp_data.get("content", ""),
-                            test_type=tp_data.get("test_type", "functional"),
-                            design_method=tp_data.get("design_method", ""),
-                            priority=tp_data.get("priority", "medium"),
-                            user_id=user_id,
-                        )
-                        self.db.add(tp)
-                        all_test_points.append(tp)
-
-                    completed += 1
-                except Exception as e:
-                    logger.error(f"需求点 {i+1} 测试点生成失败: {e}")
-                    completed += 1
+            # 收集后统一写库（Session 非协程安全，写操作不并发）
+            for rp, tp_data_list in tp_results:
+                for tp_data in tp_data_list:
+                    tp = TestPoint(
+                        requirement_point_id=rp.id,
+                        session_id=session_id,
+                        content=tp_data.get("content", ""),
+                        test_type=tp_data.get("test_type", "functional"),
+                        design_method=tp_data.get("design_method", ""),
+                        priority=tp_data.get("priority", "medium"),
+                        user_id=user_id,
+                    )
+                    self.db.add(tp)
+                    all_test_points.append(tp)
 
             self.db.commit()
             for tp in all_test_points:
@@ -290,15 +295,10 @@ class PipelineRunner:
 
             # 加载原始需求文档作为上下文
             requirement_content = requirement_text
+            design_sem = asyncio.Semaphore(_PIPELINE_CONCURRENCY)
 
-            for batch_idx, batch in enumerate(batches):
-                progress = 50 + int((batch_idx / len(batches)) * 35)
-                self._update_progress(
-                    task_id, 3, "用例设计", progress,
-                    f"正在设计{'接口' if is_api_test else '功能'}测试用例... 批次 {batch_idx+1}/{len(batches)}"
-                )
-
-                try:
+            async def _design_batch(batch):
+                async with design_sem:
                     test_points_for_batch = [
                         {
                             "id": tp.id,
@@ -309,63 +309,66 @@ class PipelineRunner:
                         }
                         for tp in batch
                     ]
+                    try:
+                        return await self.tc_designer.design_batch(
+                            test_points_for_batch, requirement_content,
+                            is_api_test=is_api_test,
+                            api_context=api_context,
+                        )
+                    except Exception as e:
+                        logger.error(f"批次用例设计失败: {e}")
+                        return []
 
-                    cases_data = await self.tc_designer.design_batch(
-                        test_points_for_batch, requirement_content,
-                        is_api_test=is_api_test,
-                        api_context=api_context,
+            self._update_progress(
+                task_id, 3, "用例设计", 50,
+                f"正在并发设计{'接口' if is_api_test else '功能'}测试用例... 共 {len(batches)} 批次"
+            )
+            batch_results = await asyncio.gather(*[_design_batch(b) for b in batches])
+
+            # 收集后统一写库（Session 非协程安全，写操作不并发）
+            for cases_data in batch_results:
+                for case_data in cases_data:
+                    steps = case_data.get("test_steps", [])
+
+                    # 根据测试类型设置不同的字段
+                    tc_kwargs = dict(
+                        case_name=case_data.get("title", ""),
+                        steps=steps if isinstance(steps, list) else [],
+                        preset_conditions=[case_data.get("preconditions", "")] if case_data.get("preconditions") else [],
+                        case_level=4,
+                        session_id=session_id,
+                        module_id=None,
+                        test_point_id=case_data.get("test_point_id"),
+                        test_type=case_data.get("test_type"),
+                        design_method=case_data.get("design_method"),
+                        user_id=user_id,
                     )
 
-                    for case_data in cases_data:
-                        # 转换 test_steps 为 JSON 字符串存储
-                        steps = case_data.get("test_steps", [])
-                        steps_str = ""
-                        if steps:
-                            steps_str = json.dumps(steps, ensure_ascii=False)
+                    if is_api_test:
+                        # 接口测试：设置 API 相关字段
+                        tc_kwargs["expected_results"] = [
+                            s.get("description", "") if isinstance(s, dict) else str(s)
+                            for s in steps
+                        ] if steps else []
+                        if api_endpoint_ids:
+                            tc_kwargs["api_endpoint_id"] = ",".join(str(eid) for eid in api_endpoint_ids)
+                        if api_project_id:
+                            tc_kwargs["api_project_id"] = api_project_id
+                        # 保存断言规则
+                        assertions = case_data.get("assertions")
+                        if assertions:
+                            tc_kwargs["assertions"] = assertions
+                    else:
+                        # 功能测试：纯文本步骤
+                        tc_kwargs["expected_results"] = [
+                            s.get("expected", "") for s in steps
+                        ] if steps else []
 
-                        # 根据测试类型设置不同的字段
-                        tc_kwargs = dict(
-                            case_name=case_data.get("title", ""),
-                            steps=steps if isinstance(steps, list) else [],
-                            preset_conditions=[case_data.get("preconditions", "")] if case_data.get("preconditions") else [],
-                            case_level=4,
-                            session_id=session_id,
-                            module_id=None,
-                            test_point_id=case_data.get("test_point_id"),
-                            test_type=case_data.get("test_type"),
-                            design_method=case_data.get("design_method"),
-                            user_id=user_id,
-                        )
+                    tc = TestCase(**tc_kwargs)
+                    self.db.add(tc)
+                    all_test_cases.append(tc)
 
-                        if is_api_test:
-                            # 接口测试：设置 API 相关字段
-                            tc_kwargs["expected_results"] = [
-                                s.get("description", "") if isinstance(s, dict) else str(s)
-                                for s in steps
-                            ] if steps else []
-                            if api_endpoint_ids:
-                                tc_kwargs["api_endpoint_id"] = ",".join(str(eid) for eid in api_endpoint_ids)
-                            if api_project_id:
-                                tc_kwargs["api_project_id"] = api_project_id
-                            # 保存断言规则
-                            assertions = case_data.get("assertions")
-                            if assertions:
-                                tc_kwargs["assertions"] = assertions
-                        else:
-                            # 功能测试：纯文本步骤
-                            tc_kwargs["expected_results"] = [
-                                s.get("expected", "") for s in steps
-                            ] if steps else []
-
-                        tc = TestCase(**tc_kwargs)
-                        self.db.add(tc)
-                        all_test_cases.append(tc)
-
-                    self.db.commit()
-
-                except Exception as e:
-                    logger.error(f"批次 {batch_idx+1} 用例设计失败: {e}")
-
+            self.db.commit()
             # 刷新获取 ID
             for tc in all_test_cases:
                 self.db.refresh(tc)
