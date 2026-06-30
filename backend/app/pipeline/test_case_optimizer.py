@@ -1,22 +1,21 @@
 """
 Agent 4: 测试用例优化专家
 优化测试用例质量（扩展简陋、精简冗长、提升模糊描述）
+支持功能测试和接口测试两种模式
 """
 import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
-
 from app.pipeline.prompts import TEST_CASE_OPTIMIZER_SYSTEM, TEST_CASE_BATCH_OPTIMIZE_USER
-from app.pipeline.schemas import TestCaseOptimizationResult
+from app.pipeline.schemas import TestCaseOptimizationResult, ApiTestCaseOptimizationResult
+from utils.llm_factory import build_chat_model
 
 logger = logging.getLogger(__name__)
 
 
 class TestCaseOptimizer:
-    """测试用例优化 Agent"""
+    """测试用例优化 Agent（支持功能测试和接口测试）"""
 
     def __init__(
         self,
@@ -25,32 +24,22 @@ class TestCaseOptimizer:
         api_model: str = "deepseek-v4-flash",
         api_proxy_url: Optional[str] = None,
     ):
-        extra_kwargs = {}
-        if api_proxy_url:
-            import httpx
-            extra_kwargs["http_async_client"] = httpx.AsyncClient(
-                proxy=api_proxy_url,
-                timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
-            )
-
-        self.model = ChatOpenAI(
-            model=api_model,
-            temperature=0,
-            api_key=SecretStr(api_key),
-            base_url=api_base_url or "https://api.deepseek.com",
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
-            **extra_kwargs,
+        self.model = build_chat_model(
+            api_key, api_base_url, api_model, api_proxy_url, max_tokens=None
         )
 
-    async def optimize(self, test_cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def optimize(
+        self,
+        test_cases: List[Dict[str, Any]],
+        *,
+        is_api_test: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         批量优化测试用例
 
         Args:
             test_cases: 测试用例列表，每个含 id, title, description, preconditions, test_steps
+            is_api_test: 是否为接口测试模式
 
         Returns:
             List[dict]: 优化后的测试用例列表
@@ -60,13 +49,16 @@ class TestCaseOptimizer:
         # 简化传给AI的数据
         simplified = []
         for tc in test_cases:
-            simplified.append({
+            item = {
                 "id": tc.get("id"),
                 "title": tc.get("title", ""),
                 "description": tc.get("description", ""),
                 "preconditions": tc.get("preconditions", ""),
                 "test_steps": tc.get("test_steps", []),
-            })
+            }
+            if is_api_test:
+                item["assertions"] = tc.get("assertions", [])
+            simplified.append(item)
 
         cases_json = json.dumps(simplified, ensure_ascii=False, indent=2)
         user_prompt = TEST_CASE_BATCH_OPTIMIZE_USER.format(test_cases=cases_json)
@@ -75,15 +67,18 @@ class TestCaseOptimizer:
             {"role": "user", "content": user_prompt},
         ]
 
-        logger.info(f"开始优化测试用例，共 {len(test_cases)} 个...")
+        schema = ApiTestCaseOptimizationResult if is_api_test else TestCaseOptimizationResult
+        mode_label = "接口测试" if is_api_test else "功能测试"
+
+        logger.info(f"开始优化{mode_label}用例，共 {len(test_cases)} 个...")
         result = await _structured_output_robust(
-            self.model, TestCaseOptimizationResult, messages
+            self.model, schema, messages
         )
 
         if result is None:
-            raise ValueError("测试用例优化失败：模型返回空结果")
+            raise ValueError(f"{mode_label}用例优化失败：模型返回空结果")
 
-        if isinstance(result, TestCaseOptimizationResult):
+        if isinstance(result, (TestCaseOptimizationResult, ApiTestCaseOptimizationResult)):
             optimized = [c.model_dump() for c in result.optimized_cases]
         elif isinstance(result, dict):
             optimized = result.get("optimized_cases", [])
@@ -106,6 +101,8 @@ class TestCaseOptimizer:
                 merged["preconditions"] = opt.get("preconditions", original.get("preconditions", ""))
                 if opt.get("test_steps"):
                     merged["test_steps"] = opt["test_steps"]
+                if is_api_test and opt.get("assertions"):
+                    merged["assertions"] = opt["assertions"]
                 final_cases.append(merged)
             elif original:
                 # 优化结果无效，保留原始
@@ -117,5 +114,5 @@ class TestCaseOptimizer:
             if tc.get("id") not in returned_ids:
                 final_cases.append(tc)
 
-        logger.info(f"测试用例优化完成，共 {len(final_cases)} 个用例")
+        logger.info(f"{mode_label}用例优化完成，共 {len(final_cases)} 个用例")
         return final_cases

@@ -3,7 +3,7 @@
 Phase 1.2 extracts these into app/services/api_context.py; the assertions
 here must hold before and after that move. Uses in-memory DB, no LLM.
 """
-from app.routes.pipeline import _parse_endpoint_ids, _build_api_context
+from app.services.api_context import parse_endpoint_ids as _parse_endpoint_ids, build_api_context as _build_api_context
 from db.models import ApiProject, ApiEndpoint
 
 

@@ -1,22 +1,23 @@
 """
 Agent 3: 测试用例设计专家
-为每个测试点生成详细测试用例
+为每个测试点生成详细测试用例，支持功能测试和接口测试两种模式
 """
 import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
-
-from app.pipeline.prompts import TEST_CASE_DESIGNER_SYSTEM, TEST_CASE_DESIGN_USER
-from app.pipeline.schemas import TestCaseDesignResult
+from app.pipeline.prompts import (
+    TEST_CASE_DESIGNER_SYSTEM, TEST_CASE_DESIGN_USER,
+    API_TEST_CASE_DESIGNER_SYSTEM, API_TEST_CASE_DESIGN_USER,
+)
+from app.pipeline.schemas import TestCaseDesignResult, ApiTestCaseDesignResult
+from utils.llm_factory import build_chat_model
 
 logger = logging.getLogger(__name__)
 
 
 class TestCaseDesigner:
-    """测试用例设计 Agent"""
+    """测试用例设计 Agent（支持功能测试和接口测试）"""
 
     def __init__(
         self,
@@ -25,30 +26,17 @@ class TestCaseDesigner:
         api_model: str = "deepseek-v4-flash",
         api_proxy_url: Optional[str] = None,
     ):
-        extra_kwargs = {}
-        if api_proxy_url:
-            import httpx
-            extra_kwargs["http_async_client"] = httpx.AsyncClient(
-                proxy=api_proxy_url,
-                timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
-            )
-
-        self.model = ChatOpenAI(
-            model=api_model,
-            temperature=0,
-            api_key=SecretStr(api_key),
-            base_url=api_base_url or "https://api.deepseek.com",
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
-            **extra_kwargs,
+        self.model = build_chat_model(
+            api_key, api_base_url, api_model, api_proxy_url, max_tokens=None
         )
 
     async def design_batch(
         self,
         test_points: List[Dict[str, Any]],
         requirement_content: str = "",
+        *,
+        is_api_test: bool = False,
+        api_context: str = "",
     ) -> List[Dict[str, Any]]:
         """
         为一批测试点设计测试用例
@@ -56,6 +44,8 @@ class TestCaseDesigner:
         Args:
             test_points: 测试点列表，每个含 id, content, test_type, design_method, priority
             requirement_content: 原始需求文档内容（提供业务上下文）
+            is_api_test: 是否为接口测试模式
+            api_context: API 接口信息文本（接口测试模式下必填）
 
         Returns:
             List[dict]: 测试用例列表
@@ -63,24 +53,38 @@ class TestCaseDesigner:
         from utils.model_utils import _structured_output_robust
 
         test_points_json = json.dumps(test_points, ensure_ascii=False, indent=2)
-        user_prompt = TEST_CASE_DESIGN_USER.format(
-            test_points=test_points_json,
-            requirement_content=requirement_content or "（无需求文档）",
-        )
+
+        if is_api_test:
+            system_prompt = API_TEST_CASE_DESIGNER_SYSTEM
+            user_prompt = API_TEST_CASE_DESIGN_USER.format(
+                test_points=test_points_json,
+                requirement_content=requirement_content or "（无需求文档）",
+                api_context=api_context or "（无接口信息）",
+            )
+            schema = ApiTestCaseDesignResult
+        else:
+            system_prompt = TEST_CASE_DESIGNER_SYSTEM
+            user_prompt = TEST_CASE_DESIGN_USER.format(
+                test_points=test_points_json,
+                requirement_content=requirement_content or "（无需求文档）",
+            )
+            schema = TestCaseDesignResult
+
         messages = [
-            {"role": "system", "content": TEST_CASE_DESIGNER_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
-        logger.info(f"开始设计测试用例，共 {len(test_points)} 个测试点...")
+        mode_label = "接口测试" if is_api_test else "功能测试"
+        logger.info(f"开始设计{mode_label}用例，共 {len(test_points)} 个测试点...")
         result = await _structured_output_robust(
-            self.model, TestCaseDesignResult, messages
+            self.model, schema, messages
         )
 
         if result is None:
-            raise ValueError("测试用例设计失败：模型返回空结果")
+            raise ValueError(f"{mode_label}用例设计失败：模型返回空结果")
 
-        if isinstance(result, TestCaseDesignResult):
+        if isinstance(result, (TestCaseDesignResult, ApiTestCaseDesignResult)):
             cases = [c.model_dump() for c in result.test_cases]
         elif isinstance(result, dict):
             cases = result.get("test_cases", [])
@@ -106,5 +110,5 @@ class TestCaseDesigner:
                 case.setdefault("design_method", tp.get("design_method", ""))
                 case.setdefault("priority", tp.get("priority", "medium"))
 
-        logger.info(f"测试用例设计完成，共 {len(cases)} 个用例")
+        logger.info(f"{mode_label}用例设计完成，共 {len(cases)} 个用例")
         return cases

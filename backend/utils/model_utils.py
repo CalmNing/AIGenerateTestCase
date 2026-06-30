@@ -8,6 +8,7 @@ import uuid
 from typing import List, Optional, Union, Any
 
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import InMemorySaver
@@ -21,7 +22,7 @@ from db.models import TestCase as DBTestCase, ApiScenario, ApiEndpoint
 from utils.prompts import PromptConfig
 from utils.models import (
     AllowedValue, AssertionRule, ApiCallKeyValue, ApiCallStep,
-    TestCase, ResponseFormat, TestCaseDesignMethod,
+    TestCase, ResponseFormat, FunctionalResponseFormat, TestCaseDesignMethod,
 )
 from utils.helpers import (
     ModelServiceUnavailableError,
@@ -46,6 +47,7 @@ from utils.helpers import (
     _build_history_context,
     _HISTORY_PROMPT_LIMIT,
 )
+from utils.llm_factory import build_chat_model
 
 
 def _parse_step_from_string(step_str: str) -> dict | str:
@@ -127,6 +129,13 @@ def _normalize_steps(steps: list) -> list:
 # 保持兼容性 re-export
 SYSTEM_PROMPT = PromptConfig.SYSTEM_PROMPT
 
+
+def _select_prompt(is_api_test: bool) -> str:
+    """根据是否为接口测试选择对应的提示词。"""
+    if is_api_test:
+        return PromptConfig.BASE_PROMPT + PromptConfig.API_PROMPT
+    return PromptConfig.BASE_PROMPT + PromptConfig.FUNCTIONAL_PROMPT
+
 try:
     from utils.lanhu_mcp_adapter import build_langchain_tools, build_tools_from_configs
 except ImportError:
@@ -136,14 +145,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 checkpointer = InMemorySaver()
 
-# 蓝湖 URL 匹配：提取页面链接，用于预检文档大小
-_LANHU_URL_RE = re.compile(
-    r'https?://lanhuapp\.com/web/#/item/project/[a-z]+[^"\s]*',
-    re.IGNORECASE,
-)
-_FEISHU_URL_RE = re.compile(
-    r'https?://[a-zA-Z0-9-]+\.feishu\.cn/(?:wiki|docx)/([A-Za-z0-9_-]+)',
-    re.IGNORECASE,
+# 蓝湖 / 飞书 URL 匹配（统一来源 utils.document_prefetch）
+from utils.document_prefetch import (
+    FEISHU_URL_RE as _FEISHU_URL_RE,
+    LANHU_URL_RE as _LANHU_URL_RE,
+    fetch_feishu_document,
 )
 _MAX_PREANALYZE_PAGES = 5
 
@@ -293,143 +299,210 @@ async def _fetch_lanhu_page_content(url: str, page_names: list[str]) -> str:
 
 async def _fetch_feishu_document_content(requirement: str, mcp_configs: list | None) -> str | None:
     """Read Feishu wiki/docx links directly via MCP and skip agent tool loops."""
-    match = _FEISHU_URL_RE.search(requirement or "")
-    if not match or not mcp_configs:
-        return None
-
-    token = match.group(1)
-    try:
-        from utils.lanhu_mcp_adapter import connect_single_server
-    except Exception:
-        logger.warning("Feishu MCP prefetch unavailable: adapter import failed", exc_info=True)
-        return None
-
-    enabled_configs = [c for c in mcp_configs if c.get("enabled", True)]
-    for config in enabled_configs:
-        server_name, client, error = await connect_single_server(config)
-        if error or client is None:
-            logger.info("Feishu MCP prefetch skipped unavailable server %s: %s", server_name, error)
-            continue
-        try:
-            tool_names = {t.get("name") for t in client.tools}
-            document_id = token
-            if "wiki_v2_space_getNode" in tool_names and "/wiki/" in match.group(0).lower():
-                node_raw = await client.call_tool("wiki_v2_space_getNode", {"params": {"token": token}})
-                node_data = _load_json_object(node_raw) or {}
-                node = node_data.get("node") if isinstance(node_data.get("node"), dict) else {}
-                document_id = node.get("obj_token") or document_id
-
-            if "docx_v1_document_rawContent" not in tool_names:
-                continue
-            raw = await client.call_tool("docx_v1_document_rawContent", {"path": {"document_id": document_id}})
-            data = _load_json_object(raw) or {}
-            content = data.get("content")
-            if isinstance(content, str) and content.strip():
-                logger.info("已预取飞书文档正文: server=%s document_id=%s size=%s", server_name, document_id, len(content))
-                return content
-        except Exception as e:
-            logger.warning("Feishu MCP prefetch failed on server %s: %s", server_name, e)
-        finally:
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-
-    return None
+    return await fetch_feishu_document(requirement, mcp_configs)
 
 
 async def _structured_output_robust(
     model: ChatOpenAI,
     schema: type[BaseModel],
     messages: list,
+    *,
+    method: str | None = None,
+    max_retries: int = 1,
     **kwargs,
 ) -> BaseModel | dict | None:
-    """尝试多种方法获取结构化输出，处理 DeepSeek 不支持 tool_choice 指定函数名的问题。
+    """使用 LangChain 获取结构化输出，失败时 fallback 到原始 API 调用。
 
-    尝试顺序：
-    1. method="function_calling"（标准方式，强制模型调用指定工具）
-    2. method="json_mode"（需要模型支持 response_format: json_object）
-    3. 直接模型调用 + 手动 JSON 解析（最通用的方式）
+    默认使用 method="function_calling"，兼容所有 OpenAI 兼容 API（包括 DeepSeek）。
+    当 LangChain 的 with_structured_output 返回 None 时，直接 fallback 到
+    OpenAI 原始 API 调用 + 手动解析，支持 tool_choice 和 prompt 指令 JSON 两种模式。
+    """
+    if method is None:
+        method = "function_calling"
+
+    for attempt in range(max_retries + 1):
+        try:
+            structured = model.with_structured_output(schema, method=method)
+            logger.info(f"结构化输出调用: method={method}, model={getattr(model, 'model_name', 'unknown')}, schema={schema.__name__}, attempt={attempt + 1}")
+            result = await structured.ainvoke(messages, **kwargs)
+            result_type = type(result).__name__ if result is not None else 'None'
+            logger.info(f"结构化输出结果类型: {result_type}")
+            if result is not None:
+                return result
+
+            # LangChain 返回 None — fallback 到原始 API 调用
+            logger.warning("LangChain 结构化输出返回 None，尝试 fallback 到原始 API 调用...")
+            return await _fallback_raw_api_call(model, schema, messages)
+
+        except Exception as e:
+            import traceback
+            logger.error(
+                f"结构化输出异常 (method={method}, attempt={attempt + 1}): {type(e).__name__}: {e}\n"
+                f"模型: {getattr(model, 'model_name', 'unknown')}, "
+                f"base_url: {getattr(model, 'openai_api_base', 'unknown')}\n"
+                f"完整堆栈:\n{traceback.format_exc()}"
+            )
+            if attempt < max_retries:
+                logger.warning(f"第 {attempt + 1} 次尝试异常，将重试...")
+                continue
+            return None
+
+    return None
+
+
+async def _fallback_raw_api_call(
+    model: ChatOpenAI,
+    schema: type[BaseModel],
+    messages: list,
+) -> BaseModel | None:
+    """Fallback: 直接调用 OpenAI API，手动解析返回的 JSON。
+
+    优先尝试 tool_choice 方式（标准 OpenAI 兼容模型）。
+    如果模型不支持 tool_choice（如 DeepSeek 推理模型），则在 prompt 中
+    嵌入 JSON Schema 指令，让模型直接输出 JSON 文本并解析。
     """
     import json as _json
-    import logging
-
-    _log = logging.getLogger(__name__)
-
-    # 方法1: function_calling（标准方式）
     try:
-        _log.info("尝试结构化输出方法: function_calling")
-        structured = model.with_structured_output(schema, method="function_calling")
-        result = await structured.ainvoke(messages, **kwargs)
-        if result is not None:
-            _log.info("结构化输出方法 function_calling 成功")
-            return result
-        _log.warning("结构化输出方法 function_calling 返回 None，尝试 json_mode")
-    except Exception as e:
-        _log.warning(f"结构化输出方法 function_calling 失败: {e}，尝试 json_mode")
+        from openai import AsyncOpenAI
 
-    # 方法2: json_mode（需要模型支持）
-    try:
-        _log.info("尝试结构化输出方法: json_mode")
-        structured = model.with_structured_output(schema, method="json_mode")
-        result = await structured.ainvoke(messages, **kwargs)
-        if result is not None:
-            _log.info("结构化输出方法 json_mode 成功")
-            return result
-        _log.warning("结构化输出方法 json_mode 也返回 None，尝试直接模型调用")
-    except Exception as e:
-        _log.warning(f"结构化输出方法 json_mode 失败: {e}，尝试直接模型调用")
+        # 从 ChatOpenAI 提取连接参数
+        api_key = ""
+        base_url = ""
+        model_name = getattr(model, 'model_name', 'deepseek-v4-pro')
+        if hasattr(model, 'openai_api_key'):
+            ak = model.openai_api_key
+            api_key = ak.get_secret_value() if hasattr(ak, 'get_secret_value') else str(ak)
+        if hasattr(model, 'openai_api_base'):
+            base_url = model.openai_api_base or ""
 
-    # 方法3: 直接模型调用 + JSON 解析
-    try:
-        _log.info("尝试直接模型调用 + JSON 解析")
-        schema_json = schema.model_json_schema()
-        schema_str = _json.dumps(schema_json, ensure_ascii=False)
-        json_prompt = (
-            "\n\n请严格按照以下 JSON Schema 输出，不要添加任何其他文字：\n"
-            f"{schema_str}\n\n"
-            "注意：整个响应必须是一个合法的 JSON 对象，不要使用 markdown 代码块包裹。"
-        )
-        # 在最后追加格式要求（避免修改原 messages 的内容）
-        enhanced_messages = list(messages) + [
-            ("human", json_prompt)
-        ]
-        raw_result = await model.ainvoke(enhanced_messages, **kwargs)
-        content = raw_result.content if hasattr(raw_result, 'content') and raw_result.content else str(raw_result)
-        # 尝试解析 JSON
-        data = _extract_json_with_response(content)
-        if data:
-            _log.info("直接模型调用 JSON 解析成功")
-            # 标准化字段名（test_cases→response, name→case_name 等）
-            data = _normalize_extracted_json(data)
-            try:
-                parsed = schema.model_validate(data)
-                return parsed
-            except Exception as ve:
-                _log.warning(f"标准化后的 JSON 验证失败（可能是字段类型不匹配）: {ve}")
-                _log.warning(f"标准化后的数据预览: {str(data)[:500]}")
-        else:
-            _log.warning(f"无法从模型响应中提取 JSON，响应预览: {str(content)[:500]}")
-        # 尝试将内容整体作为 JSON 解析并标准化
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url or None)
+
+        # 将 LangChain messages 转为 OpenAI 格式
+        # DeepSeek/OpenAI API 只接受 system/user/assistant/tool 角色，不接受 human
+        oai_messages = []
+        for msg in messages:
+            if hasattr(msg, 'type'):
+                role = msg.type if msg.type != 'human' else 'user'
+                if msg.type == 'system':
+                    role = 'system'
+                oai_messages.append({'role': role, 'content': msg.content})
+            elif isinstance(msg, tuple) and len(msg) == 2:
+                role, content = msg
+                if role == 'human':
+                    role = 'user'
+                oai_messages.append({'role': role, 'content': content})
+
+        # --- 策略 A: 使用 tool_choice（适用于支持 tool calling 的模型） ---
+        tool_schema = {
+            'type': 'function',
+            'function': {
+                'name': schema.__name__,
+                'description': schema.__doc__ or '',
+                'parameters': schema.model_json_schema(),
+            }
+        }
+
+        logger.info(f"[Fallback] 策略A: 使用 tool_choice, model={model_name}, messages={len(oai_messages)}条")
         try:
-            data = _json.loads(content)
-            if isinstance(data, dict):
-                data = _normalize_extracted_json(data)
-            elif isinstance(data, list):
-                # 顶层数组 → 包装为 {"test_cases": [...]}
-                data = _normalize_extracted_json({"test_cases": data})
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=oai_messages,
+                tools=[tool_schema],
+                tool_choice={'type': 'function', 'function': {'name': schema.__name__}},
+                max_completion_tokens=model.max_tokens or 16384,
+                temperature=model.temperature or 0,
+            )
+
+            msg = response.choices[0].message
+            logger.info(f"[Fallback] 策略A: finish_reason={response.choices[0].finish_reason}, tool_calls={len(msg.tool_calls) if msg.tool_calls else 0}")
+
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    args_str = tc.function.arguments
+                    logger.info(f"[Fallback] 策略A tool_call: name={tc.function.name}, args长度={len(args_str)}")
+                    try:
+                        parsed = _json.loads(args_str)
+                        result = schema(**parsed)
+                        logger.info(f"[Fallback] 策略A 解析成功: {len(result.response)} 条用例")
+                        return result
+                    except Exception as parse_err:
+                        logger.error(f"[Fallback] 策略A JSON 解析失败: {type(parse_err).__name__}: {parse_err}")
+                        logger.error(f"[Fallback] 策略A 完整 args:\n{args_str[:3000]}")
             else:
-                data = None
-            if data:
-                parsed = schema.model_validate(data)
-                if parsed:
-                    return parsed
+                content = str(msg.content) if msg.content else ""
+                logger.warning(f"[Fallback] 策略A 模型未返回 tool_call，将尝试策略B（prompt 指令 JSON）")
+                # content 不丢弃，策略B 仍可用
+        except Exception as tool_err:
+            err_msg = str(tool_err).lower()
+            # 当模型不支持 tool_choice 时（如 DeepSeek 推理模型），降级到策略B
+            if "does not support this tool_choice" in err_msg or "tool_choice" in err_msg:
+                logger.warning(f"[Fallback] 策略A tool_choice 不被模型支持，降级到策略B: {tool_err}")
+            else:
+                # 其它异常仍抛出让外层处理
+                raise
+
+        # --- 策略 B: 在 prompt 中嵌入 JSON Schema，让模型直接输出 JSON ---
+        logger.info(f"[Fallback] 策略B: 在 prompt 中嵌入 JSON Schema 要求直接输出 JSON")
+        schema_json_str = _json.dumps(schema.model_json_schema(), ensure_ascii=False, indent=2)
+
+        json_instruction = (
+            f"\n\n你必须严格按照下面的 JSON Schema 返回结果，只输出 JSON 对象，不要包含任何其他文字、markdown 代码块标记或解释。\n"
+            f"JSON Schema:\n{schema_json_str}\n\n"
+            f"请直接输出符合上述 Schema 的 JSON 对象："
+        )
+
+        # 将 JSON 指令追加到最后一条 user 消息
+        b_messages = list(oai_messages)  # 复制
+        for i in range(len(b_messages) - 1, -1, -1):
+            if b_messages[i]['role'] == 'user':
+                b_messages[i]['content'] = b_messages[i]['content'] + json_instruction
+                break
+        else:
+            # 没有 user 消息，追加一条
+            b_messages.append({'role': 'user', 'content': json_instruction})
+
+        b_response = await client.chat.completions.create(
+            model=model_name,
+            messages=b_messages,
+            max_completion_tokens=model.max_tokens or 16384,
+            temperature=model.temperature or 0,
+        )
+
+        b_content = b_response.choices[0].message.content or ""
+        logger.info(f"[Fallback] 策略B: finish_reason={b_response.choices[0].finish_reason}, content长度={len(b_content)}")
+        logger.info(f"[Fallback] 策略B: content 前 500 字符:\n{b_content[:500]}")
+
+        # 尝试从 content 中提取 JSON
+        # 先尝试去除可能的 markdown 代码块标记
+        clean_content = b_content.strip()
+        if clean_content.startswith("```"):
+            # 移除 ```json 或 ``` 标记
+            lines = clean_content.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            clean_content = "\n".join(lines).strip()
+
+        try:
+            parsed = _json.loads(clean_content)
+            result = schema(**parsed)
+            logger.info(f"[Fallback] 策略B 解析成功: {len(result.response)} 条用例")
+            return result
         except _json.JSONDecodeError:
-            _log.warning("模型响应不是有效的 JSON（无法进行 json.loads 解析）")
-        except Exception as pe:
-            _log.warning(f"整体 JSON 解析后验证失败: {pe}")
+            # 尝试使用完整 JSON 提取
+            obj = _extract_json_with_response(clean_content)
+            if obj:
+                try:
+                    result = schema(**obj)
+                    logger.info(f"[Fallback] 策略B _extract_json_with_response 解析成功: {len(result.response)} 条用例")
+                    return result
+                except Exception:
+                    pass
+            logger.error(f"[Fallback] 策略B JSON 解析失败，content 前 1000 字符:\n{clean_content[:1000]}")
+
     except Exception as e:
-        _log.warning(f"直接模型调用失败: {e}")
+        logger.error(f"[Fallback] 原始 API 调用失败: {type(e).__name__}: {e}")
 
     return None
 
@@ -461,6 +534,8 @@ async def create_testcase_agent(
         api_model: str = "deepseek-v4-flash",
         with_mcp_tools: bool = True,
         custom_tools: list | None = None,
+        system_prompt: str = "",
+        response_format: type = ResponseFormat,
 ):
     """创建测试用例生成agent，自动集成蓝湖 MCP 工具（如果可用）。"""
 
@@ -473,25 +548,8 @@ async def create_testcase_agent(
         api_proxy_url = api_proxy_url.strip() if api_proxy_url else None
         api_model = api_model.strip() if api_model else "deepseek-v4-flash"
 
-        # 构建 ChatOpenAI 的额外参数
-        extra_kwargs = {}
-        if api_proxy_url:
-            import httpx
-            extra_kwargs["http_async_client"] = httpx.AsyncClient(
-                proxy=api_proxy_url,
-                timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
-            )
-
-        model = ChatOpenAI(
-            model=api_model,
-            temperature=0,
-            api_key=SecretStr(api_key),
-            base_url=api_base_url or "https://api.deepseek.com",
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
-            **extra_kwargs,
+        model = build_chat_model(
+            api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
         )
 
         # 尝试加载蓝湖 MCP 工具
@@ -534,14 +592,14 @@ async def create_testcase_agent(
                 "- 获取到实际需求内容后，基于这些信息设计测试用例",
                 "- 如果工具返回信息不足，可以结合自己的知识对需求做适当的合理补充。",
             ])
-            TOOL_SYSTEM_PROMPT = SYSTEM_PROMPT + f"""
+            TOOL_SYSTEM_PROMPT = system_prompt + f"""
                                                 可用工具列表：
                                                 {tool_names}
                                                 注意事项：
                                                 {chr(10).join(tool_notes)}
                                                 """
         else:
-            TOOL_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+            TOOL_SYSTEM_PROMPT = system_prompt + """
                                                 重要：你没有可用的工具，不需要调用任何工具，直接回答用户的问题即可。
                                                 不要生成任何tool_calls相关的内容。
                                                 """
@@ -549,7 +607,7 @@ async def create_testcase_agent(
         agent = create_agent(
             model=model,
             system_prompt=TOOL_SYSTEM_PROMPT,
-            response_format=ResponseFormat,
+            response_format=ToolStrategy(response_format),
             tools=all_tools
         )
         return agent
@@ -569,6 +627,7 @@ async def generate_testcases(
         ollama_model: str = "",
         mcp_configs: list | None = None,
         selected_skill_names: list[str] | None = None,
+        is_api_test: bool = False,
         **kwargs
 ) -> tuple[List[DBTestCase], str]:
     """根据需求生成测试用例，返回 (testcases, effective_requirement)。"""
@@ -584,6 +643,10 @@ async def generate_testcases(
     api_model = api_model.strip() if api_model else "deepseek-v4-flash"
     ollama_url = ollama_url.strip() if ollama_url else ""
     ollama_model = ollama_model.strip() if ollama_model else ""
+
+    # 根据是否关联接口选择对应的提示词和 schema
+    selected_prompt = _select_prompt(is_api_test)
+    selected_schema = ResponseFormat if is_api_test else FunctionalResponseFormat
 
     _history_save_content = requirement  # 待保存的原始内容，后续可能被解析内容替换
 
@@ -655,7 +718,7 @@ async def generate_testcases(
     logger.info(
         f"入参 size: history={len(history_context)} | "
         f"requirement={len(requirement)} | "
-        f"schema={len(str(ResponseFormat.model_json_schema()))}"
+        f"schema={len(str(selected_schema.model_json_schema()))}"
     )
 
     # 注入选中的技能内容到提示词（适用于所有模型类型）
@@ -668,8 +731,10 @@ async def generate_testcases(
     if model_type == "api":
         try:
             # 从用户配置的 MCP 服务器构建工具
+            # 只有需求中包含文档链接时才加载 MCP 工具，纯文本需求不需要
             custom_mcp_tools = None
-            if not parsed_content and mcp_configs and build_tools_from_configs is not None:
+            has_doc_url = has_feishu_url or has_lanhu_url
+            if not parsed_content and has_doc_url and mcp_configs and build_tools_from_configs is not None:
                 try:
                     custom_mcp_tools = await build_tools_from_configs(mcp_configs)
                     if custom_mcp_tools:
@@ -680,29 +745,13 @@ async def generate_testcases(
             if parsed_content:
                 # 外部文档内容已预取到 prompt，直接调用模型结构化输出，跳过 agent ReAct 循环。
                 logger.info("文档内容已预取，直接调用模型（跳过 agent）")
-                direct_extra_kwargs = {}
-                if api_proxy_url:
-                    import httpx
-                    direct_extra_kwargs["http_async_client"] = httpx.AsyncClient(
-                        proxy=api_proxy_url,
-                        timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
-                    )
-                model = ChatOpenAI(
-                    model=api_model,
-                    temperature=0,
-                    api_key=SecretStr(api_key),
-                    base_url=api_base_url or "https://api.deepseek.com",
-                    max_tokens=None,
-                    timeout=None,
-                    max_retries=2,
-                    model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
-                    **direct_extra_kwargs,
+                model = build_chat_model(
+                    api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
                 )
-                _diagnostic_cb = _TokenUsageCallback()
                 response = await _structured_output_robust(
                     model,
-                    ResponseFormat,
-                    [("system", SYSTEM_PROMPT), ("human", requirement)],
+                    selected_schema,
+                    [("system", selected_prompt), ("human", requirement)],
                     config={"callbacks": [_diagnostic_cb]},
                 )
                 if _diagnostic_cb.mcp_permission_error:
@@ -720,6 +769,8 @@ async def generate_testcases(
                         api_model=api_model,
                         with_mcp_tools=has_lanhu_url,
                         custom_tools=custom_mcp_tools,
+                        system_prompt=selected_prompt,
+                        response_format=selected_schema,
                     )
                     logger.info(f"调用agent: requirement size={len(requirement)} preview={requirement[:300]}... tail={requirement[-200:]}")
                     _diagnostic_cb = _TokenUsageCallback()
@@ -729,7 +780,7 @@ async def generate_testcases(
                             "configurable": {
                                 "thread_id": f"{session_id}-{uuid.uuid4().hex[:12]}",
                             },
-                            "recursion_limit": 60,
+                            "recursion_limit": 150,
                             "callbacks": [_diagnostic_cb],
                         },
                     )
@@ -740,29 +791,14 @@ async def generate_testcases(
                 else:
                     # 无 MCP 工具时直接调用模型结构化输出，跳过 agent
                     logger.info("无 MCP 工具，直接调用模型结构化输出（跳过 agent）")
-                    direct_extra_kwargs = {}
-                    if api_proxy_url:
-                        import httpx
-                        direct_extra_kwargs["http_async_client"] = httpx.AsyncClient(
-                            proxy=api_proxy_url,
-                            timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
-                        )
-                    model = ChatOpenAI(
-                        model=api_model,
-                        temperature=0,
-                        api_key=SecretStr(api_key),
-                        base_url=api_base_url or "https://api.deepseek.com",
-                        max_tokens=None,
-                        timeout=None,
-                        max_retries=2,
-                        model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
-                        **direct_extra_kwargs,
+                    model = build_chat_model(
+                        api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
                     )
                     _diagnostic_cb = _TokenUsageCallback()
                     response = await _structured_output_robust(
                         model,
-                        ResponseFormat,
-                        [("system", SYSTEM_PROMPT), ("human", requirement)],
+                        selected_schema,
+                        [("system", selected_prompt), ("human", requirement)],
                         config={"callbacks": [_diagnostic_cb]},
                     )
         except _McpPermissionError:
@@ -807,10 +843,10 @@ async def generate_testcases(
             ollama_model=ollama_model
         )
         messages = [
-            ("system", f"{SYSTEM_PROMPT}"),
+            ("system", f"{selected_prompt}"),
             ("system", f""
                        f"严格使用json schema，"
-                       f"格式为：{ResponseFormat.model_json_schema()}，"
+                       f"格式为：{selected_schema.model_json_schema()}，"
                        f"只用JSON回复。"),
             ("human", requirement),
         ]
@@ -890,7 +926,7 @@ async def generate_testcases(
                     # valid tool_calls
                     if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
                         for tc in last_msg.tool_calls:
-                            if tc.get('name') == 'ResponseFormat' and tc.get('args'):
+                            if tc.get('name') in ('ResponseFormat', 'FunctionalResponseFormat') and tc.get('args'):
                                 args = tc['args']
                                 if isinstance(args, str):
                                     repaired = _repair_json(args)
@@ -915,7 +951,7 @@ async def generate_testcases(
                     # invalid_tool_calls (fallback)
                     if local_testcases is None and hasattr(last_msg, 'invalid_tool_calls') and last_msg.invalid_tool_calls:
                         for tc in last_msg.invalid_tool_calls:
-                            if tc.get('name') == 'ResponseFormat' and tc.get('args'):
+                            if tc.get('name') in ('ResponseFormat', 'FunctionalResponseFormat') and tc.get('args'):
                                 repaired = _repair_json(tc['args'])
                                 try:
                                     import json as _json
@@ -940,8 +976,8 @@ async def generate_testcases(
                         "模型生成了无效的结构化输出（JSON 格式错误），"
                         "请重试或简化需求文本。"
                     )
-        elif isinstance(response, ResponseFormat):
-            # 格式3: ResponseFormat对象
+        elif isinstance(response, (ResponseFormat, FunctionalResponseFormat)):
+            # 格式3: ResponseFormat 或 FunctionalResponseFormat 对象
             local_testcases = response.response
         elif response is None:
             # 格式4: 模型未返回有效结果（NoneType）

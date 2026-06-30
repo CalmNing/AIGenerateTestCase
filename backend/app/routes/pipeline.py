@@ -1,6 +1,7 @@
 """
 4阶段 Pipeline API 路由
 提供深度生成、进度查询、中间产物管理等端点
+支持功能测试和接口测试两种模式
 """
 import json
 import logging
@@ -12,7 +13,7 @@ from sqlmodel import select
 
 from app.deps import SessionDep, CurrentUser
 from app.pipeline.pipeline_runner import PipelineRunner, get_pipeline_task
-from db.models import RequirementPoint, TestPoint, TestCase, McpServer
+from db.models import RequirementPoint, TestPoint, TestCase, McpServer, ApiEndpoint, ApiProject
 from utils.base_response import Response
 from config import config_manager
 from app.permissions import Permission, get_user_permissions
@@ -44,11 +45,31 @@ class UpdateTestPointRequest(BaseModel):
     priority: Optional[str] = None
 
 
+def _parse_endpoint_ids(endpoint_id_str: str | int | None) -> list[int]:
+    """Deprecated shim — use app.services.api_context.parse_endpoint_ids."""
+    from app.services.api_context import parse_endpoint_ids
+    return parse_endpoint_ids(endpoint_id_str)
+
+
+def _build_api_context(
+    session,
+    api_endpoint_ids: list[int],
+    api_project_id: int | None,
+    endpoint_overrides: dict[int, dict],
+) -> tuple[str, dict[int, int]]:
+    """Deprecated shim — use app.services.api_context.build_api_context."""
+    from app.services.api_context import build_api_context
+    return build_api_context(session, api_endpoint_ids, api_project_id, endpoint_overrides)
+
+
 @router.post("/generate-v2")
 async def generate_v2(
     session_id: int = Form(...),
     requirement_text: str = Form(...),
     selected_skills: Optional[str] = Form(None),
+    api_endpoint_id: Optional[str] = Form(None),
+    api_project_id: Optional[str] = Form(None),
+    api_endpoint_overrides: Optional[str] = Form(default=None),
     session: SessionDep = None,
     user: CurrentUser = None,
 ):
@@ -56,6 +77,7 @@ async def generate_v2(
     启动 4 阶段深度生成 pipeline
 
     返回 task_id，前端可通过 /pipeline/{task_id}/status 轮询进度
+    支持功能测试（无接口）和接口测试（有关联接口）两种模式
     """
     # 解析 selected_skills
     skills_list = None
@@ -76,19 +98,37 @@ async def generate_v2(
         raise HTTPException(status_code=400, detail="API Key未配置，请先在配置页面设置")
 
     # 加载 MCP 服务器配置（用于飞书/蓝湖文档预取）
-    mcp_configs = []
-    if Permission.MCP_MANAGE in get_user_permissions(user):
-        mcp_servers_db = session.exec(
-            select(McpServer).where(
-                McpServer.user_id == user.user_id,
-                McpServer.enabled == True,
-            )
-        ).all()
-        mcp_configs = [
-            server.model_dump(exclude={"id", "created_at", "updated_at", "user_id"})
-            for server in mcp_servers_db
-        ]
-        logger.info(f"Pipeline: 已加载 {len(mcp_configs)} 个 MCP 服务器配置")
+    from app.services.mcp_loader import load_user_mcp_configs
+    mcp_configs = load_user_mcp_configs(session, user)
+
+    # 解析 API 端点参数
+    api_endpoint_ids = _parse_endpoint_ids(api_endpoint_id)
+    api_project_id_int = None
+    if api_project_id:
+        try:
+            api_project_id_int = int(api_project_id)
+        except (ValueError, TypeError):
+            pass
+
+    # 解析接口参数覆盖配置
+    endpoint_overrides: dict[int, dict] = {}
+    if api_endpoint_overrides:
+        try:
+            raw_overrides = json.loads(api_endpoint_overrides)
+            for eid_str, override in raw_overrides.items():
+                eid = int(eid_str)
+                if eid in api_endpoint_ids:
+                    endpoint_overrides[eid] = override
+        except (json.JSONDecodeError, ValueError, TypeError):
+            logger.warning("Pipeline: 端点覆盖配置解析失败，继续使用数据库默认值")
+
+    # 构建 API 接口信息文本
+    api_context = ""
+    endpoint_index_to_id = {}
+    if api_endpoint_ids:
+        api_context, endpoint_index_to_id = _build_api_context(
+            session, api_endpoint_ids, api_project_id_int, endpoint_overrides,
+        )
 
     # 创建 pipeline runner
     runner = PipelineRunner(
@@ -106,6 +146,10 @@ async def generate_v2(
         requirement_text=requirement_text,
         user_id=user.user_id if user else None,
         selected_skills=skills_list,
+        api_endpoint_ids=api_endpoint_ids or None,
+        api_project_id=api_project_id_int,
+        endpoint_index_to_id=endpoint_index_to_id,
+        api_context=api_context,
     )
 
     return Response(data={"task_id": task_id}, message="深度生成已启动")

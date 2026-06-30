@@ -1,9 +1,10 @@
 """
 Pipeline 编排器 — 串联 4 个阶段，管理进度和错误处理
+支持功能测试和接口测试两种模式
 """
 import asyncio
+import json
 import logging
-import re
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
@@ -15,18 +16,13 @@ from app.pipeline.test_point_generator import TestPointGenerator
 from app.pipeline.test_case_designer import TestCaseDesigner
 from app.pipeline.test_case_optimizer import TestCaseOptimizer
 from app.routes.skills import get_skill_body
+from utils.document_prefetch import (
+    FEISHU_URL_RE as _FEISHU_URL_RE,
+    LANHU_URL_RE as _LANHU_URL_RE,
+    prefetch_document,
+)
 
 logger = logging.getLogger(__name__)
-
-# 蓝湖 / 飞书 URL 匹配
-_LANHU_URL_RE = re.compile(
-    r'https?://lanhuapp\.com/web/#/item/project/[a-z]+[^"\s]*',
-    re.IGNORECASE,
-)
-_FEISHU_URL_RE = re.compile(
-    r'https?://[a-zA-Z0-9-]+\.feishu\.cn/(?:wiki|docx)/([A-Za-z0-9_-]+)',
-    re.IGNORECASE,
-)
 
 # 内存中的 pipeline 任务状态存储
 _pipeline_tasks: Dict[str, Dict[str, Any]] = {}
@@ -38,7 +34,7 @@ def get_pipeline_task(task_id: str) -> Optional[Dict[str, Any]]:
 
 
 class PipelineRunner:
-    """4阶段 Pipeline 编排器"""
+    """4阶段 Pipeline 编排器（支持功能测试和接口测试）"""
 
     def __init__(
         self,
@@ -129,6 +125,11 @@ class PipelineRunner:
         requirement_text: str,
         user_id: Optional[str] = None,
         selected_skills: Optional[List[str]] = None,
+        *,
+        api_endpoint_ids: Optional[List[int]] = None,
+        api_project_id: Optional[int] = None,
+        endpoint_index_to_id: Optional[Dict[int, int]] = None,
+        api_context: str = "",
     ) -> str:
         """
         启动 4 阶段 pipeline（异步执行）
@@ -138,6 +139,10 @@ class PipelineRunner:
             requirement_text: 需求文本
             user_id: 用户ID
             selected_skills: 选中的技能名称列表
+            api_endpoint_ids: API 接口 ID 列表
+            api_project_id: API 项目 ID
+            endpoint_index_to_id: 接口序号→数据库ID映射
+            api_context: API 接口信息文本
 
         Returns:
             task_id: 任务ID，可用于查询进度
@@ -162,96 +167,20 @@ class PipelineRunner:
 
         # 在后台执行 pipeline
         asyncio.create_task(
-            self._run_pipeline(task_id, session_id, requirement_text, user_id)
+            self._run_pipeline(
+                task_id, session_id, requirement_text, user_id,
+                api_endpoint_ids=api_endpoint_ids,
+                api_project_id=api_project_id,
+                endpoint_index_to_id=endpoint_index_to_id or {},
+                api_context=api_context,
+            )
         )
 
         return task_id
 
     async def _prefetch_document(self, requirement_text: str) -> str:
         """预取飞书/蓝湖文档内容，替换需求文本中的链接为实际内容"""
-        # 尝试飞书文档
-        feishu_match = _FEISHU_URL_RE.search(requirement_text)
-        if feishu_match and self.mcp_configs:
-            token = feishu_match.group(1)
-            try:
-                from utils.lanhu_mcp_adapter import connect_single_server
-
-                enabled_configs = [c for c in self.mcp_configs if c.get("enabled", True)]
-                for config in enabled_configs:
-                    server_name, client, error = await connect_single_server(config)
-                    if error or client is None:
-                        continue
-                    try:
-                        tool_names = {t.get("name") for t in client.tools}
-                        document_id = token
-
-                        # wiki 链接需要先获取实际文档 token
-                        if "wiki_v2_space_getNode" in tool_names and "/wiki/" in feishu_match.group(0).lower():
-                            node_raw = await client.call_tool(
-                                "wiki_v2_space_getNode", {"params": {"token": token}}
-                            )
-                            import json as _json
-                            node_data = _json.loads(node_raw) if isinstance(node_raw, str) else (node_raw or {})
-                            node = node_data.get("node") if isinstance(node_data.get("node"), dict) else {}
-                            document_id = node.get("obj_token") or document_id
-
-                        if "docx_v1_document_rawContent" not in tool_names:
-                            continue
-                        raw = await client.call_tool(
-                            "docx_v1_document_rawContent", {"path": {"document_id": document_id}}
-                        )
-                        import json as _json
-                        data = _json.loads(raw) if isinstance(raw, str) else (raw or {})
-                        content = data.get("content")
-                        if isinstance(content, str) and content.strip():
-                            logger.info(f"Pipeline: 已预取飞书文档 server={server_name} size={len(content)}")
-                            return content
-                    except Exception as e:
-                        logger.warning(f"Pipeline: 飞书预取失败 server={server_name}: {e}")
-                    finally:
-                        try:
-                            await client.disconnect()
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.warning(f"Pipeline: 飞书 MCP 适配器加载失败: {e}")
-
-        # 尝试蓝湖文档
-        lanhu_match = _LANHU_URL_RE.search(requirement_text)
-        if lanhu_match and self.mcp_configs:
-            try:
-                from utils.lanhu_mcp_adapter import connect_single_server
-
-                enabled_configs = [c for c in self.mcp_configs if c.get("enabled", True)]
-                for config in enabled_configs:
-                    server_name, client, error = await connect_single_server(config)
-                    if error or client is None:
-                        continue
-                    try:
-                        tool_names = {t.get("name") for t in client.tools}
-                        if "get_lanhu_content" not in tool_names:
-                            continue
-                        raw = await client.call_tool(
-                            "get_lanhu_content", {"url": lanhu_match.group(0)}
-                        )
-                        import json as _json
-                        data = _json.loads(raw) if isinstance(raw, str) else (raw or {})
-                        content = data.get("content") or data.get("text")
-                        if isinstance(content, str) and content.strip():
-                            logger.info(f"Pipeline: 已预取蓝湖文档 server={server_name} size={len(content)}")
-                            return content
-                    except Exception as e:
-                        logger.warning(f"Pipeline: 蓝湖预取失败 server={server_name}: {e}")
-                    finally:
-                        try:
-                            await client.disconnect()
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.warning(f"Pipeline: 蓝湖 MCP 适配器加载失败: {e}")
-
-        # 无文档链接或预取失败，返回原文
-        return requirement_text
+        return await prefetch_document(requirement_text, self.mcp_configs)
 
     async def _run_pipeline(
         self,
@@ -259,9 +188,16 @@ class PipelineRunner:
         session_id: int,
         requirement_text: str,
         user_id: Optional[str] = None,
+        *,
+        api_endpoint_ids: Optional[List[int]] = None,
+        api_project_id: Optional[int] = None,
+        endpoint_index_to_id: Optional[Dict[int, int]] = None,
+        api_context: str = "",
     ):
         """执行完整的 4 阶段 pipeline"""
         from db.models import RequirementPoint, TestPoint, TestCase
+
+        is_api_test = bool(api_context)
 
         try:
             # 预取飞书/蓝湖文档内容
@@ -359,7 +295,7 @@ class PipelineRunner:
                 progress = 50 + int((batch_idx / len(batches)) * 35)
                 self._update_progress(
                     task_id, 3, "用例设计", progress,
-                    f"正在设计测试用例... 批次 {batch_idx+1}/{len(batches)}"
+                    f"正在设计{'接口' if is_api_test else '功能'}测试用例... 批次 {batch_idx+1}/{len(batches)}"
                 )
 
                 try:
@@ -375,7 +311,9 @@ class PipelineRunner:
                     ]
 
                     cases_data = await self.tc_designer.design_batch(
-                        test_points_for_batch, requirement_content
+                        test_points_for_batch, requirement_content,
+                        is_api_test=is_api_test,
+                        api_context=api_context,
                     )
 
                     for case_data in cases_data:
@@ -383,14 +321,13 @@ class PipelineRunner:
                         steps = case_data.get("test_steps", [])
                         steps_str = ""
                         if steps:
-                            import json
                             steps_str = json.dumps(steps, ensure_ascii=False)
 
-                        tc = TestCase(
+                        # 根据测试类型设置不同的字段
+                        tc_kwargs = dict(
                             case_name=case_data.get("title", ""),
                             steps=steps if isinstance(steps, list) else [],
                             preset_conditions=[case_data.get("preconditions", "")] if case_data.get("preconditions") else [],
-                            expected_results=[s.get("expected", "") for s in steps] if steps else [],
                             case_level=4,
                             session_id=session_id,
                             module_id=None,
@@ -399,6 +336,28 @@ class PipelineRunner:
                             design_method=case_data.get("design_method"),
                             user_id=user_id,
                         )
+
+                        if is_api_test:
+                            # 接口测试：设置 API 相关字段
+                            tc_kwargs["expected_results"] = [
+                                s.get("description", "") if isinstance(s, dict) else str(s)
+                                for s in steps
+                            ] if steps else []
+                            if api_endpoint_ids:
+                                tc_kwargs["api_endpoint_id"] = ",".join(str(eid) for eid in api_endpoint_ids)
+                            if api_project_id:
+                                tc_kwargs["api_project_id"] = api_project_id
+                            # 保存断言规则
+                            assertions = case_data.get("assertions")
+                            if assertions:
+                                tc_kwargs["assertions"] = assertions
+                        else:
+                            # 功能测试：纯文本步骤
+                            tc_kwargs["expected_results"] = [
+                                s.get("expected", "") for s in steps
+                            ] if steps else []
+
+                        tc = TestCase(**tc_kwargs)
                         self.db.add(tc)
                         all_test_cases.append(tc)
 
@@ -421,18 +380,22 @@ class PipelineRunner:
                 self._update_progress(task_id, 4, "用例优化", 88, "正在优化测试用例...")
 
                 try:
-                    cases_for_opt = [
-                        {
+                    cases_for_opt = []
+                    for tc in all_test_cases:
+                        item = {
                             "id": tc.id,
                             "title": tc.case_name,
                             "description": "",
                             "preconditions": tc.preset_conditions[0] if tc.preset_conditions else "",
                             "test_steps": tc.steps if tc.steps else [],
                         }
-                        for tc in all_test_cases
-                    ]
+                        if is_api_test:
+                            item["assertions"] = tc.assertions or []
+                        cases_for_opt.append(item)
 
-                    optimized = await self.optimizer.optimize(cases_for_opt)
+                    optimized = await self.optimizer.optimize(
+                        cases_for_opt, is_api_test=is_api_test,
+                    )
 
                     # 应用优化结果
                     opt_map = {opt.get("id"): opt for opt in optimized if opt.get("id")}
@@ -443,11 +406,18 @@ class PipelineRunner:
                             tc.case_name = opt["title"]
                             if opt.get("test_steps"):
                                 tc.steps = opt["test_steps"]
-                                tc.expected_results = [
-                                    s.get("expected", "") for s in opt["test_steps"]
-                                ]
+                                if is_api_test:
+                                    tc.expected_results = [
+                                        s.get("description", "") for s in opt["test_steps"]
+                                    ]
+                                else:
+                                    tc.expected_results = [
+                                        s.get("expected", "") for s in opt["test_steps"]
+                                    ]
                             if opt.get("preconditions"):
                                 tc.preset_conditions = [opt["preconditions"]]
+                            if is_api_test and opt.get("assertions"):
+                                tc.assertions = opt["assertions"]
                             optimized_count += 1
 
                     self.db.commit()
@@ -461,11 +431,13 @@ class PipelineRunner:
                 "requirement_points_count": len(req_points),
                 "test_points_count": len(all_test_points),
                 "test_cases_count": len(all_test_cases),
+                "is_api_test": is_api_test,
             })
 
             logger.info(
                 f"Pipeline 完成: {len(req_points)} 需求点, "
                 f"{len(all_test_points)} 测试点, {len(all_test_cases)} 测试用例"
+                f"{'(接口测试)' if is_api_test else '(功能测试)'}"
             )
 
         except Exception as e:

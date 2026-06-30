@@ -5,11 +5,9 @@ Agent 2: 测试点生成专家
 import logging
 from typing import List, Dict, Any, Optional
 
-from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
-
 from app.pipeline.prompts import TEST_POINT_GENERATOR_SYSTEM, TEST_POINT_USER
 from app.pipeline.schemas import TestPointGenerationResult
+from utils.llm_factory import build_chat_model, normalize_priority
 
 logger = logging.getLogger(__name__)
 
@@ -24,24 +22,8 @@ class TestPointGenerator:
         api_model: str = "deepseek-v4-flash",
         api_proxy_url: Optional[str] = None,
     ):
-        extra_kwargs = {}
-        if api_proxy_url:
-            import httpx
-            extra_kwargs["http_async_client"] = httpx.AsyncClient(
-                proxy=api_proxy_url,
-                timeout=httpx.Timeout(None, connect=30.0, read=None, write=None, pool=None),
-            )
-
-        self.model = ChatOpenAI(
-            model=api_model,
-            temperature=0,
-            api_key=SecretStr(api_key),
-            base_url=api_base_url or "https://api.deepseek.com",
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
-            **extra_kwargs,
+        self.model = build_chat_model(
+            api_key, api_base_url, api_model, api_proxy_url, max_tokens=None
         )
 
     async def generate(self, requirement_content: str) -> List[Dict[str, Any]]:
@@ -79,18 +61,7 @@ class TestPointGenerator:
 
         # 标准化优先级
         for p in points:
-            p["priority"] = self._normalize_priority(p.get("priority", "medium"))
+            p["priority"] = normalize_priority(p.get("priority", "medium"))
 
         logger.info(f"测试点生成完成，共 {len(points)} 个测试点")
         return points
-
-    @staticmethod
-    def _normalize_priority(priority: str) -> str:
-        if not priority:
-            return "medium"
-        mapping = {
-            "P0": "high", "HIGH": "high", "H": "high",
-            "P1": "medium", "MEDIUM": "medium", "M": "medium",
-            "P2": "low", "LOW": "low", "L": "low",
-        }
-        return mapping.get(priority.upper(), "medium")

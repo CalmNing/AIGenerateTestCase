@@ -352,7 +352,7 @@ async def get_execution_logs(
 ):
     """获取测试用例的执行日志列表。"""
     testcase = session.get(TestCase, testcase_id)
-    if not testcase or testcase.session_id != session_id:
+    if not testcase or int(testcase.session_id) != session_id:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     logs = session.exec(
@@ -477,6 +477,7 @@ async def generate_testcases(
         model_type: str = Form("api"),
         api_key: str = Form(""),
         api_base_url: str = Form(""),
+        api_model: str = Form("deepseek-v4-flash"),
         api_proxy_url: str = Form(""),
         ollama_url: str = Form(""),
         ollama_model: str = Form(""),
@@ -525,24 +526,10 @@ async def generate_testcases(
 
     # MCP 服务器配置只允许从服务端持久化配置读取，避免生成接口绕过 /api/mcp 的权限控制。
     import json
-    mcp_configs = []
+    from app.services.mcp_loader import load_user_mcp_configs
     if mcp_servers and mcp_servers.strip():
         logger.info("忽略客户端传入的 MCP 服务器配置，改用服务端已保存配置")
-
-    if Permission.MCP_MANAGE in get_user_permissions(user):
-        mcp_servers_db = session.exec(
-            select(McpServer).where(
-                McpServer.user_id == user.user_id,
-                McpServer.enabled == True,
-            )
-        ).all()
-        mcp_configs = [
-            server.model_dump(exclude={"id", "created_at", "updated_at", "user_id"})
-            for server in mcp_servers_db
-        ]
-        logger.info(f"已加载 {len(mcp_configs)} 个服务端 MCP 服务器配置")
-    else:
-        logger.info("当前用户无 mcp:manage 权限，生成用例时不加载自定义 MCP 工具")
+    mcp_configs = load_user_mcp_configs(session, user)
 
     # 解析选中的技能名称
     selected_skill_names = []
@@ -556,16 +543,9 @@ async def generate_testcases(
             logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
 
     # 解析 API 端点 Schema 和定义
+    from app.services.api_context import build_api_context, parse_endpoint_ids
     api_context = ""
-    api_endpoint_ids = []
-    if api_endpoint_id:
-        for part in api_endpoint_id.split(','):
-            part = part.strip()
-            if part:
-                try:
-                    api_endpoint_ids.append(int(part))
-                except ValueError:
-                    pass
+    api_endpoint_ids = parse_endpoint_ids(api_endpoint_id)
 
     # 自动推断依赖接口：补全缺失的前置"新增"接口
     dependency_labels: dict[int, str] = {}  # {endpoint_id: "依赖补全"}
@@ -591,53 +571,16 @@ async def generate_testcases(
         except (json.JSONDecodeError, ValueError, TypeError):
             logger.warning("端点覆盖配置解析失败，继续使用数据库默认值")
 
-    endpoint_index_to_id: dict[int, int] = {}
-    if api_endpoint_ids:
-        api_sections = []
-        for idx, eid in enumerate(api_endpoint_ids, 1):
-            try:
-                endpoint_db = session.get(ApiEndpoint, eid)
-                if not endpoint_db:
-                    continue
-                endpoint_index_to_id[idx] = eid
-                project_db = session.get(ApiProject, api_project_id and int(api_project_id) or endpoint_db.project_id)
-                ep_lines = []
-                dep_label = f" [{dependency_labels[eid]}]" if eid in dependency_labels else ""
-                ep_lines.append(f'===== [{idx}] {endpoint_db.name}{dep_label} =====')
-                ep_lines.append('所属项目: ' + (project_db.name if project_db else '未知'))
-                ep_lines.append('请求方法: ' + endpoint_db.method)
-                ep_lines.append('请求路径: ' + endpoint_db.path)
-                if endpoint_db.tags:
-                    ep_lines.append('标签: ' + ', '.join(endpoint_db.tags))
-                if endpoint_db.assertions:
-                    ep_lines.append('默认断言: ' + json.dumps(endpoint_db.assertions, ensure_ascii=False, indent=2))
-                # 使用用户编辑的值优先，否则使用数据库写入
-                override = endpoint_overrides.get(eid, {})
-                ep_headers = override.get("headers") if override.get("headers") is not None else endpoint_db.headers
-                ep_parameters = override.get("parameters") if override.get("parameters") is not None else endpoint_db.parameters
-                ep_body = override.get("body") if override.get("body") is not None else endpoint_db.body
-                if ep_headers:
-                    ep_lines.append('请求头: ' + json.dumps(ep_headers, ensure_ascii=False, indent=2))
-                if ep_parameters:
-                    ep_lines.append('请求参数: ' + json.dumps(ep_parameters, ensure_ascii=False, indent=2))
-                if endpoint_db.request_schema:
-                    ep_lines.append('请求 Schema:\n' + json.dumps(endpoint_db.request_schema, ensure_ascii=False, indent=2))
-                if endpoint_db.response_schema:
-                    ep_lines.append('响应 Schema:\n' + json.dumps(endpoint_db.response_schema, ensure_ascii=False, indent=2))
-                if ep_body:
-                    ep_lines.append('请求体示例:\n' + ep_body)
-                if endpoint_db.pre_actions:
-                    ep_lines.append('前置操作: ' + json.dumps(endpoint_db.pre_actions, ensure_ascii=False, indent=2))
-                if endpoint_db.post_actions:
-                    ep_lines.append('后置提取: ' + json.dumps(endpoint_db.post_actions, ensure_ascii=False, indent=2))
-                api_sections.append('\n'.join(ep_lines))
-                logger.info('已加载 API 端点: ' + endpoint_db.name + ' (' + endpoint_db.method + ' ' + endpoint_db.path + ')')
-            except Exception as e:
-                logger.warning('加载端点 ' + str(eid) + ' 失败: ' + str(e))
-
-        if api_sections:
-            all_api_info = '\n\n'.join(api_sections)
-            api_context = '\n\n===== 以下 API 接口信息（每个接口前的[数字]为接口编号）=====\n' + all_api_info
+    _proj_id_int = None
+    if api_project_id:
+        try:
+            _proj_id_int = int(api_project_id)
+        except (ValueError, TypeError):
+            _proj_id_int = None
+    api_context, endpoint_index_to_id = build_api_context(
+        session, api_endpoint_ids, _proj_id_int, endpoint_overrides,
+        dependency_labels=dependency_labels,
+    )
 
     if api_context:
         effective_requirement = api_context + "\n\n## 用户需求\n\n" + requirement
@@ -661,6 +604,7 @@ async def generate_testcases(
             model_type=model_type,
             api_key=api_key,
             api_base_url=api_base_url,
+            api_model=api_model,
             api_proxy_url=api_proxy_url,
             ollama_url=ollama_url,
             ollama_model=ollama_model,
@@ -669,6 +613,7 @@ async def generate_testcases(
             user_id=user.user_id,
             endpoint_index_to_id=endpoint_index_to_id,
             api_project_id=api_project_id_int,
+            is_api_test=bool(api_context),
         )
     except ModelServiceUnavailableError as e:
         logger.error(f"生成测试用例失败: {e}")
@@ -851,7 +796,7 @@ async def execute_testcase(
 ):
     """执行测试用例关联的 API 接口并保存执行日志。"""
     testcase = session.get(TestCase, testcase_id)
-    if not testcase or testcase.session_id != session_id or (testcase.user_id and testcase.user_id != user.user_id):
+    if not testcase or int(testcase.session_id) != session_id or (testcase.user_id and testcase.user_id != user.user_id):
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     # 优先使用关联的场景执行（保持参数同步）
@@ -934,7 +879,7 @@ def infer_testcase_dependencies(
 ):
     """推断测试用例的接口依赖关系，返回需要补全的接口 ID 列表。"""
     testcase = session.get(TestCase, testcase_id)
-    if not testcase or testcase.session_id != session_id or (testcase.user_id and testcase.user_id != user.user_id):
+    if not testcase or int(testcase.session_id) != session_id or (testcase.user_id and testcase.user_id != user.user_id):
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     if not testcase.api_endpoint_id or not testcase.api_project_id:
