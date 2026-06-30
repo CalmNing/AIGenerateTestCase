@@ -741,6 +741,210 @@ def _parse_response(response) -> list:
     return local_testcases
 
 
+def _persist_testcases(
+    local_testcases: list,
+    *,
+    session_id: int,
+    module_id,
+    requirement: str,
+    history_save_content,
+    endpoint_index_to_id: dict,
+    db_session,
+    user_id,
+    api_project_id,
+) -> list:
+    """Convert parsed testcases into DBTestCase rows (creating ApiScenario for
+    api_call steps) and upsert the history prompt. Returns the DBTestCase list.
+    """
+    # 转换为DBTestCase对象
+    db_testcases = []
+    for tc in local_testcases:
+        # 处理按需关联接口
+        attached_ids = None
+        if hasattr(tc, 'api_endpoint_ref') and tc.api_endpoint_ref and endpoint_index_to_id:
+            resolved = []
+            for ref in tc.api_endpoint_ref:
+                if ref in endpoint_index_to_id:
+                    resolved.append(str(endpoint_index_to_id[ref]))
+            if resolved:
+                attached_ids = ",".join(resolved)
+
+        # 序列化断言规则
+        serialized_assertions = None
+        if hasattr(tc, 'assertions') and tc.assertions:
+            serialized_assertions = [a.model_dump() for a in tc.assertions]
+
+        # 转换步骤：将 ApiCallStep 对象转为 dict
+        converted_steps = []
+        # 预加载步骤涉及的接口信息，用于丰富 method/path 字段（供前端展示）
+        _step_eids = set()
+        for step in tc.steps:
+            if isinstance(step, ApiCallStep):
+                eid = endpoint_index_to_id.get(step.endpoint_ref)
+                if eid:
+                    _step_eids.add(eid)
+        _step_endpoint_map: dict[int, ApiEndpoint] = {}
+        if _step_eids and db_session:
+            _rows = db_session.exec(
+                select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_step_eids)))
+            ).all()
+            _step_endpoint_map = {e.id: e for e in _rows}
+
+        for step in tc.steps:
+            if isinstance(step, ApiCallStep):
+                step_dict = {"type": "api_call"}
+                eid = endpoint_index_to_id.get(step.endpoint_ref)
+                if eid:
+                    step_dict["endpoint_id"] = eid
+                    # 从数据库加载 method/path/name，供前端展示
+                    _ep = _step_endpoint_map.get(eid)
+                    if _ep:
+                        step_dict["method"] = _ep.method
+                        step_dict["path"] = _ep.path
+                        step_dict["endpoint_name"] = _ep.name
+                if step.description:
+                    step_dict["name"] = step.description
+                if step.headers:
+                    step_dict["headers"] = [h.model_dump(by_alias=True) for h in step.headers]
+                if step.parameters:
+                    step_dict["parameters"] = [p.model_dump(by_alias=True) for p in step.parameters]
+                if step.body:
+                    step_dict["body"] = step.body
+                if step.variables:
+                    step_dict["variables"] = [v.model_dump(by_alias=True) for v in step.variables]
+                if step.assertions:
+                    step_dict["assertions"] = [a.model_dump() for a in step.assertions]
+                converted_steps.append(step_dict)
+            else:
+                converted_steps.append(str(step))
+
+        # 转换前置条件：将 ApiCallStep 对象转为 dict
+        converted_preset_conditions = []
+        # 预加载前置条件涉及的接口信息
+        _pc_eids = set()
+        for pc in tc.preset_conditions:
+            if isinstance(pc, ApiCallStep):
+                eid = endpoint_index_to_id.get(pc.endpoint_ref)
+                if eid:
+                    _pc_eids.add(eid)
+        _pc_endpoint_map: dict[int, ApiEndpoint] = {}
+        if _pc_eids and db_session:
+            _pc_rows = db_session.exec(
+                select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_pc_eids)))
+            ).all()
+            _pc_endpoint_map = {e.id: e for e in _pc_rows}
+
+        for pc in tc.preset_conditions:
+            if isinstance(pc, ApiCallStep):
+                pc_dict = {"type": "api_call"}
+                eid = endpoint_index_to_id.get(pc.endpoint_ref)
+                if eid:
+                    pc_dict["endpoint_id"] = eid
+                    # 从数据库加载 method/path/name，供前端展示
+                    _pc_ep = _pc_endpoint_map.get(eid)
+                    if _pc_ep:
+                        pc_dict["method"] = _pc_ep.method
+                        pc_dict["path"] = _pc_ep.path
+                        pc_dict["endpoint_name"] = _pc_ep.name
+                if pc.description:
+                    pc_dict["name"] = pc.description
+                if pc.headers:
+                    pc_dict["headers"] = [h.model_dump(by_alias=True) for h in pc.headers]
+                if pc.parameters:
+                    pc_dict["parameters"] = [p.model_dump(by_alias=True) for p in pc.parameters]
+                if pc.body:
+                    pc_dict["body"] = pc.body
+                if pc.variables:
+                    pc_dict["variables"] = [v.model_dump(by_alias=True) for v in pc.variables]
+                if pc.assertions:
+                    pc_dict["assertions"] = [a.model_dump() for a in pc.assertions]
+                converted_preset_conditions.append(pc_dict)
+            else:
+                converted_preset_conditions.append(str(pc))
+
+        # 创建关联的接口场景（如果有 API 调用步骤且有项目ID）
+        scenario_id = None
+        api_call_preset = [s for s in converted_preset_conditions if isinstance(s, dict) and s.get("endpoint_id")]
+        api_call_steps = [s for s in converted_steps if isinstance(s, dict) and s.get("endpoint_id")]
+        all_api_call_steps = api_call_preset + api_call_steps
+        if all_api_call_steps and api_project_id and db_session:
+            # 预加载步骤涉及的接口信息，用于丰富场景步骤的 method/path/name 字段（供前端展示）
+            endpoint_ids = [s["endpoint_id"] for s in all_api_call_steps]
+            endpoint_map: dict[int, ApiEndpoint] = {}
+            if endpoint_ids:
+                rows = db_session.exec(
+                    select(ApiEndpoint).where(ApiEndpoint.id.in_(endpoint_ids))
+                ).all()
+                endpoint_map = {e.id: e for e in rows}
+
+            scenario_steps: list[dict] = []
+            for s in all_api_call_steps:
+                step_copy = dict(s)
+                ep = endpoint_map.get(s["endpoint_id"])
+                if ep:
+                    step_copy.setdefault("method", ep.method)
+                    step_copy.setdefault("path", ep.path)
+                    step_copy.setdefault("url", ep.url or ep.path)
+                    step_copy.setdefault("endpoint_name", ep.name)
+                    step_copy.setdefault("enabled", True)
+                    step_copy.setdefault("continue_on_failure", True)
+                # 标记前置条件步骤
+                if s in api_call_preset:
+                    step_copy["is_preset"] = True
+                scenario_steps.append(step_copy)
+
+            scenario = ApiScenario(
+                project_id=api_project_id,
+                name=f"{tc.case_name}_场景",
+                description=f"测试用例 {tc.case_name} 的接口场景",
+                steps=scenario_steps,
+                user_id=user_id,
+            )
+            db_session.add(scenario)
+            db_session.flush()  # 获取场景ID
+            scenario_id = scenario.id
+
+        # 过滤 api_call 步骤：用例只存文本步骤，api_call 步骤在场景中
+        if scenario_id:
+            converted_preset_conditions = [
+                s for s in converted_preset_conditions
+                if not (isinstance(s, dict) and s.get("endpoint_id"))
+            ]
+            # 注意：不要从 converted_steps 中移除 API 调用步骤，它们需要保存到数据库
+            # converted_steps 保持不变，包含所有步骤（包括 API 调用步骤）
+
+        # 创建DBTestCase对象，转换属性
+        db_tc = DBTestCase(
+            case_name=tc.case_name,
+            case_level=tc.case_level,
+            preset_conditions=converted_preset_conditions,
+            steps=converted_steps,
+            session_id=session_id,
+            module_id=module_id,
+            expected_results=tc.expected_results,
+            api_endpoint_id=attached_ids,
+            assertions=serialized_assertions,
+            scenario_id=scenario_id,
+        )
+        db_testcases.append(db_tc)
+
+    # 返回转换后的测试用例
+    try:
+        db_session_local = db_session
+        if db_session_local is not None:
+            _upsert_history_prompt(
+                db_session_local,
+                content=history_save_content,
+                module_id=module_id,
+                session_id=session_id,
+                user_id=user_id,
+            )
+    except Exception as e:
+        logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
+
+    return db_testcases
+
+
 async def generate_testcases(
         session_id: int,
         module_id: int,
@@ -857,6 +1061,8 @@ async def generate_testcases(
 
     if model_type == "api":
         try:
+            # 诊断回调在所有分支前初始化，避免 parsed_content 直连分支引用未赋值变量
+            _diagnostic_cb = _TokenUsageCallback()
             # 从用户配置的 MCP 服务器构建工具
             # 只有需求中包含文档链接时才加载 MCP 工具，纯文本需求不需要
             custom_mcp_tools = None
@@ -1014,195 +1220,18 @@ async def generate_testcases(
         if not isinstance(local_testcases, list):
             raise ValueError(f"测试用例必须是列表类型，实际类型: {type(local_testcases).__name__}")
 
-        # 转换为DBTestCase对象
-        db_testcases = []
-        endpoint_index_to_id = kwargs.get("endpoint_index_to_id", {})
-        db_session = kwargs.get("db_session")
-        user_id = kwargs.get("user_id")
-        api_project_id = kwargs.get("api_project_id")
-        for tc in local_testcases:
-            # 处理按需关联接口
-            attached_ids = None
-            if hasattr(tc, 'api_endpoint_ref') and tc.api_endpoint_ref and endpoint_index_to_id:
-                resolved = []
-                for ref in tc.api_endpoint_ref:
-                    if ref in endpoint_index_to_id:
-                        resolved.append(str(endpoint_index_to_id[ref]))
-                if resolved:
-                    attached_ids = ",".join(resolved)
-
-            # 序列化断言规则
-            serialized_assertions = None
-            if hasattr(tc, 'assertions') and tc.assertions:
-                serialized_assertions = [a.model_dump() for a in tc.assertions]
-
-            # 转换步骤：将 ApiCallStep 对象转为 dict
-            converted_steps = []
-            # 预加载步骤涉及的接口信息，用于丰富 method/path 字段（供前端展示）
-            _step_eids = set()
-            for step in tc.steps:
-                if isinstance(step, ApiCallStep):
-                    eid = endpoint_index_to_id.get(step.endpoint_ref)
-                    if eid:
-                        _step_eids.add(eid)
-            _step_endpoint_map: dict[int, ApiEndpoint] = {}
-            if _step_eids and db_session:
-                _rows = db_session.exec(
-                    select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_step_eids)))
-                ).all()
-                _step_endpoint_map = {e.id: e for e in _rows}
-
-            for step in tc.steps:
-                if isinstance(step, ApiCallStep):
-                    step_dict = {"type": "api_call"}
-                    eid = endpoint_index_to_id.get(step.endpoint_ref)
-                    if eid:
-                        step_dict["endpoint_id"] = eid
-                        # 从数据库加载 method/path/name，供前端展示
-                        _ep = _step_endpoint_map.get(eid)
-                        if _ep:
-                            step_dict["method"] = _ep.method
-                            step_dict["path"] = _ep.path
-                            step_dict["endpoint_name"] = _ep.name
-                    if step.description:
-                        step_dict["name"] = step.description
-                    if step.headers:
-                        step_dict["headers"] = [h.model_dump(by_alias=True) for h in step.headers]
-                    if step.parameters:
-                        step_dict["parameters"] = [p.model_dump(by_alias=True) for p in step.parameters]
-                    if step.body:
-                        step_dict["body"] = step.body
-                    if step.variables:
-                        step_dict["variables"] = [v.model_dump(by_alias=True) for v in step.variables]
-                    if step.assertions:
-                        step_dict["assertions"] = [a.model_dump() for a in step.assertions]
-                    converted_steps.append(step_dict)
-                else:
-                    converted_steps.append(str(step))
-
-            # 转换前置条件：将 ApiCallStep 对象转为 dict
-            converted_preset_conditions = []
-            # 预加载前置条件涉及的接口信息
-            _pc_eids = set()
-            for pc in tc.preset_conditions:
-                if isinstance(pc, ApiCallStep):
-                    eid = endpoint_index_to_id.get(pc.endpoint_ref)
-                    if eid:
-                        _pc_eids.add(eid)
-            _pc_endpoint_map: dict[int, ApiEndpoint] = {}
-            if _pc_eids and db_session:
-                _pc_rows = db_session.exec(
-                    select(ApiEndpoint).where(ApiEndpoint.id.in_(list(_pc_eids)))
-                ).all()
-                _pc_endpoint_map = {e.id: e for e in _pc_rows}
-
-            for pc in tc.preset_conditions:
-                if isinstance(pc, ApiCallStep):
-                    pc_dict = {"type": "api_call"}
-                    eid = endpoint_index_to_id.get(pc.endpoint_ref)
-                    if eid:
-                        pc_dict["endpoint_id"] = eid
-                        # 从数据库加载 method/path/name，供前端展示
-                        _pc_ep = _pc_endpoint_map.get(eid)
-                        if _pc_ep:
-                            pc_dict["method"] = _pc_ep.method
-                            pc_dict["path"] = _pc_ep.path
-                            pc_dict["endpoint_name"] = _pc_ep.name
-                    if pc.description:
-                        pc_dict["name"] = pc.description
-                    if pc.headers:
-                        pc_dict["headers"] = [h.model_dump(by_alias=True) for h in pc.headers]
-                    if pc.parameters:
-                        pc_dict["parameters"] = [p.model_dump(by_alias=True) for p in pc.parameters]
-                    if pc.body:
-                        pc_dict["body"] = pc.body
-                    if pc.variables:
-                        pc_dict["variables"] = [v.model_dump(by_alias=True) for v in pc.variables]
-                    if pc.assertions:
-                        pc_dict["assertions"] = [a.model_dump() for a in pc.assertions]
-                    converted_preset_conditions.append(pc_dict)
-                else:
-                    converted_preset_conditions.append(str(pc))
-
-            # 创建关联的接口场景（如果有 API 调用步骤且有项目ID）
-            scenario_id = None
-            api_call_preset = [s for s in converted_preset_conditions if isinstance(s, dict) and s.get("endpoint_id")]
-            api_call_steps = [s for s in converted_steps if isinstance(s, dict) and s.get("endpoint_id")]
-            all_api_call_steps = api_call_preset + api_call_steps
-            if all_api_call_steps and api_project_id and db_session:
-                # 预加载步骤涉及的接口信息，用于丰富场景步骤的 method/path/name 字段（供前端展示）
-                endpoint_ids = [s["endpoint_id"] for s in all_api_call_steps]
-                endpoint_map: dict[int, ApiEndpoint] = {}
-                if endpoint_ids:
-                    rows = db_session.exec(
-                        select(ApiEndpoint).where(ApiEndpoint.id.in_(endpoint_ids))
-                    ).all()
-                    endpoint_map = {e.id: e for e in rows}
-
-                scenario_steps: list[dict] = []
-                for s in all_api_call_steps:
-                    step_copy = dict(s)
-                    ep = endpoint_map.get(s["endpoint_id"])
-                    if ep:
-                        step_copy.setdefault("method", ep.method)
-                        step_copy.setdefault("path", ep.path)
-                        step_copy.setdefault("url", ep.url or ep.path)
-                        step_copy.setdefault("endpoint_name", ep.name)
-                        step_copy.setdefault("enabled", True)
-                        step_copy.setdefault("continue_on_failure", True)
-                    # 标记前置条件步骤
-                    if s in api_call_preset:
-                        step_copy["is_preset"] = True
-                    scenario_steps.append(step_copy)
-
-                scenario = ApiScenario(
-                    project_id=api_project_id,
-                    name=f"{tc.case_name}_场景",
-                    description=f"测试用例 {tc.case_name} 的接口场景",
-                    steps=scenario_steps,
-                    user_id=user_id,
-                )
-                db_session.add(scenario)
-                db_session.flush()  # 获取场景ID
-                scenario_id = scenario.id
-
-            # 过滤 api_call 步骤：用例只存文本步骤，api_call 步骤在场景中
-            if scenario_id:
-                converted_preset_conditions = [
-                    s for s in converted_preset_conditions
-                    if not (isinstance(s, dict) and s.get("endpoint_id"))
-                ]
-                # 注意：不要从 converted_steps 中移除 API 调用步骤，它们需要保存到数据库
-                # converted_steps 保持不变，包含所有步骤（包括 API 调用步骤）
-
-            # 创建DBTestCase对象，转换属性
-            db_tc = DBTestCase(
-                case_name=tc.case_name,
-                case_level=tc.case_level,
-                preset_conditions=converted_preset_conditions,
-                steps=converted_steps,
-                session_id=session_id,
-                module_id=module_id,
-                expected_results=tc.expected_results,
-                api_endpoint_id=attached_ids,
-                assertions=serialized_assertions,
-                scenario_id=scenario_id,
-            )
-            db_testcases.append(db_tc)
-
-        # 返回转换后的测试用例
-        try:
-            db_session_local = kwargs.get("db_session")
-            if db_session_local is not None:
-                _upsert_history_prompt(
-                    db_session_local,
-                    content=_history_save_content,
-                    module_id=module_id,
-                    session_id=session_id,
-                    user_id=user_id,
-                )
-        except Exception as e:
-            logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
+        # 转换为 DBTestCase 并保存历史提示词
+        db_testcases = _persist_testcases(
+            local_testcases,
+            session_id=session_id,
+            module_id=module_id,
+            requirement=requirement,
+            history_save_content=_history_save_content,
+            endpoint_index_to_id=kwargs.get("endpoint_index_to_id", {}),
+            db_session=kwargs.get("db_session"),
+            user_id=kwargs.get("user_id"),
+            api_project_id=kwargs.get("api_project_id"),
+        )
 
         return db_testcases, requirement
     except Exception as e:
