@@ -13,7 +13,10 @@ from app.permissions import Permission, get_user_permissions
 from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog, ApiEndpoint, ApiProject, ApiScenario
 from utils.base_response import Response
 import traceback
-from app.services.api_test_tool import run_endpoint_steps, run_scenario
+# NOTE: api_test_tool is imported lazily inside the functions that use it
+# (run_scenario / run_endpoint_steps) to avoid a circular import: api_test_tool
+# imports app.routes.proxy, which triggers app/routes/__init__.py to import this
+# module before api_test_tool has finished initializing.
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
 
@@ -802,6 +805,7 @@ async def execute_testcase(
             project = session.get(ApiProject, scenario.project_id)
             if project and project.user_id == user.user_id:
                 try:
+                    from app.services.api_test_tool import run_scenario
                     result = await run_scenario(session, scenario, project)
                     passed = result.get("passed", False)
                     testcase.status = "PASSED" if passed else "FAILED"
@@ -833,6 +837,7 @@ async def execute_testcase(
 
     try:
         if plan:
+            from app.services.api_test_tool import run_endpoint_steps
             result = await run_endpoint_steps(session, plan)
             if preflight_errors:
                 result["steps"] = preflight_errors + result.get("steps", [])
