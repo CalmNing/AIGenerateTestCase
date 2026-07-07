@@ -45,6 +45,13 @@ class ApiCallKeyValue(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class PostAction(BaseModel):
+    """后置动作，用于从响应中提取变量"""
+    type: str = Field(default="extract_jsonpath", description="动作类型: extract_jsonpath")
+    key: str = Field(..., description="提取的变量名，后续步骤用 {{变量名}} 引用")
+    jsonpath: str = Field(..., description="JSONPath 表达式，如 $.data.id")
+
+
 class ApiCallStep(BaseModel):
     """结构化的 API 调用步骤，对应执行时的 api_call 步骤"""
     endpoint_ref: int = Field(..., description="关联的接口编号（在 API 信息中的序号，从1开始）")
@@ -52,20 +59,30 @@ class ApiCallStep(BaseModel):
     headers: Optional[List[ApiCallKeyValue]] = Field(default=None, description="请求头，覆盖接口默认值")
     parameters: Optional[List[ApiCallKeyValue]] = Field(default=None, description="请求参数（含 query/path），覆盖接口默认值")
     body: Optional[str] = Field(default=None, description="请求体 JSON 字符串，覆盖接口默认值。使用 {{变量名}} 引用环境变量")
-    variables: Optional[List[ApiCallKeyValue]] = Field(default=None, description="环境变量（可在 body/parameters/headers 中用 {{key}} 引用）")
+    variables: Optional[List[ApiCallKeyValue]] = Field(default=None, description="预定义变量（固定值），不能从响应中提取")
+    post_actions: Optional[List[PostAction]] = Field(default=None, description="后置动作，用于从响应中提取变量供后续步骤使用")
     assertions: Optional[List[AssertionRule]] = Field(default=None, description="该步骤的断言规则，覆盖用例级和接口级断言")
 
 
 # 定义测试用例数据类
 class TestCase(BaseModel):
-    """自定义 TestCase schema."""
+    """自定义 TestCase schema。"""
     case_name: str = Field(..., description="用例名称")
     steps: List[Union[str, ApiCallStep]] = Field(..., description="用例步骤，支持纯文本步骤和结构化 api_call 步骤")
     preset_conditions: List[Union[str, ApiCallStep]] = Field(default_factory=list, description="前置条件，支持纯文本和结构化 api_call 步骤")
     expected_results: List[str] = Field(..., description="预期结果")
-    case_level: Optional[AllowedValue] = Field(default=4, description="用例级别")
+    case_level: Optional[AllowedValue] = Field(default=1, description="用例级别：1-功能 2-边界 3-异常 4-场景")
     api_endpoint_ref: Optional[List[int]] = Field(default=None, description="关联的 API 接口编号列表（在 API 信息中的序号，从1开始）。不提供时默认关联所有已加载的接口。")
     assertions: Optional[List[AssertionRule]] = Field(default=None, description="用例级断言规则，覆盖接口默认断言。不提供时使用接口自身的断言配置。")
+
+
+class FunctionalTestCase(BaseModel):
+    """功能测试用例 schema（仅纯文本步骤，不含 api_call 结构）。"""
+    case_name: str = Field(..., description="用例名称，格式为'操作 + 场景 + 预期结果'")
+    steps: List[str] = Field(..., description="测试步骤，使用纯文本字符串描述每一步操作")
+    preset_conditions: List[str] = Field(default_factory=list, description="前置条件，使用纯文本描述")
+    expected_results: List[str] = Field(..., description="预期结果")
+    case_level: Optional[AllowedValue] = Field(default=1, description="用例级别（1-功能 2-边界 3-异常 4-场景）")
 
     def __post_init__(self):
         """验证case_level只允许1、2、3、4"""
@@ -89,6 +106,26 @@ class ResponseFormat(BaseModel):
                 data = dict(data)
                 data['response'] = data.pop('test_cases')
             # 每个测试用例字段名标准化（name→case_name, level→case_level 等）
+            if 'response' in data and isinstance(data['response'], list):
+                data['response'] = [
+                    _normalize_testcase_dict(tc) if isinstance(tc, dict) else tc
+                    for tc in data['response']
+                ]
+        return data
+
+
+class FunctionalResponseFormat(BaseModel):
+    """功能测试用例的响应格式（仅纯文本步骤）"""
+    response: List[FunctionalTestCase] = Field(default_factory=list)
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_response_key(cls, data: Any) -> Any:
+        """自动标准化响应数据：映射 test_cases→response，标准化每个用例的字段名。"""
+        if isinstance(data, dict):
+            if 'test_cases' in data and 'response' not in data:
+                data = dict(data)
+                data['response'] = data.pop('test_cases')
             if 'response' in data and isinstance(data['response'], list):
                 data['response'] = [
                     _normalize_testcase_dict(tc) if isinstance(tc, dict) else tc

@@ -68,6 +68,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
     >
       {tc && (
         <Tabs
+          className="vtm-tabs-container"
           activeKey={activeTab}
           onChange={setActiveTab}
           items={[

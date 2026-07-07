@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.pipeline.requirement_splitter import RequirementSplitter
 from app.pipeline.test_point_generator import TestPointGenerator
@@ -128,6 +128,7 @@ class PipelineRunner:
         requirement_text: str,
         user_id: Optional[str] = None,
         selected_skills: Optional[List[str]] = None,
+        module_id: Optional[int] = None,
         *,
         api_endpoint_ids: Optional[List[int]] = None,
         api_project_id: Optional[int] = None,
@@ -142,6 +143,7 @@ class PipelineRunner:
             requirement_text: 需求文本
             user_id: 用户ID
             selected_skills: 选中的技能名称列表
+            module_id: 模块ID
             api_endpoint_ids: API 接口 ID 列表
             api_project_id: API 项目 ID
             endpoint_index_to_id: 接口序号→数据库ID映射
@@ -172,6 +174,7 @@ class PipelineRunner:
         asyncio.create_task(
             self._run_pipeline(
                 task_id, session_id, requirement_text, user_id,
+                module_id=module_id,
                 api_endpoint_ids=api_endpoint_ids,
                 api_project_id=api_project_id,
                 endpoint_index_to_id=endpoint_index_to_id or {},
@@ -192,6 +195,7 @@ class PipelineRunner:
         requirement_text: str,
         user_id: Optional[str] = None,
         *,
+        module_id: Optional[int] = None,
         api_endpoint_ids: Optional[List[int]] = None,
         api_project_id: Optional[int] = None,
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
@@ -330,14 +334,33 @@ class PipelineRunner:
                 for case_data in cases_data:
                     steps = case_data.get("test_steps", [])
 
+                    # 接口测试：将 endpoint_ref 转为 endpoint_id（与单次生成路径一致）
+                    if is_api_test and isinstance(steps, list):
+                        converted_steps = []
+                        for s in steps:
+                            if isinstance(s, dict):
+                                s = dict(s)
+                                # 补全 type 字段（LLM 有时不设置）
+                                if s.get("endpoint_id") or s.get("endpoint_ref"):
+                                    if not s.get("type"):
+                                        s["type"] = "api_call"
+                                # 转换 endpoint_ref → endpoint_id
+                                if s.get("endpoint_ref") and endpoint_index_to_id:
+                                    ref = s.pop("endpoint_ref", None)
+                                    eid = endpoint_index_to_id.get(int(ref)) if ref else None
+                                    if eid:
+                                        s["endpoint_id"] = eid
+                            converted_steps.append(s)
+                        steps = converted_steps
+
                     # 根据测试类型设置不同的字段
                     tc_kwargs = dict(
                         case_name=case_data.get("title", ""),
                         steps=steps if isinstance(steps, list) else [],
                         preset_conditions=[case_data.get("preconditions", "")] if case_data.get("preconditions") else [],
-                        case_level=4,
+                        case_level=case_data.get("case_level", 1),
                         session_id=session_id,
-                        module_id=None,
+                        module_id=module_id,
                         test_point_id=case_data.get("test_point_id"),
                         test_type=case_data.get("test_type"),
                         design_method=case_data.get("design_method"),
@@ -372,6 +395,107 @@ class PipelineRunner:
             # 刷新获取 ID
             for tc in all_test_cases:
                 self.db.refresh(tc)
+
+            # 为接口测试用例创建 ApiScenario 并关联 scenario_id
+            logger.info(
+                f"[Pipeline] 场景创建检查: is_api_test={is_api_test}, "
+                f"api_project_id={api_project_id}, test_cases={len(all_test_cases)}, "
+                f"endpoint_index_to_id={endpoint_index_to_id}"
+            )
+            if is_api_test and api_project_id and all_test_cases:
+                from db.models import ApiScenario, ApiEndpoint as ApiEndpointModel
+
+                def _resolve_endpoint_id(step: dict) -> int | None:
+                    """从步骤中提取 endpoint_id，支持 endpoint_ref（pipeline）和 endpoint_id（单次）两种格式。"""
+                    eid = step.get("endpoint_id")
+                    if eid:
+                        return int(eid)
+                    ref = step.get("endpoint_ref")
+                    if ref and endpoint_index_to_id:
+                        return endpoint_index_to_id.get(int(ref))
+                    return None
+
+                # 预加载接口信息
+                # 识别 API 调用步骤：type == "api_call" 或 有 endpoint_id/endpoint_ref
+                def _is_api_call_step(step: dict) -> bool:
+                    if not isinstance(step, dict):
+                        return False
+                    return (
+                        step.get("type") == "api_call"
+                        or step.get("endpoint_id") is not None
+                        or step.get("endpoint_ref") is not None
+                    )
+
+                all_endpoint_ids = set()
+                for tc in all_test_cases:
+                    for step in (tc.steps or []):
+                        if _is_api_call_step(step):
+                            eid = _resolve_endpoint_id(step)
+                            if eid:
+                                all_endpoint_ids.add(eid)
+                    for pc in (tc.preset_conditions or []):
+                        if _is_api_call_step(pc):
+                            eid = _resolve_endpoint_id(pc)
+                            if eid:
+                                all_endpoint_ids.add(eid)
+
+                logger.info(f"[Pipeline] 发现 {len(all_endpoint_ids)} 个关联接口: {all_endpoint_ids}")
+
+                endpoint_map: dict[int, ApiEndpointModel] = {}
+                if all_endpoint_ids:
+                    rows = self.db.exec(
+                        select(ApiEndpointModel).where(ApiEndpointModel.id.in_(list(all_endpoint_ids)))
+                    ).all()
+                    endpoint_map = {e.id: e for e in rows}
+
+                scenarios_created = 0
+                for tc in all_test_cases:
+                    # 收集 API 调用步骤（前置条件 + 主步骤）
+                    api_steps = []
+                    for pc in (tc.preset_conditions or []):
+                        if _is_api_call_step(pc) and _resolve_endpoint_id(pc):
+                            api_steps.append(("preset", pc))
+                    for step in (tc.steps or []):
+                        if _is_api_call_step(step) and _resolve_endpoint_id(step):
+                            api_steps.append(("step", step))
+
+                    if not api_steps:
+                        continue
+
+                    scenario_steps = []
+                    for step_type, s in api_steps:
+                        step_copy = dict(s)
+                        # 统一转为 endpoint_id 格式
+                        eid = _resolve_endpoint_id(s)
+                        if eid:
+                            step_copy["endpoint_id"] = eid
+                            step_copy.pop("endpoint_ref", None)
+                        ep = endpoint_map.get(eid) if eid else None
+                        if ep:
+                            step_copy.setdefault("method", ep.method)
+                            step_copy.setdefault("path", ep.path)
+                            step_copy.setdefault("url", ep.url or ep.path)
+                            step_copy.setdefault("endpoint_name", ep.name)
+                            step_copy.setdefault("enabled", True)
+                            step_copy.setdefault("continue_on_failure", True)
+                        if step_type == "preset":
+                            step_copy["is_preset"] = True
+                        scenario_steps.append(step_copy)
+
+                    scenario = ApiScenario(
+                        project_id=api_project_id,
+                        name=f"{tc.case_name}_场景",
+                        description=f"测试用例 {tc.case_name} 的接口场景",
+                        steps=scenario_steps,
+                        user_id=user_id,
+                    )
+                    self.db.add(scenario)
+                    self.db.flush()
+                    tc.scenario_id = scenario.id
+                    scenarios_created += 1
+
+                self.db.commit()
+                logger.info(f"[Pipeline] 已创建 {scenarios_created} 个场景，关联到 {scenarios_created} 个用例")
 
             self._update_progress(
                 task_id, 3, "用例设计", 85,
@@ -408,14 +532,27 @@ class PipelineRunner:
                         if opt and opt.get("title"):
                             tc.case_name = opt["title"]
                             if opt.get("test_steps"):
-                                tc.steps = opt["test_steps"]
+                                opt_steps = opt["test_steps"]
+                                # 优化器输出也是 endpoint_ref 格式，需转为 endpoint_id
+                                if is_api_test and endpoint_index_to_id:
+                                    converted_opt_steps = []
+                                    for s in opt_steps:
+                                        if isinstance(s, dict) and s.get("endpoint_ref"):
+                                            s = dict(s)
+                                            ref = s.pop("endpoint_ref", None)
+                                            eid = endpoint_index_to_id.get(int(ref)) if ref else None
+                                            if eid:
+                                                s["endpoint_id"] = eid
+                                        converted_opt_steps.append(s)
+                                    opt_steps = converted_opt_steps
+                                tc.steps = opt_steps
                                 if is_api_test:
                                     tc.expected_results = [
-                                        s.get("description", "") for s in opt["test_steps"]
+                                        s.get("description", "") for s in opt_steps
                                     ]
                                 else:
                                     tc.expected_results = [
-                                        s.get("expected", "") for s in opt["test_steps"]
+                                        s.get("expected", "") for s in opt_steps
                                     ]
                             if opt.get("preconditions"):
                                 tc.preset_conditions = [opt["preconditions"]]

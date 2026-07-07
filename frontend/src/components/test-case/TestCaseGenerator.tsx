@@ -1,10 +1,9 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal, Progress, Steps, Collapse } from 'antd';
+import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal, Progress, Steps } from 'antd';
 import {
   ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined,
-  FileTextOutlined, EditOutlined, RocketOutlined, ExperimentOutlined,
+  FileTextOutlined, EditOutlined, ExperimentOutlined,
   CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined,
-  UnorderedListOutlined, BranchesOutlined,
 } from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../../types';
 import HistoryPromptSidebar from '../HistoryPromptSidebar';
@@ -17,8 +16,6 @@ interface TestCaseGeneratorProps {
   requirement: string;
   loading: boolean;
   onRequirementChange: (value: string) => void;
-  onGenerate: () => void;
-  onGenerateV2?: (requirementText: string) => Promise<string>; // 返回 task_id
   historyPromptRefreshKey?: number;
   selectedApiEndpointId?: number[];
   onApiEndpointChange?: (ids: number[]) => void;
@@ -28,8 +25,6 @@ interface TestCaseGeneratorProps {
   onApiEndpointOverridesChange?: (overrides: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>) => void;
 }
 
-type GenerationMode = 'quick' | 'deep';
-
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   selectedSession,
   modules,
@@ -37,7 +32,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   requirement,
   loading,
   onRequirementChange,
-  onGenerate,
   historyPromptRefreshKey,
   selectedApiEndpointId,
   onApiEndpointChange,
@@ -53,10 +47,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const [smartMatching, setSmartMatching] = useState(false);
   const [overrideEditorVisible, setOverrideEditorVisible] = useState(false);
   const [editingOverrides, setEditingOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
-  const [previewVisible, setPreviewVisible] = useState(false);
 
   // 4阶段 Pipeline 状态
-  const [generationMode, setGenerationMode] = useState<GenerationMode>('quick');
   const [pipelineTaskId, setPipelineTaskId] = useState<string | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<{
     status: string;
@@ -184,7 +176,12 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
 
     try {
       const { testcaseApi } = await import('../../services/api');
-      const res = await testcaseApi.generateV2(selectedSession.id, requirement.trim());
+      const res = await testcaseApi.generateV2(selectedSession.id, requirement.trim(), {
+        apiEndpointIds: selectedApiEndpointId,
+        apiProjectId: selectedApiProjectId,
+        apiEndpointOverrides: apiEndpointOverrides,
+        moduleId: selectedModule,
+      });
       if (res.code === 200 && res.data?.task_id) {
         setPipelineTaskId(res.data.task_id);
       } else {
@@ -199,15 +196,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   };
 
   const handleGenerateWithPreview = () => {
-    if (generationMode === 'deep') {
-      handleDeepGenerate();
-      return;
-    }
-    if (selectedApiEndpointId && selectedApiEndpointId.length > 0) {
-      setPreviewVisible(true);
-    } else {
-      onGenerate();
-    }
+    handleDeepGenerate();
   };
 
   const handleSmartMatch = async () => {
@@ -282,23 +271,9 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
             <div className="tcg-card-header">
               <BulbOutlined style={{ color: 'var(--color-primary)' }} />
               生成测试用例
-              {/* 生成模式切换 */}
-              <div className="tcg-mode-toggle" style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-                <button
-                  className={`tcg-mode-btn ${generationMode === 'quick' ? 'is-active' : ''}`}
-                  onClick={() => setGenerationMode('quick')}
-                  title="单次调用，快速生成测试用例"
-                >
-                  <ThunderboltOutlined /> 快速
-                </button>
-                <button
-                  className={`tcg-mode-btn ${generationMode === 'deep' ? 'is-active' : ''}`}
-                  onClick={() => setGenerationMode('deep')}
-                  title="4阶段Pipeline：需求拆分→测试点→用例设计→优化"
-                >
-                  <ExperimentOutlined /> 深度
-                </button>
-              </div>
+              <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-tertiary)', fontWeight: 400 }}>
+                4阶段深度生成：需求拆分→测试点→用例设计→优化
+              </span>
             </div>
             <div className="tcg-card-body" style={{ display: 'flex', flexDirection: 'column' }}>
               {/* Context Info */}
@@ -442,8 +417,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                   </>
                 ) : (
                   <>
-                    {generationMode === 'deep' ? <ExperimentOutlined /> : <ThunderboltOutlined />}
-                    {generationMode === 'deep' ? '深度生成（4阶段）' : 'AI 生成测试用例'}
+                    <ExperimentOutlined />
+                    深度生成（4阶段）
                   </>
                 )}
               </button>
@@ -682,82 +657,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
               </div>
             );
           })}
-        </Modal>
-
-        {/* Generation Preview Confirmation Modal */}
-        <Modal
-          title="确认生成测试用例"
-          open={previewVisible}
-          onCancel={() => setPreviewVisible(false)}
-          width={640}
-          footer={[
-            <Button key="cancel" onClick={() => setPreviewVisible(false)} disabled={loading}>
-              取消
-            </Button>,
-            <Button
-              key="confirm"
-              type="primary"
-              icon={<RocketOutlined />}
-              onClick={() => {
-                setPreviewVisible(false);
-                onGenerate();
-              }}
-            >
-              确认生成
-            </Button>,
-          ]}
-        >
-          <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--color-text-secondary)' }}>
-            AI 将基于以下接口信息和您的需求描述，生成包含可执行 API 调用步骤的测试用例。
-          </div>
-          <Card
-            size="small"
-            title={
-              <span>
-                <ApiOutlined style={{ marginRight: 8 }} />
-                已选接口（{selectedApiEndpointId?.length || 0} 个）
-              </span>
-            }
-            styles={{ body: { padding: 0 } }}
-          >
-            {selectedApiEndpointId && selectedApiEndpointId.length > 0 ? (
-              selectedApiEndpointId.map((eid, idx) => {
-                const ep = apiEndpoints.find(e => e.id === eid);
-                if (!ep) return null;
-                const methodColor = methodColorMap[ep.method?.toUpperCase()] || 'default';
-                const hasOverrides = apiEndpointOverrides?.[eid] && (
-                  apiEndpointOverrides[eid]?.body ||
-                  (apiEndpointOverrides[eid]?.headers?.length || 0) > 0 ||
-                  (apiEndpointOverrides[eid]?.parameters?.length || 0) > 0
-                );
-                return (
-                  <div
-                    key={eid}
-                    style={{
-                      padding: '10px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      borderBottom: idx < (selectedApiEndpointId?.length || 0) - 1
-                        ? '1px solid var(--color-border-secondary)'
-                        : 'none',
-                    }}
-                  >
-                    <Tag color={methodColor} style={{ margin: 0, minWidth: 52, textAlign: 'center' }}>
-                      {ep.method?.toUpperCase()}
-                    </Tag>
-                    <span style={{ fontWeight: 500, flex: 1 }}>{ep.path}</span>
-                    <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{ep.name}</span>
-                    {hasOverrides && <Tag color="warning">已自定义</Tag>}
-                  </div>
-                );
-              })
-            ) : (
-              <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--color-text-tertiary)' }}>
-                未选择接口，将仅基于需求描述生成用例
-              </div>
-            )}
-          </Card>
         </Modal>
       </div>
 

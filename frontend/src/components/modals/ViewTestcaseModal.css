@@ -1,11 +1,23 @@
 /* ===== View Testcase Modal — Refined ===== */
 
-/* --- Header --- */
-.vtm-header {
+/* --- Tabs Container --- */
+.vtm-tabs-container .ant-tabs-content-holder {
+  padding-top: 12px;
+}
+
+/* --- Detail Container --- */
+.vtm-detail-container {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 20px;
+  flex-direction: column;
+  max-height: calc(80vh - 150px);
+}
+
+/* --- Fixed Header --- */
+.vtm-header-fixed {
+  flex-shrink: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border-secondary);
+  margin-bottom: 16px;
 }
 
 .vtm-header-info {
@@ -94,6 +106,34 @@
 .vtm-bug-none {
   font-size: 12px;
   color: var(--color-text-disabled);
+}
+
+/* --- Scrollable Content --- */
+.vtm-content-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+/* Custom scrollbar for webkit browsers */
+.vtm-content-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.vtm-content-scrollable::-webkit-scrollbar-track {
+  background: var(--color-bg);
+  border-radius: 3px;
+}
+
+.vtm-content-scrollable::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+.vtm-content-scrollable::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
 }
 
 /* --- Section --- */

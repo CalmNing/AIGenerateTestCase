@@ -258,8 +258,26 @@ def _testcase_step_snapshot(step: dict, index: int) -> dict:
 
 def _api_call_overrides(step: dict, fallback: dict, test_case_assertions) -> dict:
     """Extract API call overrides from a step dict, merged with session fallback."""
+    # 合并 session headers 和 step headers，step headers 优先
+    session_headers = fallback.get("headers") or []
+    step_headers = step.get("headers") or []
+
+    # 将 session headers 转换为 dict 以便合并
+    merged_headers = {}
+    for h in session_headers:
+        if isinstance(h, dict) and h.get("key"):
+            merged_headers[h["key"].lower()] = h
+
+    # step headers 覆盖 session headers
+    for h in step_headers:
+        if isinstance(h, dict) and h.get("key"):
+            merged_headers[h["key"].lower()] = h
+
+    # 转换回列表
+    headers = list(merged_headers.values()) if merged_headers else (step_headers or session_headers or None)
+
     overrides = {
-        "headers": step.get("headers", fallback.get("headers")),
+        "headers": headers,
         "parameters": step.get("parameters"),
         "body": step.get("body"),
         "variables": step.get("variables", []),
@@ -806,7 +824,11 @@ async def execute_testcase(
             if project and project.user_id == user.user_id:
                 try:
                     from app.services.api_test_tool import run_scenario
-                    result = await run_scenario(session, scenario, project)
+                    # 获取 session headers
+                    fallback = _session_api_overrides(session, session_id)
+                    session_headers = fallback.get("headers") or []
+
+                    result = await run_scenario(session, scenario, project, session_headers=session_headers)
                     passed = result.get("passed", False)
                     testcase.status = "PASSED" if passed else "FAILED"
                     session.add(testcase)

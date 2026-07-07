@@ -419,10 +419,17 @@ def infer_scenario_dependencies(scenario_id: int, session: SessionDep, user: Cur
         for key in ("headers", "parameters", "body", "post_actions"):
             if key in inferred:
                 original[key] = inferred[key]
-    scenario.steps = list(scenario.steps or [])
-    session.add(scenario)
+
+    # 使用 raw SQL 更新 steps 字段（SQLModel JSON 列 ORM 变更检测不可靠）
+    import json as _json
+    from sqlmodel import text as _text
+    session.execute(
+        _text("UPDATE apiscenario SET steps = :steps WHERE id = :id"),
+        {"steps": _json.dumps(scenario.steps, ensure_ascii=False), "id": scenario.id},
+    )
     session.commit()
-    session.refresh(scenario)
+    session.expire_all()
+
     return Response(data={**summary, "target": "scenario", "scenario_id": scenario_id}, message="依赖推断完成")
 
 

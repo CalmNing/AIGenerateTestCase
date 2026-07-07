@@ -230,11 +230,15 @@ export const testcaseApi = {
       apiEndpointIds?: number[];
       apiProjectId?: number | null;
       apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
+      moduleId?: number | string;
     }
   ): Promise<ApiResponse<{ task_id: string }>> => {
     const formData = new FormData();
     formData.append("session_id", sessionId.toString());
     formData.append("requirement_text", requirementText);
+    if (options?.moduleId !== undefined && options.moduleId !== '' && options.moduleId !== 0) {
+      formData.append("module_id", options.moduleId.toString());
+    }
     if (options?.selectedSkills && options.selectedSkills.length > 0) {
       formData.append("selected_skills", JSON.stringify(options.selectedSkills));
     }

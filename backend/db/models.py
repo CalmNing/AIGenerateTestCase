@@ -77,7 +77,7 @@ class Session(BaseModel, table=True):
 class TestCase(BaseModel, table=True):
     """测试用例数据模型"""
     case_name: str = Field(default="")
-    case_level: Optional[int] = Field(default=4, ge=1, le=4)  # 使用整数类型，添加范围约束
+    case_level: Optional[int] = Field(default=1, ge=1, le=4)  # 使用整数类型，添加范围约束，默认为功能测试
     preset_conditions: List = Field(default_factory=list, sa_type=JSON)
     steps: List = Field(default_factory=list, sa_type=JSON)
     expected_results: List = Field(default_factory=list, sa_type=JSON)

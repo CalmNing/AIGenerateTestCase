@@ -289,7 +289,7 @@ def infer_step_dependencies(steps: list[dict]) -> dict:
 
     return summary
 
-async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) -> dict:
+async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject, session_headers: list = None) -> dict:
     env_id = scenario.environment_id or project.environment_id
     variables = build_param_map(db, env_id, scenario.variables or [])
     base_url = (project.base_url or "").rstrip("/")
@@ -304,6 +304,28 @@ async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) 
             # 临时移除，等提取后再赋值
             variables.pop(var["key"], None)
 
+    # 合并 session headers 和 step headers
+    def _merge_session_headers(step: dict) -> dict:
+        """将 session headers 合并到 step 中，step headers 优先。"""
+        if not session_headers:
+            return step
+        step_copy = dict(step)
+        step_headers = step_copy.get("headers") or []
+
+        # 将 session headers 转换为 dict
+        merged = {}
+        for h in session_headers:
+            if isinstance(h, dict) and h.get("key"):
+                merged[h["key"].lower()] = h
+
+        # step headers 覆盖 session headers
+        for h in step_headers:
+            if isinstance(h, dict) and h.get("key"):
+                merged[h["key"].lower()] = h
+
+        step_copy["headers"] = list(merged.values()) if merged else step_headers
+        return step_copy
+
     async with httpx.AsyncClient(limits=API_TEST_HTTP_LIMITS) as client:
         for index, step in enumerate(scenario.steps or [], 1):
             if not isinstance(step, dict) or step.get("enabled", True) is False:
@@ -317,11 +339,14 @@ async def run_scenario(db: Session, scenario: ApiScenario, project: ApiProject) 
                     break
                 continue
 
+            # 合并 session headers
+            merged_step = _merge_session_headers(step)
+
             result, step_passed = await _execute_endpoint_step(
                 client,
                 project=project,
                 endpoint=endpoint,
-                step=step,
+                step=merged_step,
                 variables=variables,
                 default_base_url=base_url,
                 index=index,

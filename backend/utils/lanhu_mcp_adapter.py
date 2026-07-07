@@ -114,10 +114,10 @@ class _McpStreamReader:
     async def readline(self):
         if self._closed and self._queue.empty():
             return b''
-        try:
-            return await asyncio.wait_for(self._queue.get(), timeout=3.0)
-        except asyncio.TimeoutError:
-            return b''
+        # No inner timeout — the caller (_send_req) wraps this in wait_for()
+        # with its own deadline. An inner timeout shorter than the caller's
+        # would cause premature EOF on slow-starting MCP servers (e.g. npx).
+        return await self._queue.get()
     async def read(self, n=-1):
         import asyncio as _asyncio
         loop = _asyncio.get_running_loop()
@@ -636,10 +636,10 @@ class MCPClient:
         except _asyncio.CancelledError:
             raise
         except FileNotFoundError:
-            logger.warning(f"STDIO 命令不存在: {command}")
+            logger.warning("STDIO 命令不存在: cmd=%s args=%s", command, cmd_args)
             return False
         except Exception as e:
-            logger.warning(f"STDIO 进程启动失败: {e}")
+            logger.warning("STDIO 进程启动失败: cmd=%s args=%s, error=%s", command, cmd_args, e)
             return False
 
         async def _send_req(method: str, params: dict | None = None) -> dict | None:
@@ -651,7 +651,11 @@ class MCPClient:
             }, ensure_ascii=False)
             self._proc.stdin.write((req + "\n").encode())
             await self._proc.stdin.drain()
-            deadline = time.monotonic() + 30
+            # npx cold-start can be slow (package download + Node.js boot);
+            # give the server up to 120 s to answer the first request.
+            timeout = 120 if method == "initialize" else 30
+            deadline = time.monotonic() + timeout
+            non_json_lines = []
             while time.monotonic() < deadline:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -668,8 +672,13 @@ class MCPClient:
                 try:
                     return json.loads(stripped)
                 except json.JSONDecodeError:
-                    logger.debug(f"STDIO 非 JSON 行（跳过）: {stripped[:100]}")
+                    non_json_lines.append(stripped[:200])
                     continue
+            if non_json_lines:
+                logger.warning(
+                    "STDIO MCP %s 收到 %d 行非 JSON 输出 (最后 3 行): %s",
+                    method, len(non_json_lines), non_json_lines[-3:]
+                )
             return None
 
         try:
@@ -679,6 +688,12 @@ class MCPClient:
                 "clientInfo": {"name": "ai-testcase-backend", "version": "1.0.0"},
             })
             if not result:
+                stderr_out = await self._read_stderr()
+                proc_rc = self._proc.returncode
+                logger.warning(
+                    "STDIO MCP initialize 无响应: cmd=%s %s, returncode=%s, stderr=%s",
+                    command, cmd_args, proc_rc, stderr_out[:500] if stderr_out else "(empty)"
+                )
                 self._safe_kill_proc()
                 return False
 
@@ -688,6 +703,11 @@ class MCPClient:
 
             result = await _send_req("tools/list")
             if not result or "result" not in result:
+                stderr_out = await self._read_stderr()
+                logger.warning(
+                    "STDIO MCP tools/list 无响应: cmd=%s, stderr=%s",
+                    command, stderr_out[:500] if stderr_out else "(empty)"
+                )
                 self._safe_kill_proc()
                 return False
 
@@ -697,9 +717,23 @@ class MCPClient:
             logger.info(f"STDIO MCP 连接成功: {command}, 工具数: {len(self.tools)}")
             return True
         except Exception as e:
-            logger.warning(f"STDIO MCP 初始化失败: {e}")
+            stderr_out = await self._read_stderr()
+            logger.warning("STDIO MCP 初始化失败: cmd=%s, error=%s, stderr=%s", command, e, stderr_out[:500] if stderr_out else "(empty)")
             self._safe_kill_proc()
             return False
+
+    async def _read_stderr(self, max_bytes: int = 4096) -> str:
+        """Non-blocking drain of stderr; returns decoded text (best-effort)."""
+        if self._proc is None or self._proc.stderr is None:
+            return ""
+        try:
+            import asyncio as _asyncio
+            data = await _asyncio.wait_for(
+                self._proc.stderr.read(max_bytes), timeout=1.0
+            )
+            return data.decode(errors="replace").strip() if data else ""
+        except (_asyncio.TimeoutError, Exception):
+            return ""
 
     def _safe_kill_proc(self):
         if self._proc is None:

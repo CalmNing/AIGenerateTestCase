@@ -185,15 +185,28 @@ def substitute_in_params(params: dict | None, param_map: dict, unresolved: set) 
 
 
 def build_param_map(db: Session, environment_id: Optional[int], local_parameters: list) -> dict:
-    """构建参数映射表：环境参数 + 本地参数（本地优先级更高）"""
+    """构建参数映射表：环境参数 + 本地参数（本地优先级更高）
+
+    当 environment_id 未指定时，自动降级：
+      1. 查找标记为默认的环境参数
+      2. 查找任意一个环境参数
+      3. 返回空映射
+    """
     param_map: dict = {}
 
-    if environment_id:
-        global_param = db.get(GlobalParameter, environment_id)
-        if global_param:
-            for p in global_param.parameters:
-                if isinstance(p, dict) and p.get("key") and p.get("value"):
-                    param_map[p["key"]] = p["value"]
+    # 1. 尝试指定环境
+    global_param = db.get(GlobalParameter, environment_id) if environment_id else None
+    # 2. 尝试默认环境
+    if global_param is None:
+        global_param = db.exec(select(GlobalParameter).where(GlobalParameter.is_default == True)).first()
+    # 3. 尝试任意环境
+    if global_param is None:
+        global_param = db.exec(select(GlobalParameter)).first()
+
+    if global_param:
+        for p in global_param.parameters:
+            if isinstance(p, dict) and p.get("key") and p.get("value"):
+                param_map[p["key"]] = p["value"]
 
     for p in (local_parameters or []):
         if isinstance(p, dict) and p.get("key") and p.get("value"):

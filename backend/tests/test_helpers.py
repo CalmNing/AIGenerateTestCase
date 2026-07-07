@@ -110,7 +110,7 @@ def test_normalize_testcase_dict_chinese_keys():
 def test_normalize_testcase_dict_missing_fields_defaults():
     out = _normalize_testcase_dict({})
     assert out["case_name"] == ""
-    assert out["case_level"] == 4
+    assert out["case_level"] == 1  # 默认为功能测试
     assert out["preset_conditions"] == []
     assert out["expected_results"] == []
     assert out["steps"] == []

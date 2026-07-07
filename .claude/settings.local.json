@@ -1,6 +1,5 @@
 {
   "permissions": {
-    "defaultMode": "bypassPermissions",
     "allow": [
       "Read",
       "Write",
@@ -133,7 +132,8 @@
       "Bash(dir /s /b frontend\\\\src\\\\*.tsx frontend\\\\src\\\\*.ts)",
       "Bash(echo \"Exit code: $?\")",
       "PowerShell(git *)"
-    ]
+    ],
+    "defaultMode": "bypassPermissions"
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [

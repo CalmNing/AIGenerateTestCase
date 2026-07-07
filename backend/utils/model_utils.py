@@ -391,6 +391,11 @@ async def _fallback_raw_api_call(
                 if role == 'human':
                     role = 'user'
                 oai_messages.append({'role': role, 'content': content})
+            elif isinstance(msg, dict):
+                role = msg.get('role', 'user')
+                if role == 'human':
+                    role = 'user'
+                oai_messages.append({'role': role, 'content': msg.get('content', '')})
 
         # --- 策略 A: 使用 tool_choice（适用于支持 tool calling 的模型） ---
         tool_schema = {
@@ -423,7 +428,8 @@ async def _fallback_raw_api_call(
                     try:
                         parsed = _json.loads(args_str)
                         result = schema(**parsed)
-                        logger.info(f"[Fallback] 策略A 解析成功: {len(result.response)} 条用例")
+                        count = len(getattr(result, 'response', None) or getattr(result, 'optimized_cases', None) or [])
+                        logger.info(f"[Fallback] 策略A 解析成功: {count} 条用例")
                         return result
                     except Exception as parse_err:
                         logger.error(f"[Fallback] 策略A JSON 解析失败: {type(parse_err).__name__}: {parse_err}")
@@ -487,7 +493,8 @@ async def _fallback_raw_api_call(
         try:
             parsed = _json.loads(clean_content)
             result = schema(**parsed)
-            logger.info(f"[Fallback] 策略B 解析成功: {len(result.response)} 条用例")
+            count = len(getattr(result, 'response', None) or getattr(result, 'optimized_cases', None) or [])
+            logger.info(f"[Fallback] 策略B 解析成功: {count} 条用例")
             return result
         except _json.JSONDecodeError:
             # 尝试使用完整 JSON 提取
@@ -495,7 +502,8 @@ async def _fallback_raw_api_call(
             if obj:
                 try:
                     result = schema(**obj)
-                    logger.info(f"[Fallback] 策略B _extract_json_with_response 解析成功: {len(result.response)} 条用例")
+                    count = len(getattr(result, 'response', None) or getattr(result, 'optimized_cases', None) or [])
+                    logger.info(f"[Fallback] 策略B _extract_json_with_response 解析成功: {count} 条用例")
                     return result
                 except Exception:
                     pass
@@ -683,7 +691,7 @@ def _parse_response(response) -> list:
                                                 steps=_normalize_steps(d.get('steps', [])),
                                                 preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
                                                 expected_results=d.get('expected_results', []),
-                                                case_level=d.get('case_level', 4),
+                                                case_level=d.get('case_level', 1),
                                             ))
                                         local_testcases = rebuilt
                                         break
@@ -705,7 +713,7 @@ def _parse_response(response) -> list:
                                             steps=_normalize_steps(d.get('steps', [])),
                                             preset_conditions=_normalize_steps(d.get('preset_conditions', [])),
                                             expected_results=d.get('expected_results', []),
-                                            case_level=d.get('case_level', 4),
+                                            case_level=d.get('case_level', 1),
                                         ))
                                     local_testcases = rebuilt
                                     break

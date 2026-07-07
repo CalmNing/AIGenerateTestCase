@@ -387,7 +387,7 @@ def _normalize_testcase_dict(d: dict) -> dict:
     if raw_level is not None:
         result['case_level'] = _normalize_level(raw_level)
     else:
-        result['case_level'] = 4
+        result['case_level'] = 1  # 默认为功能测试
 
     # preset_conditions（支持 前置条件、前置条件、前提 等中文键名）
     raw_pc = (
@@ -545,6 +545,7 @@ class _TokenUsageCallback(BaseCallbackHandler):
         self.mcp_validation_error: str | None = None
         self._mcp_validation_error_count = 0
         self._last_mcp_validation_error: str | None = None
+        self.last_llm_response: str | None = None  # 捕获最后一次 LLM 原始响应
 
     def on_chat_model_start(self, serialized, messages, **kwargs):
         total = 0
@@ -558,6 +559,29 @@ class _TokenUsageCallback(BaseCallbackHandler):
             logger.warning(f"[诊断] tools 定义大小: {len(tools_str)} chars")
             total += len(tools_str)
         logger.warning(f"[诊断] 预估总计: {total} chars / {total//4} tokens / {total//2} CJK tokens")
+
+    def on_llm_end(self, response, **kwargs):
+        """捕获 LLM 原始响应，用于调试结构化输出失败。"""
+        try:
+            if response and hasattr(response, 'generations') and response.generations:
+                for gen_list in response.generations:
+                    for gen in gen_list:
+                        text = gen.text if hasattr(gen, 'text') else str(gen)
+                        if text:
+                            self.last_llm_response = text
+                            # 检查是否有 tool_calls
+                            if hasattr(gen, 'message') and gen.message:
+                                msg = gen.message
+                                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                    for tc in msg.tool_calls:
+                                        logger.info(f"[诊断] LLM tool_call: name={tc.get('name', '?')}, args长度={len(str(tc.get('args', '')))}")
+                                        args_str = str(tc.get('args', ''))
+                                        logger.info(f"[诊断] LLM tool_call args 前500字符: {args_str[:500]}")
+                                if hasattr(msg, 'content') and msg.content:
+                                    content = str(msg.content)
+                                    logger.info(f"[诊断] LLM content 前500字符: {content[:500]}")
+        except Exception as e:
+            logger.warning(f"[诊断] on_llm_end 记录响应异常: {e}")
 
     def on_tool_start(self, serialized, input_str, **kwargs):
         name = serialized.get("name") if isinstance(serialized, dict) else None
