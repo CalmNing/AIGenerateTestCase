@@ -13,7 +13,7 @@ from sqlmodel import select
 
 from app.deps import SessionDep, CurrentUser
 from app.pipeline.pipeline_runner import PipelineRunner, get_pipeline_task
-from db.models import RequirementPoint, TestPoint, TestCase, McpServer, ApiEndpoint, ApiProject
+from db.models import RequirementPoint, TestPoint, TestCase, McpServer, ApiEndpoint, ApiProject, SystemConfig
 from utils.base_response import Response
 from config import config_manager
 from app.permissions import Permission, get_user_permissions
@@ -62,6 +62,34 @@ def _build_api_context(
     return build_api_context(session, api_endpoint_ids, api_project_id, endpoint_overrides)
 
 
+def _get_user_config(session, user_id: Optional[str] = None) -> dict:
+    """从数据库获取用户配置，如果不存在则返回默认值"""
+    statement = select(SystemConfig).where(SystemConfig.user_id == user_id)
+    config = session.exec(statement).first()
+
+    if config:
+        return {
+            "model_type": config.model_type,
+            "api_key": config.api_key or "",
+            "api_base_url": config.api_base_url,
+            "api_model": config.api_model,
+            "api_proxy_url": config.api_proxy_url or "",
+            "ollama_url": config.ollama_url,
+            "ollama_model": config.ollama_model,
+        }
+
+    # 返回默认配置
+    return {
+        "model_type": "api",
+        "api_key": "",
+        "api_base_url": "https://api.deepseek.com",
+        "api_model": "deepseek-v4-flash",
+        "api_proxy_url": "",
+        "ollama_url": "http://localhost:11434",
+        "ollama_model": "llama3",
+    }
+
+
 @router.post("/generate-v2")
 async def generate_v2(
     session_id: int = Form(...),
@@ -88,12 +116,14 @@ async def generate_v2(
         except (json.JSONDecodeError, TypeError):
             skills_list = [s.strip() for s in selected_skills.split(",") if s.strip()]
 
-    # 获取模型配置
-    model_type = config_manager.get("model_type", "api")
-    api_key = config_manager.get("api_key", "")
-    api_base_url = config_manager.get("api_base_url", "https://api.deepseek.com")
-    api_model = config_manager.get("api_model", "deepseek-v4-flash")
-    api_proxy_url = config_manager.get("api_proxy_url", "")
+    # 从数据库获取模型配置
+    user_id = user.user_id if user else None
+    user_config = _get_user_config(session, user_id)
+    model_type = user_config["model_type"]
+    api_key = user_config["api_key"]
+    api_base_url = user_config["api_base_url"]
+    api_model = user_config["api_model"]
+    api_proxy_url = user_config["api_proxy_url"]
 
     if model_type == "api" and not api_key:
         raise HTTPException(status_code=400, detail="API Key未配置，请先在配置页面设置")
@@ -286,12 +316,14 @@ async def regenerate_test_point_cases(
     if not point:
         raise HTTPException(status_code=404, detail="测试点不存在")
 
-    # 获取模型配置
-    model_type = config_manager.get("model_type", "api")
-    api_key = config_manager.get("api_key", "")
-    api_base_url = config_manager.get("api_base_url", "https://api.deepseek.com")
-    api_model = config_manager.get("api_model", "deepseek-v4-flash")
-    api_proxy_url = config_manager.get("api_proxy_url", "")
+    # 从数据库获取模型配置
+    user_id = user.user_id if user else None
+    user_config = _get_user_config(session, user_id)
+    model_type = user_config["model_type"]
+    api_key = user_config["api_key"]
+    api_base_url = user_config["api_base_url"]
+    api_model = user_config["api_model"]
+    api_proxy_url = user_config["api_proxy_url"]
 
     if model_type == "api" and not api_key:
         raise HTTPException(status_code=400, detail="API Key未配置")

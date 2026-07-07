@@ -1,10 +1,18 @@
+"""
+系统配置管理路由
+提供配置的CRUD接口，配置存储在数据库中
+"""
+import asyncio
 import logging
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
+from sqlmodel import select
 
-from config import config_manager
+from app.deps import SessionDep, CurrentUser
+from db.models import SystemConfig
 from utils.base_response import Response
 
 logger = logging.getLogger(__name__)
@@ -12,20 +20,118 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"])
 
 
-class LanhuCookieRequest(BaseModel):
-    cookie: str
+class ConfigUpdateRequest(BaseModel):
+    """配置更新请求"""
+    model_type: Optional[str] = None
+    api_key: Optional[str] = None
+    api_base_url: Optional[str] = None
+    api_model: Optional[str] = None
+    api_proxy_url: Optional[str] = None
+    ollama_url: Optional[str] = None
+    ollama_model: Optional[str] = None
+    lanhu_cookie: Optional[str] = None
+    bug_link_template: Optional[str] = None
+
+
+def _get_or_create_config(session, user_id: Optional[str] = None) -> SystemConfig:
+    """获取或创建用户配置"""
+    # 尝试获取现有配置
+    statement = select(SystemConfig).where(SystemConfig.user_id == user_id)
+    config = session.exec(statement).first()
+
+    if not config:
+        # 创建默认配置
+        config = SystemConfig(
+            user_id=user_id,
+            model_type="api",
+            api_key="",
+            api_base_url="https://api.deepseek.com",
+            api_model="deepseek-v4-flash",
+            api_proxy_url="",
+            ollama_url="http://localhost:11434",
+            ollama_model="llama3",
+        )
+        session.add(config)
+        session.commit()
+        session.refresh(config)
+
+    return config
+
+
+@router.get("")
+async def get_config(
+    session: SessionDep = None,
+    user: CurrentUser = None,
+):
+    """获取当前用户的系统配置"""
+    user_id = user.user_id if user else None
+    config = _get_or_create_config(session, user_id)
+
+    return Response(data={
+        "model_type": config.model_type,
+        "api_key": config.api_key or "",
+        "api_base_url": config.api_base_url,
+        "api_model": config.api_model,
+        "api_proxy_url": config.api_proxy_url or "",
+        "ollama_url": config.ollama_url,
+        "ollama_model": config.ollama_model,
+        "lanhu_cookie": config.lanhu_cookie or "",
+        "bug_link_template": config.bug_link_template or "",
+    })
+
+
+@router.put("")
+async def update_config(
+    body: ConfigUpdateRequest,
+    session: SessionDep = None,
+    user: CurrentUser = None,
+):
+    """更新当前用户的系统配置"""
+    user_id = user.user_id if user else None
+    config = _get_or_create_config(session, user_id)
+
+    # 记录旧的蓝湖 Cookie 值，用于比较
+    old_cookie = config.lanhu_cookie or ""
+
+    # 更新字段
+    if body.model_type is not None:
+        config.model_type = body.model_type
+    if body.api_key is not None:
+        config.api_key = body.api_key
+    if body.api_base_url is not None:
+        config.api_base_url = body.api_base_url
+    if body.api_model is not None:
+        config.api_model = body.api_model
+    if body.api_proxy_url is not None:
+        config.api_proxy_url = body.api_proxy_url
+    if body.ollama_url is not None:
+        config.ollama_url = body.ollama_url
+    if body.ollama_model is not None:
+        config.ollama_model = body.ollama_model
+    if body.lanhu_cookie is not None:
+        config.lanhu_cookie = body.lanhu_cookie
+    if body.bug_link_template is not None:
+        config.bug_link_template = body.bug_link_template
+
+    session.add(config)
+    session.commit()
+
+    # 只有当蓝湖 Cookie 真正发生变化时，才异步转发到 MCP 服务
+    new_cookie = body.lanhu_cookie if body.lanhu_cookie is not None else old_cookie
+    if body.lanhu_cookie is not None and body.lanhu_cookie != old_cookie:
+        # 异步执行，不阻塞响应
+        asyncio.create_task(_forward_cookie_to_lanhu_mcp(body.lanhu_cookie))
+
+    return Response(message="配置已保存")
 
 
 def _get_lanhu_mcp_base_url() -> str:
-    """从配置的 MCP URL 推导 lanhu-mcp 服务的基础地址"""
-    mcp_url = config_manager.get("mcp_server_url", "http://lanhu-mcp:8000/mcp")
-    if mcp_url.endswith("/mcp"):
-        return mcp_url[:-4]
-    return mcp_url
+    """从配置获取 lanhu-mcp 服务的基础地址"""
+    return "http://lanhu-mcp:8002"
 
 
 async def _forward_cookie_to_lanhu_mcp(cookie: str) -> bool:
-    """将 cookie 转发到 lanhu-mcp 服务的运行时配置端点"""
+    """将 cookie 转发到 lanhu-mcp 服务的运行时配置端点（后台任务）"""
     base_url = _get_lanhu_mcp_base_url()
     urls = [base_url, "http://localhost:8002"]
     # 去重
@@ -38,7 +144,7 @@ async def _forward_cookie_to_lanhu_mcp(cookie: str) -> bool:
 
     for url in unique:
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=3) as client:
                 resp = await client.post(
                     f"{url}/config/cookie",
                     json={"cookie": cookie},
@@ -51,26 +157,6 @@ async def _forward_cookie_to_lanhu_mcp(cookie: str) -> bool:
         except Exception as e:
             logger.warning(f"转发 cookie 到 {url} 失败: {e}")
     return False
-
-
-@router.get("/lanhu-cookie")
-async def get_lanhu_cookie():
-    """获取当前 LANHU_COOKIE 配置（脱敏）"""
-    cookie = config_manager.get("lanhu_cookie", "")
-    masked = (cookie[:20] + "...") if len(cookie) > 20 else ("***" if cookie else "")
-    return Response(data={"cookie": masked, "has_cookie": bool(cookie)})
-
-
-@router.post("/lanhu-cookie")
-async def set_lanhu_cookie(req: LanhuCookieRequest):
-    """设置 LANHU_COOKIE 并转发到运行中的 lanhu-mcp 服务"""
-    config_manager.set("lanhu_cookie", req.cookie)
-
-    forwarded = await _forward_cookie_to_lanhu_mcp(req.cookie)
-    if forwarded:
-        return Response(message="蓝湖 Cookie 已更新并同步到 MCP 服务")
-    else:
-        return Response(message="蓝湖 Cookie 已保存（MCP 服务未运行，重启后生效）")
 
 
 @router.get("/models")

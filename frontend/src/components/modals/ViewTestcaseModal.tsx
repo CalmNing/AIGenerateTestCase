@@ -34,9 +34,9 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
 
   useEffect(() => {
     if (visible) {
-      configApi.getBugLinkTemplate().then(res => {
+      configApi.getConfig().then(res => {
         if (res.code === 200 && res.data) {
-          setBugLinkTemplate(res.data.template || '');
+          setBugLinkTemplate(res.data.bug_link_template || '');
         }
       }).catch(() => {}); // silent fail
     }

@@ -27,14 +27,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   modelListLoading,
   onFetchModels,
 }) => {
+  const [apiModelValue, setApiModelValue] = React.useState('');
+
+  // 监听表单值变化
   useEffect(() => {
-    settingForm.setFieldsValue({
-      api_base_url: settingForm.getFieldValue('api_base_url') || 'https://api.deepseek.com',
-      api_model: settingForm.getFieldValue('api_model') || 'deepseek-v4-flash',
-      ollama_url: settingForm.getFieldValue('ollama_url') || 'http://localhost:11434',
-      ollama_model: settingForm.getFieldValue('ollama_model') || 'gpt-oss:120b-cloud'
-    });
-  }, []);
+    if (visible) {
+      const values = settingForm.getFieldsValue();
+      if (values.api_model) {
+        setApiModelValue(values.api_model);
+      }
+    }
+  }, [visible, settingForm]);
+
+  // 监听 settingType 变化，确保值正确同步
+  useEffect(() => {
+    if (visible && settingType === 'api') {
+      const values = settingForm.getFieldsValue();
+      if (values.api_model && values.api_model !== apiModelValue) {
+        setApiModelValue(values.api_model);
+      }
+    }
+  }, [settingType, visible]);
+
   return (
     <Modal
       title="设置"
@@ -77,6 +91,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             <Form.Item
               name="api_base_url"
               label="API Base URL"
+              rules={[{ required: true, message: '请输入 API Base URL' }]}
               tooltip="OpenAI-compatible API 地址。默认直连 DeepSeek；也可填写 OneAPI/New API/LiteLLM 等兼容网关地址。"
             >
               <Input placeholder="https://api.deepseek.com" />
@@ -91,16 +106,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               <Space.Compact style={{ width: '100%' }}>
                 <AutoComplete
                   style={{ flex: 1 }}
+                  value={apiModelValue}
                   placeholder="deepseek-v4-flash"
                   options={modelList.map(m => ({ label: m, value: m }))}
                   filterOption={(inputValue, option) =>
                     option?.value?.toLowerCase().includes(inputValue.toLowerCase()) ?? false
                   }
                   disabled={modelListLoading}
-                  onSelect={(value) => {
-                    settingForm.setFieldsValue({ api_model: value });
-                  }}
                   onChange={(value) => {
+                    setApiModelValue(value);
                     settingForm.setFieldsValue({ api_model: value });
                   }}
                 />
@@ -156,6 +170,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
           tooltip="登录蓝湖网页版后，从浏览器开发者工具中复制 Cookie 值。留空则使用服务器原有配置。"
         >
           <Input.Password placeholder="粘贴完整的蓝湖 Cookie" />
+        </Form.Item>
+
+        {/* Bug链接模板 */}
+        <Form.Item
+          name="bug_link_template"
+          label="Bug 链接模板"
+          tooltip="用于在测试用例中生成 Bug 链接。使用 {bug_id} 作为 Bug ID 占位符，例如：http://your-bug-system.com/bug?id={bug_id}"
+        >
+          <Input placeholder="http://zt.luban.fit/index.php?m=bug&f=view&bugID={bug_id}" />
         </Form.Item>
       </Form>
     </Modal>

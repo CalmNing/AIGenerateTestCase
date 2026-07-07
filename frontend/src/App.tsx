@@ -120,13 +120,36 @@ const App: React.FC = () => {
     loadSessions();
     setSelectedSession(selectedSession?.id ? selectedSession : null);
     setSelectedModule(selectedModule ? selectedModule : 0);
-    // 从localStorage加载设置
-    const savedSettings = localStorage.getItem('appSettings');
-    if (savedSettings) {
-      const settings = JSON.parse(savedSettings);
-      settingForm.setFieldsValue(settings);
-      setSettingType(settings.setting_type || 'api');
-    }
+    // 从后端加载配置
+    const loadConfig = async () => {
+      try {
+        const res = await configApi.getConfig();
+        console.log('初始化加载配置结果:', res);
+        if (res.code === 200 && res.data) {
+          const config = res.data;
+          console.log('配置数据:', config);
+          // 延迟设置值，确保表单已渲染
+          setTimeout(() => {
+            const values = {
+              setting_type: config.model_type || 'api',
+              api_key: config.api_key || '',
+              api_base_url: config.api_base_url || 'https://api.deepseek.com',
+              api_model: config.api_model || 'deepseek-v4-flash',
+              api_proxy_url: config.api_proxy_url || '',
+              ollama_url: config.ollama_url || 'http://localhost:11434',
+              ollama_model: config.ollama_model || 'llama3',
+            };
+            console.log('设置表单值:', values);
+            settingForm.setFieldsValue(values);
+            setSettingType((config.model_type as 'api' | 'ollama') || 'api');
+            console.log('设置后的表单值:', settingForm.getFieldsValue());
+          }, 100);
+        }
+      } catch (error) {
+        console.error('加载配置失败:', error);
+      }
+    };
+    loadConfig();
   }, []);
 
   useEffect(() => {
@@ -911,22 +934,58 @@ const App: React.FC = () => {
   const [modelListLoading, setModelListLoading] = useState(false);
 
   // 打开设置模态框
-  const handleOpenSettingModal = () => {
+  const handleOpenSettingModal = async () => {
     if (!canManageSettings) return;
-    setIsSettingModalVisible(true);
-    // 如果没有保存的设置，设置默认值
-    const savedSettings = localStorage.getItem('appSettings');
-    if (!savedSettings) {
-      settingForm.setFieldsValue({
-        setting_type: 'api',
-        api_key: '',
-        api_base_url: 'https://api.deepseek.com',
-        api_model: 'deepseek-v4-flash',
-        api_proxy_url: '',
-        ollama_url: 'http://localhost:11434',
-        ollama_model: 'gpt-oss:120b-cloud'
-      });
+
+    try {
+      // 先从后端加载配置
+      const res = await configApi.getConfig();
+      console.log('打开弹窗加载配置结果:', res);
+      if (res.code === 200 && res.data) {
+        const config = res.data;
+        console.log('配置数据:', config);
+
+        // 先设置 settingType 确保字段显示
+        const newType = (config.model_type as 'api' | 'ollama') || 'api';
+        setSettingType(newType);
+
+        // 先打开弹窗
+        setIsSettingModalVisible(true);
+
+        // 延迟设置表单值，等待 settingType 更新和字段渲染
+        setTimeout(() => {
+          const values = {
+            setting_type: newType,
+            api_key: config.api_key || '',
+            api_base_url: config.api_base_url || 'https://api.deepseek.com',
+            api_model: config.api_model || 'deepseek-v4-flash',
+            api_proxy_url: config.api_proxy_url || '',
+            ollama_url: config.ollama_url || 'http://localhost:11434',
+            ollama_model: config.ollama_model || 'llama3',
+            lanhu_cookie: config.lanhu_cookie || '',
+            bug_link_template: config.bug_link_template || '',
+          };
+          console.log('设置表单值:', values);
+          settingForm.setFieldsValue(values);
+          console.log('设置后的表单值:', settingForm.getFieldsValue());
+        }, 300);
+      }
+    } catch (error) {
+      console.error('加载配置失败:', error);
+      // 如果加载失败，使用默认值
       setSettingType('api');
+      setIsSettingModalVisible(true);
+      setTimeout(() => {
+        settingForm.setFieldsValue({
+          setting_type: 'api',
+          api_key: '',
+          api_base_url: 'https://api.deepseek.com',
+          api_model: 'deepseek-v4-flash',
+          api_proxy_url: '',
+          ollama_url: 'http://localhost:11434',
+          ollama_model: 'llama3'
+        });
+      }, 300);
     }
   };
 
@@ -954,49 +1013,42 @@ const App: React.FC = () => {
     try {
       setLoading(true);
 
-      // 保存到localStorage（排除后端配置项）
-      const { lanhu_cookie, ...localValues } = values;
-      if (typeof localValues.api_key === 'string') {
-        localValues.api_key = localValues.api_key.trim();
+      // 清理字段值
+      const configData: any = {};
+      if (typeof values.api_key === 'string') {
+        configData.api_key = values.api_key.trim();
       }
-      if (typeof localValues.api_base_url === 'string') {
-        localValues.api_base_url = localValues.api_base_url.trim();
+      if (typeof values.api_base_url === 'string') {
+        configData.api_base_url = values.api_base_url.trim();
       }
-      if (typeof localValues.api_model === 'string') {
-        localValues.api_model = localValues.api_model.trim();
+      if (typeof values.api_model === 'string') {
+        configData.api_model = values.api_model.trim();
       }
-      if (typeof localValues.api_proxy_url === 'string') {
-        localValues.api_proxy_url = localValues.api_proxy_url.trim();
+      if (typeof values.api_proxy_url === 'string') {
+        configData.api_proxy_url = values.api_proxy_url.trim();
       }
-      if (typeof localValues.ollama_url === 'string') {
-        localValues.ollama_url = localValues.ollama_url.trim();
+      if (typeof values.ollama_url === 'string') {
+        configData.ollama_url = values.ollama_url.trim();
       }
-      if (typeof localValues.ollama_model === 'string') {
-        localValues.ollama_model = localValues.ollama_model.trim();
+      if (typeof values.ollama_model === 'string') {
+        configData.ollama_model = values.ollama_model.trim();
       }
-      localStorage.setItem('appSettings', JSON.stringify(localValues));
 
-      // 如果填写了蓝湖 Cookie，发送到后端
-      if (lanhu_cookie && lanhu_cookie.trim()) {
-        try {
-          const cookieRes = await configApi.setLanhuCookie(lanhu_cookie.trim());
-          const cookieMsg = (cookieRes as any)?.message;
-          if (cookieMsg) {
-            notification.info({
-              message: '蓝湖 Cookie',
-              description: cookieMsg,
-              placement: 'topRight'
-            });
-          }
-        } catch (err: any) {
-          console.error('保存蓝湖 Cookie 到后端失败:', err);
-          notification.warning({
-            message: '蓝湖 Cookie 保存失败',
-            description: err?.response?.data?.message || '后端接口调用失败，请检查网络或稍后重试',
-            placement: 'topRight'
-          });
-        }
+      // 设置模型类型
+      configData.model_type = values.setting_type || 'api';
+
+      // 保存蓝湖 Cookie
+      if (typeof values.lanhu_cookie === 'string') {
+        configData.lanhu_cookie = values.lanhu_cookie.trim();
       }
+
+      // 保存 Bug 链接模板
+      if (typeof values.bug_link_template === 'string') {
+        configData.bug_link_template = values.bug_link_template.trim();
+      }
+
+      // 调用后端 API 保存配置
+      await configApi.updateConfig(configData);
 
       // 关闭模态框
       setIsSettingModalVisible(false);
@@ -1004,14 +1056,14 @@ const App: React.FC = () => {
       // 显示成功通知
       notification.success({
         message: '保存成功',
-        description: '配置已保存',
+        description: '配置已保存到服务器',
         placement: 'topRight'
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('保存配置失败:', error);
       notification.error({
         message: '保存失败',
-        description: '保存配置时发生错误，请重试',
+        description: error?.response?.data?.message || '保存配置时发生错误，请重试',
         placement: 'topRight'
       });
     } finally {
@@ -1061,28 +1113,28 @@ const App: React.FC = () => {
     try {
       setLoading(true);
 
-      // 从localStorage获取模型配置
-      const savedSettings = localStorage.getItem('appSettings');
-      if (!savedSettings) {
+      // 从表单获取模型配置（已从后端加载）
+      const formValues = settingForm.getFieldsValue();
+      const modelConfig = {
+        model_type: formValues.setting_type || 'api',
+        api_key: (formValues.api_key || '').trim(),
+        api_base_url: (formValues.api_base_url || '').trim(),
+        api_proxy_url: (formValues.api_proxy_url || '').trim(),
+        api_model: (formValues.api_model || 'deepseek-v4-flash').trim(),
+        ollama_url: (formValues.ollama_url || '').trim(),
+        ollama_model: (formValues.ollama_model || '').trim()
+      };
+
+      // 检查配置是否完整
+      if (modelConfig.model_type === 'api' && !modelConfig.api_key) {
         handleOpenSettingModal();
         notification.error({
           message: '配置缺失',
-          description: '请先配置模型设置',
+          description: '请先配置 API Key',
           placement: 'topRight'
         });
         return;
       }
-
-      const settings = JSON.parse(savedSettings);
-      const modelConfig = {
-        model_type: settings.setting_type,
-        api_key: (settings.api_key || '').trim(),
-        api_base_url: (settings.api_base_url || '').trim(),
-        api_proxy_url: (settings.api_proxy_url || '').trim(),
-        api_model: (settings.api_model || 'deepseek-v4-flash').trim(),
-        ollama_url: (settings.ollama_url || '').trim(),
-        ollama_model: (settings.ollama_model || '').trim()
-      };
 
       setSettingButtonStatus(true); // 点击生成按钮设置按钮置灰
 

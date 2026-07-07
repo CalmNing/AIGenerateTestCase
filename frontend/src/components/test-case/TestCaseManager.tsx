@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button, Input, Select, notification, Switch } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
+import { configApi } from '../../services/api';
 import TestCaseTable from './TestCaseTable';
 import * as XLSX from 'xlsx';
 import { formatStep } from '../../utils/stepUtils';
@@ -58,6 +59,17 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onMove,
   onBatchMove
 }) => {
+  const [bugLinkTemplate, setBugLinkTemplate] = useState('');
+
+  // 加载 Bug 链接模板
+  useEffect(() => {
+    configApi.getConfig().then(res => {
+      if (res.code === 200 && res.data) {
+        setBugLinkTemplate(res.data.bug_link_template || '');
+      }
+    }).catch(() => {});
+  }, []);
+
   const handleExportExcel = () => {
     if (testcases.length === 0) {
       notification.warning({ message: '导出失败', description: '当前没有可导出的测试用例', placement: 'topRight' });
@@ -75,7 +87,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
         '测试步骤': tc.steps.map((item: any, idx) => `${idx + 1}. ${typeof item === 'string' ? item : formatStep(item)}`).join('\n'),
         '预期结果': tc.expected_results.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
         '状态': tc.status === TestCaseStatus.PASSED ? '已通过' : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
-        'bug': tc.bug_id ? `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}` : '',
+        'bug': tc.bug_id ? (bugLinkTemplate ? bugLinkTemplate.replace('{bug_id}', String(tc.bug_id)) : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}`) : '',
       }));
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
@@ -200,6 +212,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onViewExecutionLogs={onViewExecutionLogs}
             onInferDependencies={onInferDependencies}
             onBatchMove={onBatchMove}
+            bugLinkTemplate={bugLinkTemplate}
           />
         </>
       )}

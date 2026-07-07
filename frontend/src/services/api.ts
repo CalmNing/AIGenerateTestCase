@@ -433,9 +433,28 @@ export const skillsApi = {
 
 // 系统配置 API
 export const configApi = {
-  getLanhuCookie: (): Promise<ApiResponse<{ cookie: string; has_cookie: boolean }>> => api.get('/config/lanhu-cookie'),
-  setLanhuCookie: (cookie: string): Promise<ApiResponse> => api.post('/config/lanhu-cookie', { cookie }),
-  getBugLinkTemplate: (): Promise<ApiResponse<{ template: string }>> => api.get('/config/bug-link-template'),
+  getConfig: (): Promise<ApiResponse<{
+    model_type: string;
+    api_key: string;
+    api_base_url: string;
+    api_model: string;
+    api_proxy_url: string;
+    ollama_url: string;
+    ollama_model: string;
+    lanhu_cookie: string;
+    bug_link_template: string;
+  }>> => api.get('/config'),
+  updateConfig: (config: {
+    model_type?: string;
+    api_key?: string;
+    api_base_url?: string;
+    api_model?: string;
+    api_proxy_url?: string;
+    ollama_url?: string;
+    ollama_model?: string;
+    lanhu_cookie?: string;
+    bug_link_template?: string;
+  }): Promise<ApiResponse> => api.put('/config', config),
   listModels: (apiKey: string, apiBaseUrl: string): Promise<ApiResponse<{ id: string; owned_by: string }[]>> =>
     api.get('/config/models', { params: { api_key: apiKey, api_base_url: apiBaseUrl } }),
 };

@@ -308,3 +308,17 @@ class MockLog(BaseModel, table=True):
     response_body: Optional[str] = Field(default=None, description="响应体内容")
     matched: bool = Field(default=True, description="是否匹配到Mock配置")
     user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")
+
+
+class SystemConfig(BaseModel, table=True):
+    """系统配置数据模型（全局配置，按 user_id 隔离）"""
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub），null表示全局配置")
+    model_type: str = Field(default="api", description="模型类型: api | ollama")
+    api_key: Optional[str] = Field(default=None, description="API Key")
+    api_base_url: str = Field(default="https://api.deepseek.com", description="API Base URL")
+    api_model: str = Field(default="deepseek-v4-flash", description="API模型名称")
+    api_proxy_url: Optional[str] = Field(default=None, description="API代理URL")
+    ollama_url: str = Field(default="http://localhost:11434", description="Ollama URL")
+    ollama_model: str = Field(default="llama3", description="Ollama模型名称")
+    lanhu_cookie: Optional[str] = Field(default=None, description="蓝湖Cookie")
+    bug_link_template: Optional[str] = Field(default=None, description="Bug链接模板")

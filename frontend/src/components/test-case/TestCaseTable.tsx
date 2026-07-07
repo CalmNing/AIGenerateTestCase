@@ -15,6 +15,7 @@ interface TestCaseTableProps {
   onViewExecutionLogs?: (testcase: TestCase) => void;
   onInferDependencies?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
+  bugLinkTemplate?: string;
 }
 
 const statusConfig: Record<string, { label: string; dotClass: string; textClass: string }> = {
@@ -34,7 +35,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onApiExecute,
   onViewExecutionLogs,
   onInferDependencies,
-  onBatchMove
+  onBatchMove,
+  bugLinkTemplate
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [isBatchDeleteModalVisible, setIsBatchDeleteModalVisible] = useState(false);
@@ -173,9 +175,12 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       align: 'center' as const,
       render: (bugId: number | undefined) => {
         if (bugId) {
+          const bugUrl = bugLinkTemplate
+            ? bugLinkTemplate.replace('{bug_id}', String(bugId))
+            : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`;
           return (
             <a
-              href={`http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`}
+              href={bugUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="tcm-bug-link"
