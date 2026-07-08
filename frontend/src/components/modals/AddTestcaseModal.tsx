@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Drawer, Form, Input, notification, Select, Tag } from 'antd';
+import { Button, Drawer, Form, Input, message, Select, Tag } from 'antd';
 import { Module, Session } from '../../types';
 import { testcaseApi } from '../../services/api';
 import StructuredTestcaseSections, { createStepRow, expectedTemplateGroups, StepRow } from './TestcaseStructuredSections';
@@ -13,6 +13,17 @@ interface AddTestcaseModalProps {
   onCancel: () => void;
   onAddSuccess: () => void;
 }
+
+const showMessage = (
+  type: 'success' | 'error',
+  title: string,
+  description?: string,
+) => {
+  message.open({
+    type,
+    content: description ? `${title}: ${description}` : title,
+  });
+};
 
 const AddTestcaseModal: React.FC<AddTestcaseModalProps> = ({
   visible,
@@ -171,28 +182,16 @@ const AddTestcaseModal: React.FC<AddTestcaseModalProps> = ({
       const response = await testcaseApi.createTestcase(selectedSession.id, testcaseData);
 
       if (response.code === 200) {
-        notification.success({
-          message: '创建成功',
-          description: '测试用例已成功创建',
-          placement: 'topRight',
-        });
+        showMessage('success', '创建成功', '测试用例已成功创建');
         resetEditor();
         onAddSuccess();
         onCancel();
       } else {
-        notification.error({
-          message: '创建失败',
-          description: response.message || '创建测试用例失败，请重试',
-          placement: 'topRight',
-        });
+        showMessage('error', '创建失败', response.message || '创建测试用例失败，请重试');
       }
     } catch (error: any) {
       console.error('创建测试用例失败:', error);
-      notification.error({
-        message: '创建失败',
-        description: error.response?.data?.detail || '创建测试用例时发生错误，请重试',
-        placement: 'topRight',
-      });
+      showMessage('error', '创建失败', error.response?.data?.detail || '创建测试用例时发生错误，请重试');
     } finally {
       setLoading(false);
     }

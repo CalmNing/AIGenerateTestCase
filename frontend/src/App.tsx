@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, notification, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm } from 'antd';
+import { Layout, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm, message } from 'antd';
 import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, TestCaseExecutionLog } from './types';
@@ -52,6 +52,17 @@ const INITIAL_PERSISTED_STATE = {
   selectedSessionId: getStoredNumber(STORAGE_KEYS.selectedSessionId),
   selectedModuleId: getStoredNumber(STORAGE_KEYS.selectedModuleId),
   activeTab: localStorage.getItem(STORAGE_KEYS.activeTab) || 'generate',
+};
+
+const showMessage = (
+  type: 'success' | 'error' | 'warning' | 'info',
+  title: string,
+  description?: string,
+) => {
+  message.open({
+    type,
+    content: description ? `${title}: ${description}` : title,
+  });
 };
 
 const App: React.FC = () => {
@@ -118,6 +129,7 @@ const App: React.FC = () => {
   const [isExecutionLogModalVisible, setIsExecutionLogModalVisible] = useState(false);
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [returnToViewAfterEdit, setReturnToViewAfterEdit] = useState(false);
   const [isEditSessionModalVisible, setIsEditSessionModalVisible] = useState(false);
   const [isEditModuleModalVisible, setIsEditModuleModalVisible] = useState(false);
   const [sessionToEdit, setSessionToEdit] = useState<Session | null>(null);
@@ -259,19 +271,11 @@ const App: React.FC = () => {
         setSelectedSession(response.data);
         setNewSessionName('');
         loadTestcases(response.data.id);
-        notification.success({
-          message: '创建成功',
-          description: '会话已成功创建',
-          placement: 'topRight'
-        });
+        showMessage('success', '创建成功', '会话已成功创建');
       }
     } catch (error) {
       console.error('创建会话失败:', error);
-      notification.error({
-        message: '创建失败',
-        description: '会话创建失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '创建失败', '会话创建失败，请重试');
     }
   };
 
@@ -297,19 +301,11 @@ const App: React.FC = () => {
         setNewModuleName('');
         setNewModuleParentId(null);
         setIsAddModuleModalVisible(false);
-        notification.success({
-          message: '创建成功',
-          description: '模块已成功创建',
-          placement: 'topRight'
-        });
+        showMessage('success', '创建成功', '模块已成功创建');
       }
     } catch (error) {
       console.error('创建模块失败:', error);
-      notification.error({
-        message: '创建失败',
-        description: '模块创建失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '创建失败', '模块创建失败，请重试');
     }
   };
 
@@ -378,25 +374,13 @@ const App: React.FC = () => {
           setSelectedModule(response.data.id!);
         }
         setIsEditModuleModalVisible(false);
-        notification.success({
-          message: '更新成功',
-          description: response.message || '模块已成功更新',
-          placement: 'topRight'
-        });
+        showMessage('success', '更新成功', response.message || '模块已成功更新');
       } else {
-        notification.error({
-          message: '更新失败',
-          description: response.message || '模块更新失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '更新失败', response.message || '模块更新失败，请重试');
       }
     } catch (error) {
       console.error('更新模块失败:', error);
-      notification.error({
-        message: '更新失败',
-        description: '模块更新失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '更新失败', '模块更新失败，请重试');
     }
   };
 
@@ -409,25 +393,13 @@ const App: React.FC = () => {
         if (selectedModule === moduleId) {
           setSelectedModule(0);
         }
-        notification.success({
-          message: '删除成功',
-          description: response.message || '模块已成功删除',
-          placement: 'topRight'
-        });
+        showMessage('success', '删除成功', response.message || '模块已成功删除');
       } else {
-        notification.error({
-          message: '删除失败',
-          description: response.message || '模块删除失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '删除失败', response.message || '模块删除失败，请重试');
       }
     } catch (error) {
       console.error('删除模块失败:', error);
-      notification.error({
-        message: '删除失败',
-        description: '模块删除失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '删除失败', '模块删除失败，请重试');
     }
   };
 
@@ -452,25 +424,13 @@ const App: React.FC = () => {
           setSelectedSession(response.data);
         }
         setIsEditSessionModalVisible(false);
-        notification.success({
-          message: '更新成功',
-          description: response.message || '会话已成功更新',
-          placement: 'topRight'
-        });
+        showMessage('success', '更新成功', response.message || '会话已成功更新');
       } else {
-        notification.error({
-          message: '更新失败',
-          description: response.message || '会话更新失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '更新失败', response.message || '会话更新失败，请重试');
       }
     } catch (error) {
       console.error('更新会话失败:', error);
-      notification.error({
-        message: '更新失败',
-        description: '会话更新失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '更新失败', '会话更新失败，请重试');
     } finally {
       // 刷新测试用例列表
       loadSessions();
@@ -492,11 +452,7 @@ const App: React.FC = () => {
     try {
       const response: ApiResponse<Session> | any = await sessionApi.deleteSession(sessionToDelete);
       if (response.code === 200) {
-        notification.success({
-          message: '删除成功',
-          description: response.message || '会话已成功删除',
-          placement: 'topRight'
-        });
+        showMessage('success', '删除成功', response.message || '会话已成功删除');
         setSessions(sessions.filter(session => session.id !== sessionToDelete));
         if (selectedSession?.id === sessionToDelete) {
           const sessionsId = sessions.length > 0 ? sessions[0] : null;
@@ -504,11 +460,7 @@ const App: React.FC = () => {
           loadTestcases(sessionsId?.id);
         }
       } else {
-        notification.error({
-          message: '删除失败',
-          description: response.message || '会话删除失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '删除失败', response.message || '会话删除失败，请重试');
       }
 
     } catch (error) {
@@ -559,6 +511,47 @@ const App: React.FC = () => {
     setIsEditModalVisible(true);
   };
 
+  const handleEditTestcaseFromView = (testcase: TestCase | null) => {
+    if (!testcase) return;
+    setReturnToViewAfterEdit(true);
+    setIsViewModalVisible(false);
+    handleEditTestcase(testcase);
+  };
+
+  const handleDeleteTestcaseFromView = async (testcase: TestCase | null) => {
+    if (!testcase || !selectedSession) return;
+
+    const testcaseIndex = testcases.findIndex((item) => item.id === testcase.id);
+
+    try {
+      const response: any = await testcaseApi.deleteTestcase(selectedSession.id, [testcase.id]);
+      if (response.code !== 200) {
+        throw new Error(response.message || '测试用例删除失败，请重试');
+      }
+
+      const remainingTestcases = testcases.filter((item) => item.id !== testcase.id);
+      setTestcases(remainingTestcases);
+
+      if (remainingTestcases.length === 0) {
+        setSelectedTestcase(null);
+        setIsViewModalVisible(false);
+        setCurrentIndex(0);
+      } else {
+        const nextIndex = Math.min(testcaseIndex, remainingTestcases.length - 1);
+        setSelectedTestcase(remainingTestcases[nextIndex]);
+        setCurrentIndex(nextIndex);
+      }
+
+      showMessage('success', '删除成功', response.message || '测试用例已成功删除');
+
+      loadTestcases(selectedSession.id, { ...filters, module_id: selectedModule === 0 ? undefined : Number(selectedModule) });
+    } catch (error) {
+      console.error('删除测试用例失败:', error);
+      showMessage('error', '删除失败', error instanceof Error ? error.message : '测试用例删除失败，请重试');
+      throw error;
+    }
+  };
+
   // 表单提交处理
   const handleEditSubmit = async (values: any) => {
     if (!selectedTestcase || !selectedSession) return;
@@ -599,29 +592,31 @@ const App: React.FC = () => {
 
         // 关闭模态框
         setIsEditModalVisible(false);
+        setSelectedTestcase(updatedTestcase);
+
+        if (returnToViewAfterEdit) {
+          setIsViewModalVisible(true);
+          setReturnToViewAfterEdit(false);
+        }
 
         // 显示成功通知
-        notification.success({
-          message: '更新成功',
-          description: response.message || '测试用例已成功更新',
-          placement: 'topRight'
-        });
+        showMessage('success', '更新成功', response.message || '测试用例已成功更新');
       } else {
-        notification.error({
-          message: '更新失败',
-          description: response.message || '测试用例更新失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '更新失败', response.message || '测试用例更新失败，请重试');
       }
     } catch (error) {
       console.error('更新测试用例失败:', error);
-      notification.error({
-        message: '更新失败',
-        description: '测试用例更新失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '更新失败', '测试用例更新失败，请重试');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCancelEditTestcase = () => {
+    setIsEditModalVisible(false);
+    if (returnToViewAfterEdit && selectedTestcase) {
+      setIsViewModalVisible(true);
+      setReturnToViewAfterEdit(false);
     }
   };
 
@@ -671,25 +666,13 @@ const App: React.FC = () => {
         // 重新加载测试用例
         loadTestcases(selectedSession.id, filters);
         // 显示成功通知
-        notification.success({
-          message: '删除成功',
-          description: response.message || `已成功删除 ${ids.length} 个测试用例`,
-          placement: 'topRight'
-        });
+        showMessage('success', '删除成功', response.message || `已成功删除 ${ids.length} 个测试用例`);
       } else {
-        notification.error({
-          message: '删除失败',
-          description: response.message || `删除 ${ids.length} 个测试用例失败，请重试`,
-          placement: 'topRight'
-        });
+        showMessage('error', '删除失败', response.message || `删除 ${ids.length} 个测试用例失败，请重试`);
       }
     } catch (error) {
       console.error('批量删除测试用例失败:', error);
-      notification.error({
-        message: '删除失败',
-        description: '批量删除测试用例失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '删除失败', '批量删除测试用例失败，请重试');
     }
   };
 
@@ -703,25 +686,13 @@ const App: React.FC = () => {
         // setTestcases(testcases.filter(testcase => testcase.id !== testcaseToDelete));
         loadTestcases(selectedSession.id, { ...filters, module_id: selectedModule === 0 ? undefined : Number(selectedModule) });
 
-        notification.success({
-          message: '删除成功',
-          description: response.message || '测试用例已成功删除',
-          placement: 'topRight'
-        });
+        showMessage('success', '删除成功', response.message || '测试用例已成功删除');
       } else {
-        notification.error({
-          message: '删除失败',
-          description: response.message || '测试用例删除失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '删除失败', response.message || '测试用例删除失败，请重试');
       }
     } catch (error) {
       console.error('删除测试用例失败:', error);
-      notification.error({
-        message: '删除失败',
-        description: '测试用例删除失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '删除失败', '测试用例删除失败，请重试');
     } finally {
       setConfirmDeleteTestcaseVisible(false);
       setTestcaseToDelete(null);
@@ -765,11 +736,7 @@ const App: React.FC = () => {
     )));
     setSelectedTestcase(updatedTestcase);
     setCurrentIndex(testcases.findIndex(tc => tc.id === updatedTestcase.id));
-    notification.success({
-      message: '执行成功',
-      description: `测试用例已成功标记为${status === TestCaseStatus.PASSED ? '通过' : '未通过'}`,
-      placement: 'topRight',
-    });
+    message.success(`已标记为${status === TestCaseStatus.PASSED ? '通过' : '未通过'}`);
   };
 
   // 确认执行测试用例
@@ -780,11 +747,7 @@ const App: React.FC = () => {
       await updateTestcaseExecutionStatus(testcaseToComplete, status, bugId);
     } catch (error) {
       console.error('执行测试用例失败:', error);
-      notification.error({
-        message: '执行失败',
-        description: error instanceof Error ? error.message : '测试用例标记执行失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '执行失败', error instanceof Error ? error.message : '测试用例标记执行失败，请重试');
     } finally {
       setConfirmCompleteTestcaseVisible(false);
       setTestcaseToComplete(null);
@@ -820,11 +783,11 @@ const App: React.FC = () => {
         setExecutionLogs(res.data);
       } else {
         setExecutionLogs([]);
-        notification.error({ message: '加载执行日志失败', description: res.message || '加载执行日志失败', placement: 'topRight' });
+        showMessage('error', '加载执行日志失败', res.message || '加载执行日志失败');
       }
     } catch (error: any) {
       setExecutionLogs([]);
-      notification.error({ message: '加载执行日志失败', description: error?.response?.data?.message || error.message || '加载执行日志失败', placement: 'topRight' });
+      showMessage('error', '加载执行日志失败', error?.response?.data?.message || error.message || '加载执行日志失败');
     } finally {
       setExecutionLogsLoading(false);
     }
@@ -840,17 +803,13 @@ const App: React.FC = () => {
       const res = await testcaseApi.inferDependencies(selectedSession.id, testcase.id);
       if (res.code === 200) {
         const data = res.data as { added_post_actions?: number; replaced_fields?: number; extra_endpoint_ids?: number[] } || {};
-        notification.success({
-          message: '依赖推断完成',
-          description: `发现 ${data.extra_endpoint_ids?.length || 0} 个依赖接口`,
-          placement: 'topRight',
-        });
+        showMessage('success', '依赖推断完成', `发现 ${data.extra_endpoint_ids?.length || 0} 个依赖接口`);
         loadTestcases(selectedSession.id, filters);
       } else {
-        notification.error({ message: '依赖推断失败', description: res.message || '依赖推断失败', placement: 'topRight' });
+        showMessage('error', '依赖推断失败', res.message || '依赖推断失败');
       }
     } catch (error: any) {
-      notification.error({ message: '依赖推断失败', description: error?.response?.data?.message || error.message || '依赖推断失败', placement: 'topRight' });
+      showMessage('error', '依赖推断失败', error?.response?.data?.message || error.message || '依赖推断失败');
     }
   };
 
@@ -858,13 +817,13 @@ const App: React.FC = () => {
   const handleApiExecuteTestcase = async (testcase: TestCase) => {
     if (!selectedSession) return;
     // Set executing state in the table through a callback approach
-    notification.info({ message: '正在执行...', description: `正在执行测试用例: ${testcase.case_name}`, placement: 'topRight' });
+    showMessage('info', '正在执行...', `正在执行测试用例: ${testcase.case_name}`);
     try {
       const res = await testcaseApi.executeTestcase(selectedSession.id, testcase.id);
       if (res.code === 200 && res.data) {
         const result = res.data;
         if (result.passed) {
-          notification.success({ message: '执行成功', description: `测试用例 ${testcase.case_name} 已执行通过`, placement: 'topRight' });
+          showMessage('success', '执行成功', `测试用例 ${testcase.case_name} 已执行通过`);
         } else {
           // 构建详细的失败信息
           const stepResult = result.result?.step;
@@ -925,10 +884,10 @@ const App: React.FC = () => {
           await loadExecutionLogs(testcase, false);
         }
       } else {
-        notification.error({ message: '执行失败', description: res.message || '执行失败', placement: 'topRight' });
+        showMessage('error', '执行失败', res.message || '执行失败');
       }
     } catch (error: any) {
-      notification.error({ message: '执行失败', description: error?.response?.data?.message || error.message || '执行失败', placement: 'topRight' });
+      showMessage('error', '执行失败', error?.response?.data?.message || error.message || '执行失败');
     }
   };
   const handleBatchMoveTestcase = (ids: number[]) => {
@@ -1102,18 +1061,10 @@ const App: React.FC = () => {
       setIsSettingModalVisible(false);
 
       // 显示成功通知
-      notification.success({
-        message: '保存成功',
-        description: '配置已保存到服务器',
-        placement: 'topRight'
-      });
+      showMessage('success', '保存成功', '配置已保存到服务器');
     } catch (error: any) {
       console.error('保存配置失败:', error);
-      notification.error({
-        message: '保存失败',
-        description: error?.response?.data?.message || '保存配置时发生错误，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '保存失败', error?.response?.data?.message || '保存配置时发生错误，请重试');
     } finally {
       setLoading(false);
     }
@@ -1125,7 +1076,7 @@ const App: React.FC = () => {
     const apiKey = (fields.api_key || '').trim();
     const apiBaseUrl = (fields.api_base_url || 'https://api.deepseek.com').trim();
     if (!apiKey) {
-      notification.warning({ message: '请先填写 API Key', placement: 'topRight' });
+      showMessage('warning', '请先填写 API Key');
       return;
     }
     setModelListLoading(true);
@@ -1135,20 +1086,16 @@ const App: React.FC = () => {
         const ids = (res.data as { id: string }[]).map(m => m.id);
         setModelList(ids);
         if (ids.length === 0) {
-          notification.info({ message: '该服务未返回模型列表，您可以手动输入模型名称', placement: 'topRight' });
+          showMessage('info', '该服务未返回模型列表，您可以手动输入模型名称');
         } else {
-          notification.success({ message: `已获取 ${ids.length} 个模型`, placement: 'topRight' });
+          showMessage('success', `已获取 ${ids.length} 个模型`);
         }
       } else {
-        notification.error({ message: '获取模型列表失败', description: (res as any).message, placement: 'topRight' });
+        showMessage('error', '获取模型列表失败', (res as any).message);
       }
     } catch (e: any) {
       console.error('获取模型列表失败:', e);
-      notification.error({
-        message: '获取模型列表失败',
-        description: e?.response?.data?.message || e?.message || '网络错误',
-        placement: 'topRight',
-      });
+      showMessage('error', '获取模型列表失败', e?.response?.data?.message || e?.message || '网络错误');
     } finally {
       setModelListLoading(false);
     }
@@ -1176,11 +1123,7 @@ const App: React.FC = () => {
       // 检查配置是否完整
       if (modelConfig.model_type === 'api' && !modelConfig.api_key) {
         handleOpenSettingModal();
-        notification.error({
-          message: '配置缺失',
-          description: '请先配置 API Key',
-          placement: 'topRight'
-        });
+        showMessage('error', '配置缺失', '请先配置 API Key');
         return;
       }
 
@@ -1207,33 +1150,17 @@ const App: React.FC = () => {
           setImageBase64(null); // 清空图片数据
           // 刷新历史提示词列表
           setHistoryPromptRefreshKey(prev => prev + 1);
-          notification.success({
-            message: '生成成功',
-            description: '测试用例已成功生成',
-            placement: 'topRight'
-          });
+          showMessage('success', '生成成功', '测试用例已成功生成');
         } else {
-          notification.error({
-            message: '生成失败',
-            description: response.message || '生成测试用例失败，请重试',
-            placement: 'topRight'
-          });
+          showMessage('error', '生成失败', response.message || '生成测试用例失败，请重试');
         }
       } else {
-        notification.error({
-          message: '生成失败',
-          description: '请上传图片文件或输入需求描述',
-          placement: 'topRight'
-        });
+        showMessage('error', '生成失败', '请上传图片文件或输入需求描述');
       }
 
     } catch (error: any) {
       console.error('生成测试用例失败:', error);
-      notification.error({
-        message: '生成失败',
-        description: `${error.response?.data?.detail || error.response?.data?.message || error.response?.data?.data || '生成测试用例时发生错误，请重试'}`,
-        placement: 'topRight'
-      });
+      showMessage('error', '生成失败', `${error.response?.data?.detail || error.response?.data?.message || error.response?.data?.data || '生成测试用例时发生错误，请重试'}`);
     } finally {
       setLoading(false);
       setSettingButtonStatus(false); // 最终总会恢复按钮状态
@@ -1610,6 +1537,8 @@ const App: React.FC = () => {
             onNext={handleNextCase}
             onPrev={handlePrevCase}
             onCancel={() => setIsViewModalVisible(false)}
+            onEdit={handleEditTestcaseFromView}
+            onDelete={handleDeleteTestcaseFromView}
             onMarkPassed={(testcase) => updateTestcaseExecutionStatus(testcase, TestCaseStatus.PASSED)}
             onMarkFailed={(testcase, bugId) => updateTestcaseExecutionStatus(testcase, TestCaseStatus.FAILED, bugId)}
           />
@@ -1637,7 +1566,7 @@ const App: React.FC = () => {
                 selectedTestcase={selectedTestcase}
                 form={form}
                 loading={loading}
-                onCancel={() => setIsEditModalVisible(false)}
+                onCancel={handleCancelEditTestcase}
                 onFinish={handleEditSubmit}
               />
             )

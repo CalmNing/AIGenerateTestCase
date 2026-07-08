@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Select, notification, Switch } from 'antd';
+import { Button, Input, Select, message, Switch } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
 import { configApi } from '../../services/api';
@@ -30,6 +30,17 @@ interface TestCaseManagerProps {
   onInferDependencies?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
 }
+
+const showMessage = (
+  type: 'success' | 'error' | 'warning',
+  title: string,
+  description?: string,
+) => {
+  message.open({
+    type,
+    content: description ? `${title}: ${description}` : title,
+  });
+};
 
 const statItems = (resp: TestCaseResponse, filters?: TestCaseFilters) => [
   { key: 'all', label: '全部', value: resp.totalNumber, color: 'var(--color-primary)', bg: 'var(--color-primary-bg)', active: !filters?.status && !filters?.exist_bug, status: undefined, exist_bug: false },
@@ -73,7 +84,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
 
   const handleExportExcel = () => {
     if (testcases.length === 0) {
-      notification.warning({ message: '导出失败', description: '当前没有可导出的测试用例', placement: 'topRight' });
+      showMessage('warning', '导出失败', '当前没有可导出的测试用例');
       return;
     }
 
@@ -98,10 +109,10 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, '测试用例');
       XLSX.writeFile(wb, `测试用例_${new Date().toISOString().slice(0, 10)}.xlsx`);
-      notification.success({ message: '导出成功', description: `已导出 ${testcases.length} 条测试用例`, placement: 'topRight' });
+      showMessage('success', '导出成功', `已导出 ${testcases.length} 条测试用例`);
     } catch (error) {
       console.error('导出 Excel 失败:', error);
-      notification.error({ message: '导出失败', description: '导出 Excel 时发生错误，请重试', placement: 'topRight' });
+      showMessage('error', '导出失败', '导出 Excel 时发生错误，请重试');
     }
   };
 

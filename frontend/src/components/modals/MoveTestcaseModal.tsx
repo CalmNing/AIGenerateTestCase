@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Select, Form, notification } from 'antd';
+import { Modal, Select, Form, message } from 'antd';
 import { Session, TestCase, Module } from '../../types';
 import { sessionApi, moduleApi, testcaseApi } from '../../services/api';
 
@@ -10,6 +10,17 @@ interface MoveTestcaseModalProps {
   onCancel: () => void;
   onMoveSuccess: () => void;
 }
+
+const showMessage = (
+  type: 'success' | 'error',
+  title: string,
+  description?: string,
+) => {
+  message.open({
+    type,
+    content: description ? `${title}: ${description}` : title,
+  });
+};
 
 const MoveTestcaseModal: React.FC<MoveTestcaseModalProps> = ({
   visible,
@@ -62,11 +73,7 @@ const MoveTestcaseModal: React.FC<MoveTestcaseModalProps> = ({
       }
     } catch (error) {
       console.error('加载会话失败:', error);
-      notification.error({
-        message: '加载失败',
-        description: '加载会话列表失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '加载失败', '加载会话列表失败，请重试');
     }
   };
 
@@ -80,11 +87,7 @@ const MoveTestcaseModal: React.FC<MoveTestcaseModalProps> = ({
       }
     } catch (error) {
       console.error('加载模块失败:', error);
-      notification.error({
-        message: '加载失败',
-        description: '加载模块列表失败，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '加载失败', '加载模块列表失败，请重试');
     }
   };
 
@@ -122,27 +125,15 @@ const MoveTestcaseModal: React.FC<MoveTestcaseModalProps> = ({
       }
       
       if (response.code === 200) {
-        notification.success({
-          message: '移动成功',
-          description: response.message || '测试用例已成功移动',
-          placement: 'topRight'
-        });
+        showMessage('success', '移动成功', response.message || '测试用例已成功移动');
         onMoveSuccess();
         onCancel();
       } else {
-        notification.error({
-          message: '移动失败',
-          description: response.message || '移动测试用例失败，请重试',
-          placement: 'topRight'
-        });
+        showMessage('error', '移动失败', response.message || '移动测试用例失败，请重试');
       }
     } catch (error: any) {
       console.error('移动测试用例失败:', error);
-      notification.error({
-        message: '移动失败',
-        description: error.response?.data?.detail || '移动测试用例时发生错误，请重试',
-        placement: 'topRight'
-      });
+      showMessage('error', '移动失败', error.response?.data?.detail || '移动测试用例时发生错误，请重试');
     } finally {
       setLoading(false);
     }

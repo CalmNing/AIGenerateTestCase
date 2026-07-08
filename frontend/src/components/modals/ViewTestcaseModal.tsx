@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Collapse, Drawer, Empty, Input, Popover, Select, Space, Spin, Table, Tabs, Tag } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
+import { Alert, Button, Collapse, Drawer, Empty, Input, Popconfirm, Popover, Select, Space, Spin, Table, Tabs, Tag } from 'antd';
+import { CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined, DownOutlined, EditOutlined, UpOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseExecutionLog } from '../../types';
 import { configApi, testcaseApi } from '../../services/api';
 import TestcaseDetailView from '../test-case/TestcaseDetailView';
@@ -16,6 +16,8 @@ interface ViewTestcaseModalProps {
   onCancel: () => void;
   onNext: () => void;
   onPrev: () => void;
+  onEdit: (testcase: TestCase | null) => void;
+  onDelete: (testcase: TestCase | null) => Promise<void>;
   onMarkPassed: (testcase: TestCase | null) => Promise<void>;
   onMarkFailed: (testcase: TestCase | null, bugId: number) => Promise<void>;
 }
@@ -29,6 +31,8 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
   nextButtonDisabled,
   prevButtonDisabled,
   onPrev,
+  onEdit,
+  onDelete,
   onMarkPassed,
   onMarkFailed,
 }) => {
@@ -40,7 +44,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
   const [selectedLogId, setSelectedLogId] = useState<number | null>(null);
   const [failPopoverOpen, setFailPopoverOpen] = useState(false);
   const [bugIdInput, setBugIdInput] = useState('');
-  const [actionLoading, setActionLoading] = useState<'passed' | 'failed' | null>(null);
+  const [actionLoading, setActionLoading] = useState<'passed' | 'failed' | 'deleted' | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -99,6 +103,9 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
     setActionLoading('passed');
     try {
       await onMarkPassed(tc);
+      if (!nextButtonDisabled) {
+        onNext();
+      }
     } finally {
       setActionLoading(null);
     }
@@ -111,6 +118,18 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
       await onMarkFailed(tc, parsedBugId);
       setFailPopoverOpen(false);
       setBugIdInput('');
+      if (!nextButtonDisabled) {
+        onNext();
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    setActionLoading('deleted');
+    try {
+      await onDelete(tc);
     } finally {
       setActionLoading(null);
     }
@@ -135,7 +154,14 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
         <Button size="small" onClick={() => setFailPopoverOpen(false)}>
           取消
         </Button>
-        <Button size="small" danger type="primary" loading={actionLoading === 'failed'} disabled={!isBugIdValid} onClick={() => void handleMarkFailed()}>
+        <Button
+          size="small"
+          danger
+          type="primary"
+          loading={actionLoading === 'failed'}
+          disabled={!isBugIdValid}
+          onClick={() => void handleMarkFailed()}
+        >
           确认不通过
         </Button>
       </div>
@@ -148,7 +174,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
       open={visible}
       onClose={onCancel}
       placement="right"
-      width={720}
+      width={920}
       destroyOnHidden={false}
       className="vtm-drawer"
       styles={{
@@ -158,7 +184,7 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
       }}
       footer={(
         <div className="vtm-footer vtm-footer--left">
-          <Space size={8} wrap>
+          <Space size={8} wrap className="vtm-footer__group">
             <Button
               className="vtm-footer-btn vtm-footer-btn--success"
               icon={<CheckCircleOutlined style={{ fontSize: 12 }} />}
@@ -182,7 +208,36 @@ const ViewTestcaseModal: React.FC<ViewTestcaseModalProps> = ({
                 不通过
               </Button>
             </Popover>
+          </Space>
 
+          <Space size={8} wrap className="vtm-footer__group">
+            <Button
+              className="vtm-footer-btn vtm-footer-btn--subtle"
+              icon={<EditOutlined style={{ fontSize: 12 }} />}
+              onClick={() => onEdit(tc)}
+            >
+              编辑
+            </Button>
+
+            <Popconfirm
+              title="确认删除这条测试用例？"
+              description="删除后不可恢复。"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true, loading: actionLoading === 'deleted' }}
+              onConfirm={() => void handleDelete()}
+            >
+              <Button
+                className="vtm-footer-btn vtm-footer-btn--subtle-danger"
+                icon={<DeleteOutlined style={{ fontSize: 12 }} />}
+                loading={actionLoading === 'deleted'}
+              >
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+
+          <Space size={8} wrap className="vtm-footer__group">
             <Button className="vtm-footer-btn" onClick={onNext} disabled={nextButtonDisabled} icon={<DownOutlined style={{ fontSize: 11 }} />}>
               下一个
             </Button>

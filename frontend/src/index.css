@@ -629,8 +629,8 @@ body {
   animation: fade-in 300ms ease-out;
 }
 
-/* Notification entrance */
-.ant-notification-notice {
+/* Message entrance */
+.ant-message-notice {
   animation: slide-in-right 300ms ease-out;
 }
 
