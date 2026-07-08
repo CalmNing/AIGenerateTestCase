@@ -1,140 +1,172 @@
-"""AI 测试用例生成的数据模型定义。"""
+"""Pydantic models for AI-generated test cases."""
 
-from typing import List, Optional, Literal, Any, Union
+from typing import Any, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from utils.helpers import _normalize_testcase_dict
+from utils.helpers import _normalize_testcase_dict, _split_numbered_text_items
 
 
-# 定义字面量类型：仅允许 1/2/3/4
 AllowedValue = Literal[1, 2, 3, 4]
 
 
-# 定义断言规则
 class AssertionRule(BaseModel):
-    """单个断言规则，匹配 api_test_tool._run_assertions 的期望格式"""
-    type: str = Field(..., description="断言类型: status_code | status_code_range | response_time_lt | jsonpath_exists | jsonpath_equals | jsonpath_not_equals")
-    value: Optional[Any] = Field(default=None, description="断言值")
-    min: Optional[int] = Field(default=None, description="范围最小值（用于 status_code_range）")
-    max: Optional[int] = Field(default=None, description="范围最大值（用于 status_code_range）")
-    jsonpath: Optional[str] = Field(default=None, description="JSONPath 表达式")
+    """Assertion rule used by API test execution."""
 
-    @model_validator(mode='after')
-    def validate_assertion_type(self) -> 'AssertionRule':
-        """按断言类型验证必需字段。"""
+    type: str = Field(
+        ...,
+        description="Assertion type: status_code | status_code_range | response_time_lt | jsonpath_exists | jsonpath_equals | jsonpath_not_equals",
+    )
+    value: Optional[Any] = Field(default=None, description="Assertion value")
+    min: Optional[int] = Field(default=None, description="Minimum value for status_code_range")
+    max: Optional[int] = Field(default=None, description="Maximum value for status_code_range")
+    jsonpath: Optional[str] = Field(default=None, description="JSONPath expression")
+
+    @model_validator(mode="after")
+    def validate_assertion_type(self) -> "AssertionRule":
         t = self.type
-        if t == 'status_code' and self.value is None:
-            raise ValueError(f'status_code 断言必须提供 value 参数')
-        if t == 'status_code_range' and (self.min is None or self.max is None):
-            raise ValueError(f'status_code_range 断言必须同时提供 min 和 max 参数')
-        if t == 'jsonpath_exists' and not self.jsonpath:
-            raise ValueError(f'jsonpath_exists 断言必须提供 jsonpath 参数')
-        if t == 'jsonpath_equals' and (not self.jsonpath or self.value is None):
-            raise ValueError(f'jsonpath_equals 断言必须同时提供 jsonpath 和 value 参数')
-        if t == 'jsonpath_not_equals' and (not self.jsonpath or self.value is None):
-            raise ValueError(f'jsonpath_not_equals 断言必须同时提供 jsonpath 和 value 参数')
+        if t == "status_code" and self.value is None:
+            raise ValueError("status_code assertion requires value")
+        if t == "status_code_range" and (self.min is None or self.max is None):
+            raise ValueError("status_code_range assertion requires min and max")
+        if t == "jsonpath_exists" and not self.jsonpath:
+            raise ValueError("jsonpath_exists assertion requires jsonpath")
+        if t == "jsonpath_equals" and (not self.jsonpath or self.value is None):
+            raise ValueError("jsonpath_equals assertion requires jsonpath and value")
+        if t == "jsonpath_not_equals" and (not self.jsonpath or self.value is None):
+            raise ValueError("jsonpath_not_equals assertion requires jsonpath and value")
         return self
 
 
 class ApiCallKeyValue(BaseModel):
-    """API 调用步骤中的键值对（headers/parameters/variables）"""
-    key: str = Field(..., description="字段名")
-    value: str = Field(default="", description="字段值，可用 {{变量名}} 引用环境变量")
-    in_field: Optional[str] = Field(default=None, alias="in", description="参数位置: query/path/header（仅 parameters 使用）")
+    """Key/value item in API call config."""
+
+    key: str = Field(..., description="Field name")
+    value: str = Field(default="", description="Field value, supports {{variable}} references")
+    in_field: Optional[str] = Field(default=None, alias="in", description="Parameter location: query/path/header")
+
     model_config = {"populate_by_name": True}
 
 
 class PostAction(BaseModel):
-    """后置动作，用于从响应中提取变量"""
-    type: str = Field(default="extract_jsonpath", description="动作类型: extract_jsonpath")
-    key: str = Field(..., description="提取的变量名，后续步骤用 {{变量名}} 引用")
-    jsonpath: str = Field(..., description="JSONPath 表达式，如 $.data.id")
+    """Post action for extracting variables from API responses."""
+
+    type: str = Field(default="extract_jsonpath", description="Action type")
+    key: str = Field(..., description="Extracted variable name")
+    jsonpath: str = Field(..., description="JSONPath expression, e.g. $.data.id")
 
 
 class ApiCallStep(BaseModel):
-    """结构化的 API 调用步骤，对应执行时的 api_call 步骤"""
-    endpoint_ref: int = Field(..., description="关联的接口编号（在 API 信息中的序号，从1开始）")
-    description: str = Field(default="", description="该步骤的测试描述")
-    headers: Optional[List[ApiCallKeyValue]] = Field(default=None, description="请求头，覆盖接口默认值")
-    parameters: Optional[List[ApiCallKeyValue]] = Field(default=None, description="请求参数（含 query/path），覆盖接口默认值")
-    body: Optional[str] = Field(default=None, description="请求体 JSON 字符串，覆盖接口默认值。使用 {{变量名}} 引用环境变量")
-    variables: Optional[List[ApiCallKeyValue]] = Field(default=None, description="预定义变量（固定值），不能从响应中提取")
-    post_actions: Optional[List[PostAction]] = Field(default=None, description="后置动作，用于从响应中提取变量供后续步骤使用")
-    assertions: Optional[List[AssertionRule]] = Field(default=None, description="该步骤的断言规则，覆盖用例级和接口级断言")
+    """Structured API call step."""
+
+    endpoint_ref: int = Field(..., description="Referenced endpoint number, starting from 1")
+    description: str = Field(default="", description="Step description")
+    headers: Optional[List[ApiCallKeyValue]] = Field(default=None, description="Request headers")
+    parameters: Optional[List[ApiCallKeyValue]] = Field(default=None, description="Request parameters including query/path")
+    body: Optional[str] = Field(default=None, description="Request body JSON string")
+    variables: Optional[List[ApiCallKeyValue]] = Field(default=None, description="Predefined fixed variables")
+    post_actions: Optional[List[PostAction]] = Field(default=None, description="Post actions for variable extraction")
+    assertions: Optional[List[AssertionRule]] = Field(default=None, description="Step-level assertions")
 
 
-# 定义测试用例数据类
+def _normalize_preset_conditions_value(value):
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    normalized = []
+    for item in items:
+        if isinstance(item, str):
+            normalized.extend(_split_numbered_text_items(item))
+        else:
+            normalized.append(item)
+    return normalized
+
+
 class TestCase(BaseModel):
-    """自定义 TestCase schema。"""
-    case_name: str = Field(..., description="用例名称")
-    steps: List[Union[str, ApiCallStep]] = Field(..., description="用例步骤，支持纯文本步骤和结构化 api_call 步骤")
-    preset_conditions: List[Union[str, ApiCallStep]] = Field(default_factory=list, description="前置条件，支持纯文本和结构化 api_call 步骤")
-    expected_results: List[str] = Field(..., description="预期结果")
-    case_level: Optional[AllowedValue] = Field(default=1, description="用例级别：1-功能 2-边界 3-异常 4-场景")
-    api_endpoint_ref: Optional[List[int]] = Field(default=None, description="关联的 API 接口编号列表（在 API 信息中的序号，从1开始）。不提供时默认关联所有已加载的接口。")
-    assertions: Optional[List[AssertionRule]] = Field(default=None, description="用例级断言规则，覆盖接口默认断言。不提供时使用接口自身的断言配置。")
+    """General test case schema."""
+
+    case_name: str = Field(..., description="Test case name")
+    steps: List[Union[str, ApiCallStep]] = Field(..., description="Test steps, supports plain text and api_call steps")
+    preset_conditions: List[Union[str, ApiCallStep]] = Field(
+        default_factory=list,
+        description="Preconditions. Each list item must contain exactly one precondition; do not combine multiple numbered preconditions into one string item.",
+    )
+    expected_results: List[str] = Field(..., description="Expected results")
+    case_level: Optional[AllowedValue] = Field(default=1, description="Case level: 1-functional 2-boundary 3-exception 4-scenario")
+    api_endpoint_ref: Optional[List[int]] = Field(default=None, description="Referenced API endpoint numbers")
+    assertions: Optional[List[AssertionRule]] = Field(default=None, description="Case-level assertions")
+
+    @field_validator("preset_conditions", mode="before")
+    @classmethod
+    def normalize_preset_conditions(cls, value):
+        return _normalize_preset_conditions_value(value)
 
 
 class FunctionalTestCase(BaseModel):
-    """功能测试用例 schema（仅纯文本步骤，不含 api_call 结构）。"""
-    case_name: str = Field(..., description="用例名称，格式为'操作 + 场景 + 预期结果'")
-    steps: List[str] = Field(..., description="测试步骤，使用纯文本字符串描述每一步操作")
-    preset_conditions: List[str] = Field(default_factory=list, description="前置条件，使用纯文本描述")
-    expected_results: List[str] = Field(..., description="预期结果")
-    case_level: Optional[AllowedValue] = Field(default=1, description="用例级别（1-功能 2-边界 3-异常 4-场景）")
+    """Functional test case schema with plain-text steps only."""
+
+    case_name: str = Field(..., description="Test case name in the form 'action + scenario + expected result'")
+    steps: List[str] = Field(..., description="Plain-text test steps")
+    preset_conditions: List[str] = Field(
+        default_factory=list,
+        description="Plain-text preconditions. Each list item must contain exactly one precondition; do not combine multiple numbered preconditions into one string item.",
+    )
+    expected_results: List[str] = Field(..., description="Expected results")
+    case_level: Optional[AllowedValue] = Field(default=1, description="Case level: 1-functional 2-boundary 3-exception 4-scenario")
+
+    @field_validator("preset_conditions", mode="before")
+    @classmethod
+    def normalize_preset_conditions(cls, value):
+        return _normalize_preset_conditions_value(value)
 
     def __post_init__(self):
-        """验证case_level只允许1、2、3、4"""
         allowed_levels = [1, 2, 3, 4]
         if self.case_level is not None and self.case_level not in allowed_levels:
-            raise ValueError(f"case_level必须是{allowed_levels}中的一个，当前值：{self.case_level}")
+            raise ValueError(f"case_level must be one of {allowed_levels}, got {self.case_level}")
 
 
-# 定义响应格式数据类
 class ResponseFormat(BaseModel):
-    """agent 的响应格式"""
+    """Structured response format for general test cases."""
+
     response: List[TestCase] = Field(default_factory=list)
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def normalize_response_key(cls, data: Any) -> Any:
-        """自动标准化响应数据：映射 test_cases→response，标准化每个用例的字段名。"""
         if isinstance(data, dict):
-            # 顶层映射：test_cases → response
-            if 'test_cases' in data and 'response' not in data:
+            if "test_cases" in data and "response" not in data:
                 data = dict(data)
-                data['response'] = data.pop('test_cases')
-            # 每个测试用例字段名标准化（name→case_name, level→case_level 等）
-            if 'response' in data and isinstance(data['response'], list):
-                data['response'] = [
+                data["response"] = data.pop("test_cases")
+            if "response" in data and isinstance(data["response"], list):
+                data["response"] = [
                     _normalize_testcase_dict(tc) if isinstance(tc, dict) else tc
-                    for tc in data['response']
+                    for tc in data["response"]
                 ]
         return data
 
 
 class FunctionalResponseFormat(BaseModel):
-    """功能测试用例的响应格式（仅纯文本步骤）"""
+    """Structured response format for functional test cases."""
+
     response: List[FunctionalTestCase] = Field(default_factory=list)
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def normalize_response_key(cls, data: Any) -> Any:
-        """自动标准化响应数据：映射 test_cases→response，标准化每个用例的字段名。"""
         if isinstance(data, dict):
-            if 'test_cases' in data and 'response' not in data:
+            if "test_cases" in data and "response" not in data:
                 data = dict(data)
-                data['response'] = data.pop('test_cases')
-            if 'response' in data and isinstance(data['response'], list):
-                data['response'] = [
+                data["response"] = data.pop("test_cases")
+            if "response" in data and isinstance(data["response"], list):
+                data["response"] = [
                     _normalize_testcase_dict(tc) if isinstance(tc, dict) else tc
-                    for tc in data['response']
+                    for tc in data["response"]
                 ]
         return data
 
 
 class TestCaseDesignMethod(BaseModel):
-    """自定义 TestCaseDesignMethod schema."""
+    """Test case design method metadata."""
+
     method: str
     description: str | None = None

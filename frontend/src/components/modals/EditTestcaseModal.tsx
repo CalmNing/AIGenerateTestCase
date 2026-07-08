@@ -113,9 +113,12 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
           .filter((s: any) => typeof s === 'string')
           .join('\n'),
         steps: selectedTestcase.steps
-          .filter((step: any) => typeof step === 'string')
+          .filter((step: any) => typeof step === 'string' || (typeof step === 'object' && step?.type !== 'api_call' && typeof step?.action === 'string'))
+          .map((step: any) => typeof step === 'string' ? step : step.action)
           .join('\n'),
-        expected_results: selectedTestcase.expected_results.join('\n')
+        expected_results: selectedTestcase.expected_results
+          .map((item: any) => typeof item === 'string' ? item : (item?.expected || ''))
+          .join('\n')
       });
     }
   }, [selectedTestcase, form, visible]);
@@ -148,11 +151,34 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
   const handleFinish = (values: any) => {
     // 构建steps数组
     const steps: any[] = [];
+    const expectedResults = (values.expected_results || '')
+      .split('\n')
+      .filter((s: string) => s.trim());
 
     // 添加文本步骤
     if (values.steps) {
       const textSteps = values.steps.split('\n').filter((s: string) => s.trim());
-      steps.push(...textSteps);
+      const originalStructuredSteps = (selectedTestcase?.steps || []).filter(
+        (step: any) => typeof step === 'object' && step?.type !== 'api_call' && typeof step?.action === 'string'
+      );
+
+      if (originalStructuredSteps.length > 0) {
+        textSteps.forEach((action: string, index: number) => {
+          const originalStep = originalStructuredSteps[index];
+          const originalExpected = typeof selectedTestcase?.expected_results?.[index] === 'string'
+            ? selectedTestcase?.expected_results?.[index]
+            : originalStep?.expected;
+          const editedExpected = expectedResults[index];
+
+          steps.push({
+            step: index + 1,
+            action,
+            expected: editedExpected || originalExpected || '',
+          });
+        });
+      } else {
+        steps.push(...textSteps);
+      }
     }
 
     // 添加api_call步骤（如果启用）
@@ -185,7 +211,8 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
     onFinish({
       ...values,
       preset_conditions: [...textPresets, ...objectPresets],
-      steps
+      steps,
+      expected_results: expectedResults,
     });
   };
 

@@ -2,7 +2,7 @@
 import pytest
 
 from utils.model_utils import _parse_response
-from utils.models import TestCase, ResponseFormat
+from utils.models import FunctionalTestCase, ResponseFormat, TestCase
 
 
 def test_parse_response_dict_with_response_key():
@@ -49,3 +49,33 @@ def test_parse_response_messages_json_content():
     payload = '{"response": [{"case_name": "from_msg", "steps": [], "preset_conditions": [], "expected_results": [], "case_level": 1}]}'
     out = _parse_response({"messages": [_Msg(payload)]})
     assert out[0].case_name == "from_msg"
+
+
+def test_testcase_schema_splits_inline_numbered_preconditions():
+    tc = TestCase(
+        case_name="x",
+        steps=["s1"],
+        preset_conditions=["1. 用户已登录 2. 用户有权限 3. 已准备合法文件"],
+        expected_results=["e1"],
+        case_level=1,
+    )
+    assert tc.preset_conditions == [
+        "1. 用户已登录",
+        "2. 用户有权限",
+        "3. 已准备合法文件",
+    ]
+
+
+def test_functional_testcase_schema_splits_inline_numbered_preconditions():
+    tc = FunctionalTestCase(
+        case_name="x",
+        steps=["s1"],
+        preset_conditions=["1. 用户已登录 2. 用户有权限 3. 已准备合法文件"],
+        expected_results=["e1"],
+        case_level=1,
+    )
+    assert tc.preset_conditions == [
+        "1. 用户已登录",
+        "2. 用户有权限",
+        "3. 已准备合法文件",
+    ]

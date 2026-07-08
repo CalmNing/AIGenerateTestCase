@@ -141,6 +141,15 @@ async def generate_v2(
         except (ValueError, TypeError):
             pass
 
+    if api_endpoint_ids and api_project_id_int:
+        from app.routes.testcase import infer_endpoint_dependencies
+        extra_ids = infer_endpoint_dependencies(session, api_endpoint_ids, api_project_id_int)
+        for eid in extra_ids:
+            if eid not in api_endpoint_ids:
+                api_endpoint_ids.append(eid)
+        if extra_ids:
+            logger.info(f"Pipeline: inferred dependency endpoints {extra_ids}")
+
     # 解析接口参数覆盖配置
     endpoint_overrides: dict[int, dict] = {}
     if api_endpoint_overrides:

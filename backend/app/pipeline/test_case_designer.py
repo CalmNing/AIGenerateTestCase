@@ -1,23 +1,34 @@
-"""
-Agent 3: 测试用例设计专家
-为每个测试点生成详细测试用例，支持功能测试和接口测试两种模式
-"""
+"""Agent 3: test case design expert."""
+
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from app.pipeline.prompts import (
-    TEST_CASE_DESIGNER_SYSTEM, TEST_CASE_DESIGN_USER,
-    API_TEST_CASE_DESIGNER_SYSTEM, API_TEST_CASE_DESIGN_USER,
+    API_TEST_CASE_DESIGNER_SYSTEM,
+    API_TEST_CASE_DESIGN_USER,
+    TEST_CASE_DESIGNER_SYSTEM,
+    TEST_CASE_DESIGN_USER,
 )
-from app.pipeline.schemas import TestCaseDesignResult, ApiTestCaseDesignResult
+from app.pipeline.schemas import ApiTestCaseDesignResult, TestCaseDesignResult
 from utils.llm_factory import build_chat_model
 
 logger = logging.getLogger(__name__)
 
 
+PRECONDITIONS_OUTPUT_RULE = """
+
+Strict preconditions rule:
+- The field name is preconditions.
+- preconditions must be a JSON array of strings.
+- Each array item must contain exactly one precondition.
+- Correct: [\"1. 用户已登录\", \"2. 用户有权限\", \"3. 已准备合法文件\"]
+- Wrong: [\"1. 用户已登录 2. 用户有权限 3. 已准备合法文件\"]
+"""
+
+
 class TestCaseDesigner:
-    """测试用例设计 Agent（支持功能测试和接口测试）"""
+    """Design detailed test cases from generated test points."""
 
     def __init__(
         self,
@@ -38,18 +49,7 @@ class TestCaseDesigner:
         is_api_test: bool = False,
         api_context: str = "",
     ) -> List[Dict[str, Any]]:
-        """
-        为一批测试点设计测试用例
-
-        Args:
-            test_points: 测试点列表，每个含 id, content, test_type, design_method, priority
-            requirement_content: 原始需求文档内容（提供业务上下文）
-            is_api_test: 是否为接口测试模式
-            api_context: API 接口信息文本（接口测试模式下必填）
-
-        Returns:
-            List[dict]: 测试用例列表
-        """
+        """Design one batch of test cases."""
         from utils.model_utils import _structured_output_robust
 
         test_points_json = json.dumps(test_points, ensure_ascii=False, indent=2)
@@ -58,16 +58,16 @@ class TestCaseDesigner:
             system_prompt = API_TEST_CASE_DESIGNER_SYSTEM
             user_prompt = API_TEST_CASE_DESIGN_USER.format(
                 test_points=test_points_json,
-                requirement_content=requirement_content or "（无需求文档）",
-                api_context=api_context or "（无接口信息）",
-            )
+                requirement_content=requirement_content or "(无需求文档)",
+                api_context=api_context or "(无接口信息)",
+            ) + PRECONDITIONS_OUTPUT_RULE
             schema = ApiTestCaseDesignResult
         else:
             system_prompt = TEST_CASE_DESIGNER_SYSTEM
             user_prompt = TEST_CASE_DESIGN_USER.format(
                 test_points=test_points_json,
-                requirement_content=requirement_content or "（无需求文档）",
-            )
+                requirement_content=requirement_content or "(无需求文档)",
+            ) + PRECONDITIONS_OUTPUT_RULE
             schema = TestCaseDesignResult
 
         messages = [
@@ -77,31 +77,26 @@ class TestCaseDesigner:
 
         mode_label = "接口测试" if is_api_test else "功能测试"
         logger.info(f"开始设计{mode_label}用例，共 {len(test_points)} 个测试点...")
-        result = await _structured_output_robust(
-            self.model, schema, messages
-        )
+        result = await _structured_output_robust(self.model, schema, messages)
 
         if result is None:
             raise ValueError(f"{mode_label}用例设计失败：模型返回空结果")
 
         if isinstance(result, (TestCaseDesignResult, ApiTestCaseDesignResult)):
-            cases = [c.model_dump() for c in result.test_cases]
+            cases = [c.model_dump(by_alias=True) for c in result.test_cases]
         elif isinstance(result, dict):
             cases = result.get("test_cases", [])
         else:
             cases = []
 
-        # 验证数量匹配
         if len(cases) != len(test_points):
             logger.warning(f"测试用例数量不匹配：期望 {len(test_points)}，实际 {len(cases)}")
-            # 补齐或截断
             if len(cases) < len(test_points):
                 while len(cases) < len(test_points):
                     cases.append({})
             elif len(cases) > len(test_points):
                 cases = cases[:len(test_points)]
 
-        # 继承测试点的属性
         for i, case in enumerate(cases):
             if i < len(test_points):
                 tp = test_points[i]

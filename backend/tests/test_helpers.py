@@ -116,6 +116,19 @@ def test_normalize_testcase_dict_missing_fields_defaults():
     assert out["steps"] == []
 
 
+def test_normalize_testcase_dict_splits_inline_numbered_preconditions():
+    raw = {
+        "name": "合同登记成功",
+        "preconditions": "1. 用户已登录建管平台 2. 用户有合同登记权限 3. 准备一个合法的PDF格式合同文件（大小不超过系统限制）",
+    }
+    out = _normalize_testcase_dict(raw)
+    assert out["preset_conditions"] == [
+        "1. 用户已登录建管平台",
+        "2. 用户有合同登记权限",
+        "3. 准备一个合法的PDF格式合同文件（大小不超过系统限制）",
+    ]
+
+
 def test_normalize_testcase_dict_api_call_step_in_steps():
     raw = {
         "name": "调用接口",

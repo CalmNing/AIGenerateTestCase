@@ -15,6 +15,33 @@ from utils.history_prompt_cleaner import clean_history_prompt_content
 logger = logging.getLogger(__name__)
 
 
+def _split_numbered_text_items(text: str) -> list[str]:
+    """Split inline numbered text like '1. foo 2. bar' into separate items."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return []
+
+    line_parts = [part.strip() for part in re.split(r"\r?\n+", stripped) if part.strip()]
+    if len(line_parts) > 1:
+        items: list[str] = []
+        for part in line_parts:
+            items.extend(_split_numbered_text_items(part))
+        return items
+
+    matches = list(re.finditer(r"(?:^|\s)(\d+)\.\s+", stripped))
+    if len(matches) < 2:
+        return [stripped]
+
+    items: list[str] = []
+    for index, match in enumerate(matches):
+        start = match.start(1)
+        end = matches[index + 1].start(1) if index + 1 < len(matches) else len(stripped)
+        part = stripped[start:end].strip()
+        if part:
+            items.append(part)
+    return items or [stripped]
+
+
 def _load_json_object(text: str) -> dict | None:
     import json as _json
 
@@ -404,7 +431,7 @@ def _normalize_testcase_dict(d: dict) -> dict:
         normalized_pc = []
         for item in raw_pc:
             if isinstance(item, str):
-                normalized_pc.append(item)
+                normalized_pc.extend(_split_numbered_text_items(item))
             elif isinstance(item, ApiCallStep):
                 # 已标准化过的 ApiCallStep 对象，保持原样
                 normalized_pc.append(item)

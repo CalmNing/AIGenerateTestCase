@@ -36,6 +36,112 @@ def get_pipeline_task(task_id: str) -> Optional[Dict[str, Any]]:
     return _pipeline_tasks.get(task_id)
 
 
+def _normalize_key_value_aliases(items: Any) -> Any:
+    """Normalize key/value rows so the executor can read parameter locations."""
+    if not isinstance(items, list):
+        return items
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+        row = dict(item)
+        if "in" not in row and row.get("in_field") is not None:
+            row["in"] = row.get("in_field")
+        row.pop("in_field", None)
+        normalized.append(row)
+    return normalized
+
+
+def _resolve_pipeline_endpoint_id(step: dict, endpoint_index_to_id: Dict[int, int]) -> int | None:
+    """Resolve endpoint_id from either endpoint_id or pipeline endpoint_ref."""
+    eid = step.get("endpoint_id")
+    if eid:
+        return int(eid)
+    ref = step.get("endpoint_ref")
+    if ref and endpoint_index_to_id:
+        return endpoint_index_to_id.get(int(ref))
+    return None
+
+
+def _is_pipeline_api_call_step(step: Any) -> bool:
+    if not isinstance(step, dict):
+        return False
+    return (
+        step.get("type") == "api_call"
+        or step.get("endpoint_id") is not None
+        or step.get("endpoint_ref") is not None
+    )
+
+
+def _normalize_pipeline_api_step(step: dict, endpoint_index_to_id: Dict[int, int]) -> dict:
+    """Normalize an LLM-produced pipeline API step before persistence/execution."""
+    normalized = dict(step)
+    if normalized.get("endpoint_id") or normalized.get("endpoint_ref"):
+        normalized.setdefault("type", "api_call")
+    eid = _resolve_pipeline_endpoint_id(normalized, endpoint_index_to_id)
+    if eid:
+        normalized["endpoint_id"] = eid
+        normalized.pop("endpoint_ref", None)
+    for key in ("headers", "parameters", "variables"):
+        normalized[key] = _normalize_key_value_aliases(normalized.get(key))
+    return normalized
+
+
+def _normalize_pipeline_api_steps(steps: Any, endpoint_index_to_id: Dict[int, int]) -> Any:
+    if not isinstance(steps, list):
+        return steps
+    return [
+        _normalize_pipeline_api_step(step, endpoint_index_to_id)
+        if isinstance(step, dict) else step
+        for step in steps
+    ]
+
+
+def _collect_pipeline_endpoint_ids(test_cases: list, endpoint_index_to_id: Dict[int, int]) -> set[int]:
+    endpoint_ids: set[int] = set()
+    for tc in test_cases:
+        for step in (tc.steps or []):
+            if _is_pipeline_api_call_step(step):
+                eid = _resolve_pipeline_endpoint_id(step, endpoint_index_to_id)
+                if eid:
+                    endpoint_ids.add(eid)
+        for pc in (tc.preset_conditions or []):
+            if _is_pipeline_api_call_step(pc):
+                eid = _resolve_pipeline_endpoint_id(pc, endpoint_index_to_id)
+                if eid:
+                    endpoint_ids.add(eid)
+    return endpoint_ids
+
+
+def _build_pipeline_scenario_steps(testcase, endpoint_map: dict, endpoint_index_to_id: Dict[int, int]) -> list[dict]:
+    """Build executable ApiScenario steps from a pipeline-generated testcase."""
+    api_steps = []
+    for pc in (testcase.preset_conditions or []):
+        if _is_pipeline_api_call_step(pc) and _resolve_pipeline_endpoint_id(pc, endpoint_index_to_id):
+            api_steps.append(("preset", pc))
+    for step in (testcase.steps or []):
+        if _is_pipeline_api_call_step(step) and _resolve_pipeline_endpoint_id(step, endpoint_index_to_id):
+            api_steps.append(("step", step))
+
+    scenario_steps = []
+    for step_type, raw_step in api_steps:
+        step_copy = _normalize_pipeline_api_step(raw_step, endpoint_index_to_id)
+        eid = step_copy.get("endpoint_id")
+        ep = endpoint_map.get(eid) if eid else None
+        if ep:
+            step_copy.setdefault("method", ep.method)
+            step_copy.setdefault("path", ep.path)
+            step_copy.setdefault("url", ep.url or ep.path)
+            step_copy.setdefault("endpoint_name", ep.name)
+            step_copy.setdefault("enabled", True)
+            step_copy.setdefault("continue_on_failure", True)
+        if step_type == "preset":
+            step_copy["is_preset"] = True
+        scenario_steps.append(step_copy)
+    return scenario_steps
+
+
 class PipelineRunner:
     """4阶段 Pipeline 编排器（支持功能测试和接口测试）"""
 
@@ -354,10 +460,13 @@ class PipelineRunner:
                         steps = converted_steps
 
                     # 根据测试类型设置不同的字段
+                    if is_api_test:
+                        steps = _normalize_pipeline_api_steps(steps, endpoint_index_to_id)
+
                     tc_kwargs = dict(
                         case_name=case_data.get("title", ""),
                         steps=steps if isinstance(steps, list) else [],
-                        preset_conditions=[case_data.get("preconditions", "")] if case_data.get("preconditions") else [],
+                        preset_conditions=case_data.get("preconditions", []) or [],
                         case_level=case_data.get("case_level", 1),
                         session_id=session_id,
                         module_id=module_id,
@@ -464,7 +573,7 @@ class PipelineRunner:
 
                     scenario_steps = []
                     for step_type, s in api_steps:
-                        step_copy = dict(s)
+                        step_copy = _normalize_pipeline_api_step(s, endpoint_index_to_id)
                         # 统一转为 endpoint_id 格式
                         eid = _resolve_endpoint_id(s)
                         if eid:
@@ -513,7 +622,7 @@ class PipelineRunner:
                             "id": tc.id,
                             "title": tc.case_name,
                             "description": "",
-                            "preconditions": tc.preset_conditions[0] if tc.preset_conditions else "",
+                            "preconditions": tc.preset_conditions or [],
                             "test_steps": tc.steps if tc.steps else [],
                         }
                         if is_api_test:
@@ -543,8 +652,12 @@ class PipelineRunner:
                                             eid = endpoint_index_to_id.get(int(ref)) if ref else None
                                             if eid:
                                                 s["endpoint_id"] = eid
+                                        if isinstance(s, dict):
+                                            s = _normalize_pipeline_api_step(s, endpoint_index_to_id)
                                         converted_opt_steps.append(s)
                                     opt_steps = converted_opt_steps
+                                elif is_api_test:
+                                    opt_steps = _normalize_pipeline_api_steps(opt_steps, endpoint_index_to_id)
                                 tc.steps = opt_steps
                                 if is_api_test:
                                     tc.expected_results = [
@@ -555,10 +668,30 @@ class PipelineRunner:
                                         s.get("expected", "") for s in opt_steps
                                     ]
                             if opt.get("preconditions"):
-                                tc.preset_conditions = [opt["preconditions"]]
+                                tc.preset_conditions = opt["preconditions"]
                             if is_api_test and opt.get("assertions"):
                                 tc.assertions = opt["assertions"]
                             optimized_count += 1
+
+                    if is_api_test and api_project_id and all_test_cases:
+                        from db.models import ApiEndpoint as ApiEndpointModel, ApiScenario
+
+                        all_endpoint_ids = _collect_pipeline_endpoint_ids(all_test_cases, endpoint_index_to_id)
+                        endpoint_map: dict[int, ApiEndpointModel] = {}
+                        if all_endpoint_ids:
+                            rows = self.db.exec(
+                                select(ApiEndpointModel).where(ApiEndpointModel.id.in_(list(all_endpoint_ids)))
+                            ).all()
+                            endpoint_map = {e.id: e for e in rows}
+
+                        for tc in all_test_cases:
+                            if not tc.scenario_id:
+                                continue
+                            scenario = self.db.get(ApiScenario, tc.scenario_id)
+                            if not scenario:
+                                continue
+                            scenario.steps = _build_pipeline_scenario_steps(tc, endpoint_map, endpoint_index_to_id)
+                            self.db.add(scenario)
 
                     self.db.commit()
                     logger.info(f"优化完成，成功优化 {optimized_count} 个用例")

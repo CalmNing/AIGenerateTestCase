@@ -452,4 +452,29 @@ post_actions:
     # 向后兼容：完整提示词（基础 + 功能 + 接口）
     # ============================================================
 
+    BASE_PROMPT += """
+
+## Strict rule for preset_conditions
+
+- preset_conditions must be a JSON array.
+- Each array element must contain exactly one precondition.
+- Do not combine multiple numbered preconditions into one string.
+- Correct: [\"1. User is logged in\", \"2. User has permission\", \"3. Valid PDF file is prepared\"]
+- Wrong: [\"1. User is logged in 2. User has permission 3. Valid PDF file is prepared\"]
+"""
+
+    FUNCTIONAL_PROMPT += """
+
+Additional output rule for functional test cases:
+- preset_conditions must keep one precondition per array item.
+- If there are 3 preconditions, return 3 array items.
+"""
+
+    API_PROMPT += """
+
+Additional output rule for API test cases:
+- preset_conditions must keep one precondition per array item.
+- Do not place multiple numbered preconditions in a single string item.
+"""
+
     SYSTEM_PROMPT = BASE_PROMPT + FUNCTIONAL_PROMPT + API_PROMPT

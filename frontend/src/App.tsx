@@ -31,8 +31,28 @@ import AddTestcaseModal from './components/modals/AddTestcaseModal';
 import TestCaseExecutionLogModal from './components/modals/TestCaseExecutionLogModal';
 import ModuleSidebar from './components/ModuleSidebar';
 import { Permission, hasPermission } from './services/permissions';
+import { useRef } from 'react';
 
 const { Content } = Layout;
+
+const STORAGE_KEYS = {
+  selectedSessionId: 'ai-testcase:selectedSessionId',
+  selectedModuleId: 'ai-testcase:selectedModuleId',
+  activeTab: 'ai-testcase:activeTab',
+} as const;
+
+const getStoredNumber = (key: string): number | null => {
+  const raw = localStorage.getItem(key);
+  if (raw === null || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+};
+
+const INITIAL_PERSISTED_STATE = {
+  selectedSessionId: getStoredNumber(STORAGE_KEYS.selectedSessionId),
+  selectedModuleId: getStoredNumber(STORAGE_KEYS.selectedModuleId),
+  activeTab: localStorage.getItem(STORAGE_KEYS.activeTab) || 'generate',
+};
 
 const App: React.FC = () => {
 
@@ -53,7 +73,7 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
-  const [selectedModule, setSelectedModule] = useState<number|string>(0);
+  const [selectedModule, setSelectedModule] = useState<number|string>(INITIAL_PERSISTED_STATE.selectedModuleId ?? 0);
   const [testcases, setTestcases] = useState<TestCase[]>([]);
   const [testcasesResponse, setTestcasesResponse] = useState<TestCaseResponse>({ items: [], passed: 0, failed: 0, not_run: 0, totalNumber: 0, totalBugs: 0 });
   const [newSessionName, setNewSessionName] = useState('');
@@ -103,7 +123,7 @@ const App: React.FC = () => {
   const [sessionToEdit, setSessionToEdit] = useState<Session | null>(null);
   const [moduleToEdit, setModuleToEdit] = useState<Module | null>(null);
   const [isAddModuleModalVisible, setIsAddModuleModalVisible] = useState(false);
-  const [activeTab, setActiveTab] = useState('generate');
+  const [activeTab, setActiveTab] = useState(INITIAL_PERSISTED_STATE.activeTab);
   // 图片状态管理
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   // 历史提示词刷新key
@@ -114,20 +134,20 @@ const App: React.FC = () => {
   // 删除确认状态
   const [confirmDeleteVisible, setConfirmDeleteVisible] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<number | null>(null);
+  const canPersistSelectionRef = useRef(false);
+  const hasRestoredModuleRef = useRef(false);
 
   // 初始化数据
   useEffect(() => {
     loadSessions();
-    setSelectedSession(selectedSession?.id ? selectedSession : null);
-    setSelectedModule(selectedModule ? selectedModule : 0);
     // 从后端加载配置
     const loadConfig = async () => {
       try {
         const res = await configApi.getConfig();
-        console.log('初始化加载配置结果:', res);
+        // console.log('初始化加载配置结果:', res);
         if (res.code === 200 && res.data) {
           const config = res.data;
-          console.log('配置数据:', config);
+          // console.log('配置数据:', config);
           // 延迟设置值，确保表单已渲染
           setTimeout(() => {
             const values = {
@@ -139,10 +159,10 @@ const App: React.FC = () => {
               ollama_url: config.ollama_url || 'http://localhost:11434',
               ollama_model: config.ollama_model || 'llama3',
             };
-            console.log('设置表单值:', values);
+            // console.log('设置表单值:', values);
             settingForm.setFieldsValue(values);
             setSettingType((config.model_type as 'api' | 'ollama') || 'api');
-            console.log('设置后的表单值:', settingForm.getFieldsValue());
+            // console.log('设置后的表单值:', settingForm.getFieldsValue());
           }, 100);
         }
       } catch (error) {
@@ -151,6 +171,25 @@ const App: React.FC = () => {
     };
     loadConfig();
   }, []);
+
+  useEffect(() => {
+    if (!canPersistSelectionRef.current) return;
+    if (selectedSession?.id) {
+      localStorage.setItem(STORAGE_KEYS.selectedSessionId, String(selectedSession.id));
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.selectedSessionId);
+    }
+  }, [selectedSession?.id]);
+
+  useEffect(() => {
+    if (!canPersistSelectionRef.current) return;
+    localStorage.setItem(STORAGE_KEYS.selectedModuleId, String(selectedModule || 0));
+  }, [selectedModule]);
+
+  useEffect(() => {
+    if (!canPersistSelectionRef.current) return;
+    localStorage.setItem(STORAGE_KEYS.activeTab, activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     const blocked =
@@ -165,6 +204,7 @@ const App: React.FC = () => {
 
   // 当选择"全部"节点时，如果当前在"生成测试用例"页签，自动切换到"管理测试用例"
   useEffect(() => {
+    if (!hasRestoredModuleRef.current) return;
     if (selectedModule === 0 && activeTab === 'generate') {
       setActiveTab('manage');
     }
@@ -177,9 +217,17 @@ const App: React.FC = () => {
       if (response.code === 200 && response.data) {
         setSessions(response.data);
         if (response.data.length > 0) {
-          setSelectedSession(response.data[0]);
-          loadModules(response.data[0].id);
-          loadTestcases(response.data[0].id);
+          const storedSessionId = INITIAL_PERSISTED_STATE.selectedSessionId;
+          const initialSession = response.data.find((session: Session) => session.id === storedSessionId) || response.data[0];
+          setSelectedSession(initialSession);
+          loadModules(initialSession.id);
+          loadTestcases(initialSession.id);
+        } else {
+          setSelectedSession(null);
+          setModules([]);
+          setSelectedModule(0);
+          hasRestoredModuleRef.current = true;
+          canPersistSelectionRef.current = true;
         }
       }
     } catch (error) {
@@ -271,7 +319,16 @@ const App: React.FC = () => {
       const response: ApiResponse<Module[]> | any = await moduleApi.getModules(sessionId);
       if (response.code === 200 && response.data) {
         setModules(response.data);
-        setSelectedModule('all'); // 重置选中的模块
+        const storedModuleId = INITIAL_PERSISTED_STATE.selectedModuleId;
+        const hasStoredModule = storedModuleId !== null && response.data.some((module: Module) => module.id === storedModuleId);
+        setSelectedModule(hasStoredModule ? storedModuleId! : 0);
+        hasRestoredModuleRef.current = true;
+        canPersistSelectionRef.current = true;
+      } else {
+        setModules([]);
+        setSelectedModule(0);
+        hasRestoredModuleRef.current = true;
+        canPersistSelectionRef.current = true;
       }
     } catch (error) {
       console.error('加载模块失败:', error);
@@ -280,6 +337,7 @@ const App: React.FC = () => {
 
   // 选择模块
   const handleSelectModule = (module: Module) => {
+    canPersistSelectionRef.current = true;
     setSelectedModule(module.id!);
     // 可以在这里添加根据模块筛选测试用例的逻辑
     loadTestcases(selectedSession?.id ?? undefined, { module_id: module.id || 'all' });
@@ -288,6 +346,7 @@ const App: React.FC = () => {
 
   // 选择全部模块
   const handleSelectAllModules = () => {
+    canPersistSelectionRef.current = true;
     setSelectedModule(0);
     // 清空模块筛选
     loadTestcases(selectedSession?.id ?? undefined, { ...filters, module_id: undefined });
@@ -469,7 +528,9 @@ const App: React.FC = () => {
 
   // 选择会话
   const handleSelectSession = (session: Session) => {
+    canPersistSelectionRef.current = true;
     setSelectedSession(session);
+    setSelectedModule(0);
     // const NewFilters = {
     //   case_name: '',
     //   status: undefined,
@@ -505,11 +566,10 @@ const App: React.FC = () => {
 
   // 编辑测试用例
   const handleEditTestcase = (testcase: TestCase) => {
-
+    // 先重置表单，再打开弹窗，避免 modal 内的 setFieldsValue 被随后 reset 清掉
+    form.resetFields();
     setSelectedTestcase(testcase);
     setIsEditModalVisible(true);
-    // 重置表单
-    form.resetFields();
   };
 
   // 表单提交处理
@@ -525,12 +585,16 @@ const App: React.FC = () => {
         case_name: values.case_name,
         case_level: values.case_level,
         status: values.status as TestCaseStatus,
-        preset_conditions: values.preset_conditions.split('\n').filter((item: string) => item.trim()),
+        preset_conditions: Array.isArray(values.preset_conditions)
+          ? values.preset_conditions
+          : (values.preset_conditions || '').split('\n').filter((item: string) => item.trim()),
         // steps可能是数组（从EditTestcaseModal传来）或字符串
         steps: Array.isArray(values.steps)
           ? values.steps
           : values.steps.split('\n').filter((item: string) => item.trim()),
-        expected_results: values.expected_results.split('\n').filter((item: string) => item.trim())
+        expected_results: Array.isArray(values.expected_results)
+          ? values.expected_results
+          : (values.expected_results || '').split('\n').filter((item: string) => item.trim())
       };
 
       // 调用后端API更新测试用例
@@ -940,10 +1004,10 @@ const App: React.FC = () => {
     try {
       // 先从后端加载配置
       const res = await configApi.getConfig();
-      console.log('打开弹窗加载配置结果:', res);
+      // console.log('打开弹窗加载配置结果:', res);
       if (res.code === 200 && res.data) {
         const config = res.data;
-        console.log('配置数据:', config);
+        // console.log('配置数据:', config);
 
         // 先设置 settingType 确保字段显示
         const newType = (config.model_type as 'api' | 'ollama') || 'api';
@@ -965,9 +1029,9 @@ const App: React.FC = () => {
             lanhu_cookie: config.lanhu_cookie || '',
             bug_link_template: config.bug_link_template || '',
           };
-          console.log('设置表单值:', values);
+          // console.log('设置表单值:', values);
           settingForm.setFieldsValue(values);
-          console.log('设置后的表单值:', settingForm.getFieldsValue());
+          // console.log('设置后的表单值:', settingForm.getFieldsValue());
         }, 300);
       }
     } catch (error) {

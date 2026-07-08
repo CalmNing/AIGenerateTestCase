@@ -127,7 +127,6 @@ def _normalize_steps(steps: list) -> list:
     return normalized
 
 # 保持兼容性 re-export
-SYSTEM_PROMPT = PromptConfig.SYSTEM_PROMPT
 
 
 def _select_prompt(is_api_test: bool) -> str:
