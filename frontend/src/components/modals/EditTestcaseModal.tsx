@@ -165,9 +165,13 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
       if (originalStructuredSteps.length > 0) {
         textSteps.forEach((action: string, index: number) => {
           const originalStep = originalStructuredSteps[index];
+          const originalStepExpected =
+            originalStep && typeof originalStep === 'object' && 'expected' in originalStep
+              ? originalStep.expected
+              : undefined;
           const originalExpected = typeof selectedTestcase?.expected_results?.[index] === 'string'
             ? selectedTestcase?.expected_results?.[index]
-            : originalStep?.expected;
+            : originalStepExpected;
           const editedExpected = expectedResults[index];
 
           steps.push({
