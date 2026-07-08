@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Modal, Form, Input, Select, Tabs, Button, Space, Card, Switch } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { TestCase, TestCaseStatus, GlobalParameter } from '../../types';
-import { globalParameterApi, apiTestApi } from '../../services/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Button, Collapse, Drawer, Form, Input, Select, Switch, Tag } from 'antd';
+import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import { GlobalParameter, TestCase, TestCaseStatus } from '../../types';
+import { apiTestApi, globalParameterApi } from '../../services/api';
+import StructuredTestcaseSections, { createStepRow, expectedTemplateGroups, StepRow } from './TestcaseStructuredSections';
+import './TestcaseDrawerShared.css';
+import './EditTestcaseModal.css';
 
 interface HeaderItem {
   key: string;
@@ -24,13 +27,18 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
   form,
   loading,
   onCancel,
-  onFinish
+  onFinish,
 }) => {
   const [apiCallEnabled, setApiCallEnabled] = useState(false);
   const [headers, setHeaders] = useState<HeaderItem[]>([{ key: '', value: '' }]);
   const [environmentId, setEnvironmentId] = useState<number | undefined>(undefined);
   const [environments, setEnvironments] = useState<GlobalParameter[]>([]);
-  const [body, setBody] = useState<string>('');
+  const [body, setBody] = useState('');
+  const [presetRows, setPresetRows] = useState<string[]>(['']);
+  const [stepRows, setStepRows] = useState<StepRow[]>([createStepRow()]);
+  const [activeTemplateGroup, setActiveTemplateGroup] = useState(expectedTemplateGroups[0].label);
+  const [draggingStepId, setDraggingStepId] = useState<string | null>(null);
+  const [dragOverStepId, setDragOverStepId] = useState<string | null>(null);
 
   const firstEndpointId = (value: TestCase['api_endpoint_id']): number | null => {
     if (value === null || value === undefined) return null;
@@ -39,12 +47,72 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
     return Number.isFinite(parsed) ? parsed : null;
   };
 
-  // 加载环境列表
+  const headerSummary = useMemo(
+    () => headers.filter((item) => item.key.trim()).length,
+    [headers],
+  );
+
   useEffect(() => {
-    if (visible) {
-      loadEnvironments();
-    }
+    if (!visible) return;
+    void loadEnvironments();
   }, [visible]);
+
+  useEffect(() => {
+    if (!selectedTestcase || !visible) return;
+
+    const apiCallStep = selectedTestcase.steps.find(
+      (step: any) => typeof step === 'object' && step.type === 'api_call',
+    );
+
+    if (apiCallStep && typeof apiCallStep === 'object') {
+      setApiCallEnabled(true);
+      setHeaders((apiCallStep as any).headers?.length ? (apiCallStep as any).headers : [{ key: '', value: '' }]);
+      setEnvironmentId((apiCallStep as any).environment_id);
+      if ((apiCallStep as any).body) {
+        setBody((apiCallStep as any).body);
+      } else if (selectedTestcase.api_project_id && selectedTestcase.api_endpoint_id) {
+        const endpointId = firstEndpointId(selectedTestcase.api_endpoint_id);
+        if (endpointId) void loadEndpointBody(selectedTestcase.api_project_id, endpointId);
+      } else {
+        setBody('');
+      }
+    } else {
+      setApiCallEnabled(false);
+      setHeaders([{ key: '', value: '' }]);
+      setEnvironmentId(undefined);
+      if (selectedTestcase.api_project_id && selectedTestcase.api_endpoint_id) {
+        const endpointId = firstEndpointId(selectedTestcase.api_endpoint_id);
+        if (endpointId) void loadEndpointBody(selectedTestcase.api_project_id, endpointId);
+      } else {
+        setBody('');
+      }
+    }
+
+    const textPresets = selectedTestcase.preset_conditions
+      .filter((item: any) => typeof item === 'string')
+      .map((item: any) => String(item));
+    setPresetRows(textPresets.length > 0 ? textPresets : ['']);
+
+    const textSteps = selectedTestcase.steps.filter(
+      (step: any) => typeof step === 'string' || (typeof step === 'object' && step?.type !== 'api_call' && typeof step?.action === 'string'),
+    );
+    const expectedResults = selectedTestcase.expected_results.map((item: any) =>
+      (typeof item === 'string' ? item : item?.expected || ''));
+    const mappedRows = textSteps.map((step: any, index: number) => createStepRow(
+      typeof step === 'string' ? step : step.action,
+      expectedResults[index] || (typeof step === 'object' ? (step as any).expected || '' : ''),
+    ));
+    setStepRows(mappedRows.length > 0 ? mappedRows : [createStepRow()]);
+    setActiveTemplateGroup(expectedTemplateGroups[0].label);
+    setDraggingStepId(null);
+    setDragOverStepId(null);
+
+    form.setFieldsValue({
+      case_name: selectedTestcase.case_name,
+      case_level: selectedTestcase.case_level,
+      status: selectedTestcase.status || TestCaseStatus.NOT_RUN,
+    });
+  }, [selectedTestcase, form, visible]);
 
   const loadEnvironments = async () => {
     try {
@@ -57,85 +125,122 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
     }
   };
 
-  // 加载关联接口的 body
   const loadEndpointBody = async (projectId: number, endpointId: number) => {
     try {
       const response = await apiTestApi.getEndpoints(projectId);
       if (response.code === 200 && response.data) {
         const endpoint = response.data.find((ep: any) => ep.id === endpointId);
-        if (endpoint?.body) {
-          setBody(endpoint.body);
-        }
+        setBody(endpoint?.body || '');
       }
     } catch (error) {
       console.error('加载接口 body 失败:', error);
     }
   };
 
-  useEffect(() => {
-    if (selectedTestcase && visible) {
-      // 检查是否有api_call配置
-      const apiCallStep = selectedTestcase.steps.find(
-        (step: any) => typeof step === 'object' && step.type === 'api_call'
-      );
-
-      if (apiCallStep && typeof apiCallStep === 'object') {
-        setApiCallEnabled(true);
-        setHeaders((apiCallStep as any).headers || [{ key: '', value: '' }]);
-        setEnvironmentId((apiCallStep as any).environment_id);
-        // 优先使用 api_call step 中的 body，否则从接口加载
-        if ((apiCallStep as any).body) {
-          setBody((apiCallStep as any).body);
-        } else if (selectedTestcase.api_project_id && selectedTestcase.api_endpoint_id) {
-          const endpointId = firstEndpointId(selectedTestcase.api_endpoint_id);
-          if (endpointId) loadEndpointBody(selectedTestcase.api_project_id, endpointId);
-        } else {
-          setBody('');
-        }
-      } else {
-        setApiCallEnabled(false);
-        setHeaders([{ key: '', value: '' }]);
-        setEnvironmentId(undefined);
-        // 从关联接口加载 body
-        if (selectedTestcase.api_project_id && selectedTestcase.api_endpoint_id) {
-          const endpointId = firstEndpointId(selectedTestcase.api_endpoint_id);
-          if (endpointId) loadEndpointBody(selectedTestcase.api_project_id, endpointId);
-        } else {
-          setBody('');
-        }
-      }
-
-      form.setFieldsValue({
-        case_name: selectedTestcase.case_name,
-        case_level: selectedTestcase.case_level,
-        status: selectedTestcase.status || TestCaseStatus.NOT_RUN,
-        preset_conditions: selectedTestcase.preset_conditions
-          .filter((s: any) => typeof s === 'string')
-          .join('\n'),
-        steps: selectedTestcase.steps
-          .filter((step: any) => typeof step === 'string' || (typeof step === 'object' && step?.type !== 'api_call' && typeof step?.action === 'string'))
-          .map((step: any) => typeof step === 'string' ? step : step.action)
-          .join('\n'),
-        expected_results: selectedTestcase.expected_results
-          .map((item: any) => typeof item === 'string' ? item : (item?.expected || ''))
-          .join('\n')
-      });
-    }
-  }, [selectedTestcase, form, visible]);
-
-  const handleAddHeader = () => {
-    setHeaders([...headers, { key: '', value: '' }]);
+  const updatePresetRow = (index: number, value: string) => {
+    const nextRows = [...presetRows];
+    nextRows[index] = value;
+    setPresetRows(nextRows);
   };
 
-  const handleRemoveHeader = (index: number) => {
-    const newHeaders = headers.filter((_, i) => i !== index);
-    setHeaders(newHeaders.length > 0 ? newHeaders : [{ key: '', value: '' }]);
+  const addPresetRow = () => setPresetRows([...presetRows, '']);
+
+  const appendPresetTemplate = (template: string) => {
+    setPresetRows((rows) => {
+      const lastIndex = rows.length - 1;
+      if (lastIndex >= 0 && rows[lastIndex].trim() === '') {
+        const nextRows = [...rows];
+        nextRows[lastIndex] = template;
+        return nextRows;
+      }
+      return [...rows, template];
+    });
+  };
+
+  const removePresetRow = (index: number) => {
+    const nextRows = presetRows.filter((_, rowIndex) => rowIndex !== index);
+    setPresetRows(nextRows.length > 0 ? nextRows : ['']);
+  };
+
+  const updateStepRow = (id: string, field: 'action' | 'expected', value: string) => {
+    setStepRows((rows) => rows.map((row) => (
+      row.id === id ? { ...row, [field]: value } : row
+    )));
+  };
+
+  const addStepRow = () => setStepRows((rows) => [...rows, createStepRow()]);
+
+  const removeStepRow = (id: string) => {
+    const nextRows = stepRows.filter((row) => row.id !== id);
+    setStepRows(nextRows.length > 0 ? nextRows : [createStepRow()]);
+  };
+
+  const duplicateStepRow = (id: string) => {
+    setStepRows((rows) => {
+      const index = rows.findIndex((row) => row.id === id);
+      if (index < 0) return rows;
+      const source = rows[index];
+      const cloned = createStepRow(source.action, source.expected);
+      const nextRows = [...rows];
+      nextRows.splice(index + 1, 0, cloned);
+      return nextRows;
+    });
+  };
+
+  const moveStepRow = (id: string, direction: 'up' | 'down') => {
+    setStepRows((rows) => {
+      const index = rows.findIndex((row) => row.id === id);
+      if (index < 0) return rows;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= rows.length) return rows;
+      const nextRows = [...rows];
+      [nextRows[index], nextRows[targetIndex]] = [nextRows[targetIndex], nextRows[index]];
+      return nextRows;
+    });
+  };
+
+  const reorderStepRows = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setStepRows((rows) => {
+      const sourceIndex = rows.findIndex((row) => row.id === sourceId);
+      const targetIndex = rows.findIndex((row) => row.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return rows;
+      const nextRows = [...rows];
+      const [moved] = nextRows.splice(sourceIndex, 1);
+      nextRows.splice(targetIndex, 0, moved);
+      return nextRows;
+    });
+  };
+
+  const applyExpectedTemplate = (id: string, template: string) => {
+    setStepRows((rows) => rows.map((row) => (
+      row.id === id ? { ...row, expected: row.expected ? `${row.expected}\n${template}` : template } : row
+    )));
+  };
+
+  const fillExpectedIfEmpty = (template: string) => {
+    setStepRows((rows) => {
+      const firstEmptyIndex = rows.findIndex((row) => !row.expected.trim());
+      if (firstEmptyIndex < 0) {
+        return [...rows, createStepRow('', template)];
+      }
+      return rows.map((row, index) => (
+        index === firstEmptyIndex ? { ...row, expected: template } : row
+      ));
+    });
   };
 
   const handleHeaderChange = (index: number, field: 'key' | 'value', value: string) => {
-    const newHeaders = [...headers];
-    newHeaders[index] = { ...newHeaders[index], [field]: value };
-    setHeaders(newHeaders);
+    const nextHeaders = [...headers];
+    nextHeaders[index] = { ...nextHeaders[index], [field]: value };
+    setHeaders(nextHeaders);
+  };
+
+  const handleAddHeader = () => setHeaders([...headers, { key: '', value: '' }]);
+
+  const handleRemoveHeader = (index: number) => {
+    const nextHeaders = headers.filter((_, itemIndex) => itemIndex !== index);
+    setHeaders(nextHeaders.length > 0 ? nextHeaders : [{ key: '', value: '' }]);
   };
 
   const handleOk = async () => {
@@ -143,292 +248,275 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
       const values = await form.validateFields();
       handleFinish(values);
     } catch (error) {
-      // 表单验证失败
-      console.error('表单验证失败:', error);
+      console.error('表单校验失败:', error);
     }
   };
 
   const handleFinish = (values: any) => {
-    // 构建steps数组
+    const cleanedPresetRows = presetRows.map((item) => item.trim()).filter(Boolean);
+    const cleanedStepRows = stepRows
+      .map((row) => ({ action: row.action.trim(), expected: row.expected.trim() }))
+      .filter((row) => row.action || row.expected);
+
     const steps: any[] = [];
-    const expectedResults = (values.expected_results || '')
-      .split('\n')
-      .filter((s: string) => s.trim());
+    const expectedResults = cleanedStepRows.map((row) => row.expected);
+    const originalStructuredSteps = ((selectedTestcase?.steps || []) as any[]).filter(
+      (step: any) => typeof step === 'object' && step?.type !== 'api_call' && typeof step?.action === 'string',
+    );
 
-    // 添加文本步骤
-    if (values.steps) {
-      const textSteps = values.steps.split('\n').filter((s: string) => s.trim());
-      const originalStructuredSteps = (selectedTestcase?.steps || []).filter(
-        (step: any) => typeof step === 'object' && step?.type !== 'api_call' && typeof step?.action === 'string'
-      );
+    if (originalStructuredSteps.length > 0) {
+      cleanedStepRows.forEach((row, index) => {
+        const originalStep = originalStructuredSteps[index];
+        const selectedExpected = selectedTestcase?.expected_results?.[index];
+        const originalExpected = typeof selectedExpected === 'string'
+          ? selectedExpected
+          : originalStep?.expected;
 
-      if (originalStructuredSteps.length > 0) {
-        textSteps.forEach((action: string, index: number) => {
-          const originalStep = originalStructuredSteps[index];
-          const originalStepExpected =
-            originalStep && typeof originalStep === 'object' && 'expected' in originalStep
-              ? originalStep.expected
-              : undefined;
-          const originalExpected = typeof selectedTestcase?.expected_results?.[index] === 'string'
-            ? selectedTestcase?.expected_results?.[index]
-            : originalStepExpected;
-          const editedExpected = expectedResults[index];
-
-          steps.push({
-            step: index + 1,
-            action,
-            expected: editedExpected || originalExpected || '',
-          });
+        steps.push({
+          step: index + 1,
+          action: row.action,
+          expected: row.expected || originalExpected || '',
         });
-      } else {
-        steps.push(...textSteps);
-      }
+      });
+    } else {
+      steps.push(...cleanedStepRows.map((row) => row.action));
     }
 
-    // 添加api_call步骤（如果启用）
     if (apiCallEnabled && selectedTestcase?.api_endpoint_id) {
-      const validHeaders = headers.filter(h => h.key.trim() !== '');
-      // 从现有 api_call 步骤中提取 endpoint_id，或从 api_endpoint_id 取第一个
+      const validHeaders = headers.filter((item) => item.key.trim() !== '');
       const existingApiCall = Array.isArray(selectedTestcase.steps)
-        ? selectedTestcase.steps.find((s: any) => typeof s === 'object' && s.type === 'api_call')
+        ? selectedTestcase.steps.find((step: any) => typeof step === 'object' && step.type === 'api_call')
         : undefined;
       const existingEndpointId = existingApiCall
         ? (existingApiCall as any).endpoint_id
         : firstEndpointId(selectedTestcase.api_endpoint_id);
+
       steps.push({
         type: 'api_call',
         endpoint_id: existingEndpointId,
         headers: validHeaders,
         body: body || undefined,
-        environment_id: environmentId
+        environment_id: environmentId,
       });
     }
 
-    // 处理前置条件：合并 textarea 文本 + 保留现有的 api_call 对象
-    const textPresets = (values.preset_conditions || '')
-      .split('\n')
-      .filter((s: string) => s.trim());
-    const objectPresets = (selectedTestcase?.preset_conditions || [])
-      .filter((s: any) => typeof s !== 'string');
+    const objectPresets = (selectedTestcase?.preset_conditions || []).filter((item: any) => typeof item !== 'string');
 
-    // 调用原始onFinish，传递修改后的数据
     onFinish({
       ...values,
-      preset_conditions: [...textPresets, ...objectPresets],
+      preset_conditions: [...cleanedPresetRows, ...objectPresets],
       steps,
       expected_results: expectedResults,
     });
   };
 
+  const handleStepDragStart = (stepId: string) => {
+    setDraggingStepId(stepId);
+    setDragOverStepId(stepId);
+  };
+
+  const handleStepDrop = (targetStepId: string) => {
+    if (draggingStepId) reorderStepRows(draggingStepId, targetStepId);
+    setDraggingStepId(null);
+    setDragOverStepId(null);
+  };
+
+  const handleStepDragEnd = () => {
+    setDraggingStepId(null);
+    setDragOverStepId(null);
+  };
+
   return (
-    <Modal
+    <Drawer
       title="编辑测试用例"
       open={visible}
-      onCancel={onCancel}
-      okText="保存"
-      cancelText="取消"
-      width={720}
+      onClose={onCancel}
+      placement="right"
+      width={820}
+      destroyOnHidden
+      className="etm-drawer"
       styles={{
-        body: { padding: '16px 24px' },
+        header: { padding: '16px 20px 12px' },
+        body: { padding: '0 20px 20px' },
+        footer: { padding: '12px 20px', borderTop: '1px solid var(--color-border-light)' },
       }}
-      destroyOnClose
-      confirmLoading={loading}
-      onOk={handleOk}
+      footer={(
+        <div className="etm-footer">
+          <Button onClick={onCancel}>取消</Button>
+          <Button type="primary" loading={loading} onClick={() => void handleOk()}>
+            保存
+          </Button>
+        </div>
+      )}
     >
       {selectedTestcase && (
-        <Form
-          form={form}
-          layout="vertical"
-        >
-          <Tabs
-            defaultActiveKey="basic"
-            items={[
-              {
-                key: 'basic',
-                label: '基本信息',
-                children: (
-                  <>
-                    <Form.Item
-                      name="case_name"
-                      label="用例名称"
-                      rules={[{ required: true, message: '请输入用例名称' }]}
-                    >
-                      <Input placeholder="请输入用例名称" />
-                    </Form.Item>
+        <Form form={form} layout="vertical">
+          <div className="etm-summary">
+            <Tag color="blue">#{selectedTestcase.id}</Tag>
+            <Tag color="default">P{selectedTestcase.case_level || 4}</Tag>
+            {selectedTestcase.api_endpoint_id && <Tag color="purple">已关联 API</Tag>}
+          </div>
 
-                    <Form.Item
-                      name="case_level"
-                      label="用例级别"
-                      rules={[{ required: true, message: '请选择用例级别' }]}
-                    >
-                      <Select>
-                        <Select.Option value={1}>P0</Select.Option>
-                        <Select.Option value={2}>P1</Select.Option>
-                        <Select.Option value={3}>P2</Select.Option>
-                        <Select.Option value={4}>P3</Select.Option>
-                      </Select>
-                    </Form.Item>
+          <section className="etm-section">
+            <div className="etm-section__header">
+              <h3>基本信息</h3>
+            </div>
+            <div className="etm-grid">
+              <Form.Item
+                className="etm-grid__wide"
+                name="case_name"
+                label="用例名称"
+                rules={[{ required: true, message: '请输入用例名称' }]}
+              >
+                <Input placeholder="输入用例名称" />
+              </Form.Item>
 
-                    <Form.Item
-                      name="status"
-                      label="测试状态"
-                      rules={[{ required: true, message: '请选择测试状态' }]}
-                    >
-                      <Select disabled={selectedTestcase.status !== TestCaseStatus.NOT_RUN}>
-                        <Select.Option value={TestCaseStatus.NOT_RUN}>未执行</Select.Option>
-                        <Select.Option value={TestCaseStatus.PASSED}>已通过</Select.Option>
-                        <Select.Option value={TestCaseStatus.FAILED}>未通过</Select.Option>
-                      </Select>
-                    </Form.Item>
+              <Form.Item
+                name="case_level"
+                label="用例级别"
+                rules={[{ required: true, message: '请选择用例级别' }]}
+              >
+                <Select
+                  options={[
+                    { label: 'P0', value: 1 },
+                    { label: 'P1', value: 2 },
+                    { label: 'P2', value: 3 },
+                    { label: 'P3', value: 4 },
+                  ]}
+                />
+              </Form.Item>
 
-                    <Form.Item
-                      name="preset_conditions"
-                      label="前置条件"
-                      rules={[{ required: true, message: '请输入前置条件' }]}
-                    >
-                      <Input.TextArea
-                        placeholder="请输入前置条件，每行一个条件"
-                        rows={3}
-                      />
-                    </Form.Item>
+              <Form.Item
+                name="status"
+                label="测试状态"
+                rules={[{ required: true, message: '请选择测试状态' }]}
+              >
+                <Select
+                  disabled={selectedTestcase.status !== TestCaseStatus.NOT_RUN}
+                  options={[
+                    { label: '未执行', value: TestCaseStatus.NOT_RUN },
+                    { label: '已通过', value: TestCaseStatus.PASSED },
+                    { label: '未通过', value: TestCaseStatus.FAILED },
+                  ]}
+                />
+              </Form.Item>
+            </div>
+          </section>
 
-                    <Form.Item
-                      name="steps"
-                      label="测试步骤"
-                      rules={[{ required: true, message: '请输入测试步骤' }]}
-                    >
-                      <Input.TextArea
-                        placeholder="请输入测试步骤，每行一个步骤"
-                        rows={3}
-                      />
-                    </Form.Item>
+          <StructuredTestcaseSections
+            presetRows={presetRows}
+            stepRows={stepRows}
+            activeTemplateGroup={activeTemplateGroup}
+            draggingStepId={draggingStepId}
+            dragOverStepId={dragOverStepId}
+            onAddPreset={addPresetRow}
+            onAppendPresetTemplate={appendPresetTemplate}
+            onUpdatePreset={updatePresetRow}
+            onRemovePreset={removePresetRow}
+            onAddStep={addStepRow}
+            onFillExpectedIfEmpty={fillExpectedIfEmpty}
+            onChangeTemplateGroup={setActiveTemplateGroup}
+            onStepDragStart={handleStepDragStart}
+            onStepDragOver={setDragOverStepId}
+            onStepDrop={handleStepDrop}
+            onStepDragEnd={handleStepDragEnd}
+            onUpdateStep={updateStepRow}
+            onApplyExpectedTemplate={applyExpectedTemplate}
+            onMoveStep={moveStepRow}
+            onDuplicateStep={duplicateStepRow}
+            onRemoveStep={removeStepRow}
+          />
 
-                    <Form.Item
-                      name="expected_results"
-                      label="预期结果"
-                      rules={[{ required: true, message: '请输入预期结果' }]}
-                    >
-                      <Input.TextArea
-                        placeholder="请输入预期结果，每行一个结果"
-                        rows={3}
-                      />
-                    </Form.Item>
-                  </>
-                )
-              },
-              {
-                key: 'api',
-                label: 'API调用配置',
-                disabled: !selectedTestcase.api_endpoint_id,
-                children: (
-                  <div>
-                    {!selectedTestcase.api_endpoint_id ? (
-                      <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--color-text-disabled)', fontSize: 13 }}>
-                        该测试用例未关联 API 接口，无法配置 API 调用参数
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, padding: '10px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border-light)' }}>
-                          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-secondary)' }}>启用 API 调用</span>
-                          <Switch
-                            checked={apiCallEnabled}
-                            onChange={setApiCallEnabled}
-                            size="small"
-                          />
+          <section className="etm-section">
+            <Collapse
+              className="etm-collapse"
+              items={[
+                {
+                  key: 'api',
+                  label: (
+                    <div className="etm-collapse__label">
+                      <span>API 调用配置</span>
+                      <span className="etm-collapse__meta">
+                        {selectedTestcase.api_endpoint_id ? `${headerSummary} 个 Header` : '未关联 API'}
+                      </span>
+                    </div>
+                  ),
+                  children: !selectedTestcase.api_endpoint_id ? (
+                    <div className="etm-empty-hint">该测试用例未关联 API 接口，无法配置 API 调用参数。</div>
+                  ) : (
+                    <div className="etm-api">
+                      <div className="etm-api__toggle">
+                        <div>
+                          <div className="etm-api__toggle-title">启用 API 调用</div>
+                          <div className="etm-api__toggle-help">开启后可覆盖请求头、环境变量和请求体。</div>
                         </div>
+                        <Switch checked={apiCallEnabled} onChange={setApiCallEnabled} />
+                      </div>
 
-                        {apiCallEnabled && (
-                          <>
-                            {/* Headers */}
-                            <div style={{ marginBottom: 16, padding: '12px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border-light)' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)' }}>请求 Headers</span>
-                                <button
-                                  type="button"
-                                  onClick={handleAddHeader}
-                                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', border: '1px dashed var(--color-border)', borderRadius: 'var(--radius-sm)', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, cursor: 'pointer' }}
-                                >
-                                  <PlusOutlined style={{ fontSize: 10 }} /> 添加
-                                </button>
-                              </div>
-                              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
-                                添加认证信息和其他请求头，如 Authorization: Bearer token
-                              </div>
+                      {apiCallEnabled && (
+                        <>
+                          <div className="etm-api__block">
+                            <div className="etm-section__header">
+                              <h4>请求 Headers</h4>
+                              <Button size="small" icon={<PlusOutlined />} onClick={handleAddHeader}>
+                                添加 Header
+                              </Button>
+                            </div>
+                            <div className="etm-stack">
                               {headers.map((header, index) => (
-                                <div key={index} style={{ display: 'flex', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                                <div key={`header-${index}`} className="etm-inline-row etm-inline-row--triple">
                                   <Input
                                     placeholder="Key"
                                     value={header.key}
-                                    onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
-                                    style={{ flex: 1, fontFamily: 'Consolas, Monaco, monospace', fontSize: 12 }}
+                                    onChange={(event) => handleHeaderChange(index, 'key', event.target.value)}
                                   />
                                   <Input
                                     placeholder="Value"
                                     value={header.value}
-                                    onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
-                                    style={{ flex: 2, fontFamily: 'Consolas, Monaco, monospace', fontSize: 12 }}
+                                    onChange={(event) => handleHeaderChange(index, 'value', event.target.value)}
                                   />
-                                  <Button
-                                    type="text"
-                                    danger
-                                    size="small"
-                                    icon={<DeleteOutlined />}
-                                    onClick={() => handleRemoveHeader(index)}
-                                    style={{ flexShrink: 0 }}
-                                  />
+                                  <Button danger type="text" icon={<DeleteOutlined />} onClick={() => handleRemoveHeader(index)} />
                                 </div>
                               ))}
-
-                              <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>环境变量</span>
-                                <Select
-                                  placeholder="选择环境（可选）"
-                                  value={environmentId}
-                                  onChange={setEnvironmentId}
-                                  allowClear
-                                  size="small"
-                                  style={{ width: 200 }}
-                                >
-                                  {environments.map(env => (
-                                    <Select.Option key={env.id} value={env.id}>
-                                      {env.name}
-                                    </Select.Option>
-                                  ))}
-                                </Select>
-                              </div>
-                              {environmentId && (
-                                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                                  选择环境后，可在 Headers 中使用 {'{{变量名}}'} 格式引用环境变量
-                                </div>
-                              )}
                             </div>
+                          </div>
 
-                            {/* Body */}
-                            <div style={{ padding: '12px 14px', background: 'var(--color-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border-light)' }}>
-                              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)', marginBottom: 8 }}>请求 Body</div>
-                              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
-                                JSON 格式，留空则使用接口默认 Body
-                              </div>
-                              <Input.TextArea
-                                value={body}
-                                onChange={(e) => setBody(e.target.value)}
-                                placeholder='{"key": "value"}'
-                                rows={6}
-                                style={{ fontFamily: 'Consolas, Monaco, monospace', fontSize: 13 }}
-                              />
-                            </div>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )
-              }
-            ]}
-          />
+                          <div className="etm-api__block">
+                            <div className="etm-field-label">环境变量</div>
+                            <Select
+                              placeholder="选择环境（可选）"
+                              value={environmentId}
+                              onChange={setEnvironmentId}
+                              allowClear
+                              options={environments.map((env) => ({ label: env.name, value: env.id }))}
+                            />
+                            {environmentId && (
+                              <div className="etm-field-help">选择环境后，可在 Headers 中使用 {'{{变量名}}'} 引用环境变量。</div>
+                            )}
+                          </div>
+
+                          <div className="etm-api__block">
+                            <div className="etm-field-label">请求 Body</div>
+                            <div className="etm-field-help">JSON 格式，留空则使用接口默认 Body。</div>
+                            <Input.TextArea
+                              value={body}
+                              onChange={(event) => setBody(event.target.value)}
+                              placeholder='{"key": "value"}'
+                              rows={8}
+                              style={{ fontFamily: 'Consolas, Monaco, monospace', fontSize: 13 }}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </section>
         </Form>
       )}
-    </Modal>
+    </Drawer>
   );
 };
 

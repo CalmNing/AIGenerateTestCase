@@ -1,0 +1,78 @@
+.atm-drawer .ant-drawer-content,
+.atm-drawer .ant-drawer-header,
+.atm-drawer .ant-drawer-footer,
+.etm-drawer .ant-drawer-content,
+.etm-drawer .ant-drawer-header,
+.etm-drawer .ant-drawer-footer {
+  background: var(--color-bg-elevated);
+}
+
+.atm-summary,
+.etm-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+
+.atm-section,
+.etm-section {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 250, 252, 0.98) 100%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.atm-section__header,
+.etm-section__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.atm-section__header h3,
+.atm-section__header h4,
+.etm-section__header h3,
+.etm-section__header h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.atm-section__header p,
+.etm-section__header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.atm-grid,
+.etm-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.atm-grid__wide,
+.etm-grid__wide {
+  grid-column: 1 / -1;
+}
+
+.atm-footer,
+.etm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .atm-grid,
+  .etm-grid {
+    grid-template-columns: 1fr;
+  }
+}

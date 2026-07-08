@@ -1,10 +1,20 @@
 import React, { useState } from 'react';
 import { Table, Button, TableProps, message, Modal, Tooltip, Tag } from 'antd';
-import { EyeOutlined, EditOutlined, CheckCircleOutlined, ApiOutlined, DragOutlined, ExclamationCircleOutlined, HistoryOutlined, BranchesOutlined } from '@ant-design/icons';
+import {
+  EyeOutlined,
+  EditOutlined,
+  CheckCircleOutlined,
+  ApiOutlined,
+  DragOutlined,
+  ExclamationCircleOutlined,
+  HistoryOutlined,
+  BranchesOutlined,
+} from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
 
 interface TestCaseTableProps {
   testcases: TestCase[];
+  selectedTestcaseId?: number | null;
   onView: (testcase: TestCase) => void;
   onEdit: (testcase: TestCase) => void;
   onComplete: (testcase: TestCase) => void;
@@ -26,6 +36,7 @@ const statusConfig: Record<string, { label: string; dotClass: string; textClass:
 
 const TestCaseTable: React.FC<TestCaseTableProps> = ({
   testcases,
+  selectedTestcaseId,
   onView,
   onEdit,
   onComplete,
@@ -36,10 +47,14 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onViewExecutionLogs,
   onInferDependencies,
   onBatchMove,
-  bugLinkTemplate
+  bugLinkTemplate,
 }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [isBatchDeleteModalVisible, setIsBatchDeleteModalVisible] = useState(false);
+
+  const stopRowClick = (event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+  };
 
   const testcaseColumns = [
     {
@@ -48,18 +63,14 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       key: 'index',
       width: 48,
       align: 'center' as const,
-      render: (_: any, __: any, idx: number) => (
-        <span className="tcm-row-index">{idx + 1}</span>
-      ),
+      render: (_: unknown, __: unknown, idx: number) => <span className="tcm-row-index">{idx + 1}</span>,
     },
     {
       title: '用例名称',
       dataIndex: 'case_name',
       key: 'case_name',
       ellipsis: true,
-      render: (name: string) => (
-        <span className="tcm-case-name">{name}</span>
-      ),
+      render: (name: string) => <span className="tcm-case-name">{name}</span>,
     },
     {
       title: '级别',
@@ -76,8 +87,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       title: '接口',
       key: 'api_steps',
       width: 260,
-      render: (_: any, record: TestCase) => {
-        // 优先从 scenario_steps 读取（新逻辑）
+      render: (_: unknown, record: TestCase) => {
         const scenarioSteps = record.scenario_steps || [];
         if (scenarioSteps.length > 0) {
           return (
@@ -99,24 +109,29 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
           );
         }
 
-        // 回退：旧用例从 steps/preset_conditions 读取 api_call 步骤
         const allSteps = [
-          ...((record.preset_conditions || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
-          ...((record.steps || []).filter((s: any) => typeof s === 'object' && s.type === 'api_call')),
+          ...((record.preset_conditions || []).filter((step: any) => typeof step === 'object' && step.type === 'api_call')),
+          ...((record.steps || []).filter((step: any) => typeof step === 'object' && step.type === 'api_call')),
         ];
+
         if (allSteps.length === 0) {
-          if (!record.api_endpoint_id) return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
-          const ids = String(record.api_endpoint_id).split(',').map(s => s.trim()).filter(Boolean);
+          if (!record.api_endpoint_id) {
+            return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
+          }
+
+          const ids = String(record.api_endpoint_id).split(',').map((item) => item.trim()).filter(Boolean);
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {ids.map((id, i) => (
                 <Tag key={i} color="default" style={{ fontSize: 11, margin: 0 }}>
-                  <ApiOutlined style={{ marginRight: 4 }} />接口 #{id}
+                  <ApiOutlined style={{ marginRight: 4 }} />
+                  接口 #{id}
                 </Tag>
               ))}
             </div>
           );
         }
+
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {allSteps.map((step: any, i: number) => {
@@ -174,22 +189,25 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       width: 64,
       align: 'center' as const,
       render: (bugId: number | undefined) => {
-        if (bugId) {
-          const bugUrl = bugLinkTemplate
-            ? bugLinkTemplate.replace('{bug_id}', String(bugId))
-            : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`;
-          return (
-            <a
-              href={bugUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="tcm-bug-link"
-            >
-              #{bugId}
-            </a>
-          );
+        if (!bugId) {
+          return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
         }
-        return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
+
+        const bugUrl = bugLinkTemplate
+          ? bugLinkTemplate.replace('{bug_id}', String(bugId))
+          : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${bugId}`;
+
+        return (
+          <a
+            href={bugUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="tcm-bug-link"
+            onClick={stopRowClick}
+          >
+            #{bugId}
+          </a>
+        );
       },
     },
     {
@@ -197,46 +215,46 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       key: 'action',
       width: 224,
       align: 'center' as const,
-      render: (_: any, record: TestCase) => (
+      render: (_: unknown, record: TestCase) => (
         <div className="tcm-actions">
           <Tooltip title="查看" placement="top">
-            <button className="tcm-action-btn tcm-action-btn--view" onClick={() => onView(record)}>
+            <button className="tcm-action-btn tcm-action-btn--view" onClick={(event) => { stopRowClick(event); onView(record); }}>
               <EyeOutlined />
             </button>
           </Tooltip>
           <Tooltip title="编辑" placement="top">
-            <button className="tcm-action-btn tcm-action-btn--edit" onClick={() => onEdit(record)}>
+            <button className="tcm-action-btn tcm-action-btn--edit" onClick={(event) => { stopRowClick(event); onEdit(record); }}>
               <EditOutlined />
             </button>
           </Tooltip>
           <Tooltip title="执行" placement="top">
-            <button className="tcm-action-btn tcm-action-btn--execute" onClick={() => onComplete(record)}>
+            <button className="tcm-action-btn tcm-action-btn--execute" onClick={(event) => { stopRowClick(event); onComplete(record); }}>
               <CheckCircleOutlined />
             </button>
           </Tooltip>
           {onApiExecute && record.api_endpoint_id && (
             <Tooltip title="API 执行" placement="top">
-              <button className="tcm-action-btn tcm-action-btn--api" onClick={() => onApiExecute(record)}>
+              <button className="tcm-action-btn tcm-action-btn--api" onClick={(event) => { stopRowClick(event); onApiExecute(record); }}>
                 <ApiOutlined />
               </button>
             </Tooltip>
           )}
           {onViewExecutionLogs && record.api_endpoint_id && (
             <Tooltip title="执行日志" placement="top">
-              <button className="tcm-action-btn tcm-action-btn--log" onClick={() => onViewExecutionLogs(record)}>
+              <button className="tcm-action-btn tcm-action-btn--log" onClick={(event) => { stopRowClick(event); onViewExecutionLogs(record); }}>
                 <HistoryOutlined />
               </button>
             </Tooltip>
           )}
           {onInferDependencies && record.api_endpoint_id && (
             <Tooltip title="推断依赖" placement="top">
-              <button className="tcm-action-btn tcm-action-btn--infer" onClick={() => onInferDependencies(record)}>
+              <button className="tcm-action-btn tcm-action-btn--infer" onClick={(event) => { stopRowClick(event); onInferDependencies(record); }}>
                 <BranchesOutlined />
               </button>
             </Tooltip>
           )}
           <Tooltip title="移动" placement="top">
-            <button className="tcm-action-btn tcm-action-btn--move" onClick={() => onMove(record)}>
+            <button className="tcm-action-btn tcm-action-btn--move" onClick={(event) => { stopRowClick(event); onMove(record); }}>
               <DragOutlined />
             </button>
           </Tooltip>
@@ -279,12 +297,17 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
           </Button>
         </div>
       )}
+
       <div className="tcm-table">
         <Table
           rowSelection={{ type: 'checkbox', ...rowSelection }}
           columns={testcaseColumns}
           dataSource={testcases}
           rowKey="id"
+          onRow={(record) => ({
+            onClick: () => onView(record),
+            className: record.id === selectedTestcaseId ? 'tcm-table-row is-active' : 'tcm-table-row',
+          })}
           pagination={{
             position: ['bottomRight'],
             defaultPageSize: 20,
@@ -297,6 +320,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
           locale={{ emptyText: '暂无测试用例' }}
         />
       </div>
+
       <Modal
         title="批量删除确认"
         open={isBatchDeleteModalVisible}
@@ -307,7 +331,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
         okType="danger"
       >
         <p>确定要删除选中的 {selectedRowKeys.length} 个测试用例吗？</p>
-        <p style={{ color: 'var(--color-danger)', fontSize: 13 }}>此操作不可恢复</p>
+        <p style={{ color: 'var(--color-danger)', fontSize: 13 }}>此操作不可恢复。</p>
       </Modal>
     </>
   );

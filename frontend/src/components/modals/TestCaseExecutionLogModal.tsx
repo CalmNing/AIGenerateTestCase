@@ -75,7 +75,7 @@ const renderAssertionTable = (assertions: any[] | undefined) => {
         {
           title: '',
           dataIndex: 'passed',
-          width: 36,
+          width: 72,
           render: (passed: boolean) => <Tag color={passed ? 'success' : 'error'}>{passed ? '通过' : '失败'}</Tag>,
         },
         { title: '类型', dataIndex: 'type', width: 150, render: (type: string) => assertionTypeLabels[type] || type || '-' },
@@ -137,7 +137,7 @@ const TestCaseExecutionLogModal: React.FC<TestCaseExecutionLogModalProps> = ({
     if (logs.length === 0) return null;
     return logs.find((item) => item.id === selectedLogId) || logs[0];
   }, [logs, selectedLogId]);
-  const steps = Array.isArray(selectedLog?.result?.steps) ? selectedLog!.result.steps : [];
+  const steps = Array.isArray(selectedLog?.result?.steps) ? selectedLog.result.steps : [];
 
   const handleCopy = async () => {
     if (!selectedLog) return;

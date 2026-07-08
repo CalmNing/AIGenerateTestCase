@@ -545,23 +545,10 @@ const App: React.FC = () => {
 
   // 查看测试用例
   const handleViewTestcase = (testcase: TestCase) => {
+    const testcaseIndex = testcases.findIndex(tc => tc.id === testcase.id);
     setSelectedTestcase(testcase);
-
     setIsViewModalVisible(true);
-    const index_demo = testcases.findIndex(tc => tc.id === testcase?.id);
-    // 重置索引
-    setCurrentIndex(index_demo);
-    // 重置按钮状态
-    if (index_demo === 0) {
-      setPrevButtonDisabled(true);
-    } else {
-      setPrevButtonDisabled(false);
-    }
-    if (index_demo === testcases.length - 1) {
-      setNextButtonDisabled(true);
-    } else {
-      setNextButtonDisabled(false);
-    }
+    setCurrentIndex(testcaseIndex >= 0 ? testcaseIndex : 0);
   };
 
   // 编辑测试用例
@@ -754,51 +741,48 @@ const App: React.FC = () => {
     setConfirmCompleteTestcaseVisible(true);
   };
 
+  const updateTestcaseExecutionStatus = async (testcase: TestCase | null, status: TestCaseStatus, bugId?: number) => {
+    if (!testcase || !selectedSession) return;
+
+    const updatedTestcase = {
+      ...testcase,
+      status,
+      bug_id: bugId,
+    };
+
+    const response: any = await testcaseApi.updateTestcase(
+      selectedSession.id,
+      testcase.id,
+      updatedTestcase,
+    );
+
+    if (response.code !== 200) {
+      throw new Error(response.message || '测试用例标记执行失败，请重试');
+    }
+
+    setTestcases(testcases.map((tc) => (
+      tc.id === testcase.id ? updatedTestcase : tc
+    )));
+    setSelectedTestcase(updatedTestcase);
+    setCurrentIndex(testcases.findIndex(tc => tc.id === updatedTestcase.id));
+    notification.success({
+      message: '执行成功',
+      description: `测试用例已成功标记为${status === TestCaseStatus.PASSED ? '通过' : '未通过'}`,
+      placement: 'topRight',
+    });
+  };
+
   // 确认执行测试用例
   const handleConfirmCompleteTestcase = async (status: TestCaseStatus, bugId?: number) => {
     if (!testcaseToComplete || !selectedSession) return;
 
     try {
-      // 更新测试用例状态
-      const updatedTestcase = {
-        ...testcaseToComplete,
-        status: status,
-        bug_id: bugId
-      };
-
-      // 调用后端API更新测试用例
-      const response: any = await testcaseApi.updateTestcase(
-        selectedSession.id,
-        testcaseToComplete.id,
-        updatedTestcase
-      );
-
-      if (response.code === 200) {
-        // 更新本地状态
-        setTestcases(testcases.map(tc =>
-          tc.id === testcaseToComplete.id ? updatedTestcase : tc
-        ));
-        // loadTestcases(selectedSession.id, filters);
-        setSelectedTestcase(updatedTestcase);
-        setCurrentIndex(testcases.findIndex(tc => tc.id === updatedTestcase.id));
-        // 显示成功通知
-        notification.success({
-          message: '执行成功',
-          description: `测试用例已成功标记为${status === TestCaseStatus.PASSED ? '通过' : status === TestCaseStatus.FAILED ? '未通过' : '未运行'}`,
-          placement: 'topRight'
-        });
-      } else {
-        notification.error({
-          message: '执行失败',
-          description: response.message || '测试用例标记执行失败，请重试',
-          placement: 'topRight'
-        });
-      }
+      await updateTestcaseExecutionStatus(testcaseToComplete, status, bugId);
     } catch (error) {
       console.error('执行测试用例失败:', error);
       notification.error({
         message: '执行失败',
-        description: '测试用例标记执行失败，请重试',
+        description: error instanceof Error ? error.message : '测试用例标记执行失败，请重试',
         placement: 'topRight'
       });
     } finally {
@@ -1273,30 +1257,30 @@ const App: React.FC = () => {
   const [nextButtonDisabled, setNextButtonDisabled] = useState(false);
   const [prevButtonDisabled, setPrevButtonDisabled] = useState(false);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
+
+  useEffect(() => {
+    setPrevButtonDisabled(currentIndex <= 0);
+    setNextButtonDisabled(testcases.length === 0 || currentIndex >= testcases.length - 1);
+  }, [currentIndex, testcases.length]);
+
   const handleNextCase = async () => {
     if (!selectedSession || !selectedTestcase) return;
 
-    if (currentIndex === testcases.length - 2) {
-      setNextButtonDisabled(true);
-    };
-    const nextIndex = currentIndex + 1;
+    const nextIndex = Math.min(currentIndex + 1, testcases.length - 1);
     const nextTestcase = testcases[nextIndex];
+    if (!nextTestcase) return;
     setSelectedTestcase(nextTestcase);
     setCurrentIndex(nextIndex);
-    setPrevButtonDisabled(false);
   };
+
   const handlePrevCase = async () => {
     if (!selectedSession || !selectedTestcase) return;
-    setNextButtonDisabled(false);
-    if (currentIndex === 1) {
-      setPrevButtonDisabled(true);
-    }
 
-    const prevIndex = currentIndex - 1;
+    const prevIndex = Math.max(currentIndex - 1, 0);
     const prevTestcase = testcases[prevIndex];
+    if (!prevTestcase) return;
     setSelectedTestcase(prevTestcase);
     setCurrentIndex(prevIndex);
-    setNextButtonDisabled(false);
   };
 
   // 导航函数
@@ -1481,6 +1465,7 @@ const App: React.FC = () => {
                                 selectedSession={selectedSession}
                                 selectedModule={selectedModule}
                                 testcases={testcases}
+                                selectedTestcaseId={selectedTestcase?.id ?? null}
                                 filters={filters ?? undefined}
                                 onFiltersChange={(newFilters) => {
                                   // 合并当前选中的模块ID到过滤器中
@@ -1556,6 +1541,7 @@ const App: React.FC = () => {
                                 selectedSession={selectedSession}
                                 selectedModule={selectedModule}
                                 testcases={testcases}
+                                selectedTestcaseId={selectedTestcase?.id ?? null}
                                 filters={filters ?? undefined}
                                 onFiltersChange={(newFilters) => {
                                   // 合并当前选中的模块ID到过滤器中
@@ -1617,13 +1603,15 @@ const App: React.FC = () => {
           />
           <ViewTestcaseModal
             visible={isViewModalVisible}
+            sessionId={selectedSession?.id}
             selectedTestcase={selectedTestcase}
             nextButtonDisabled={nextButtonDisabled}
             prevButtonDisabled={prevButtonDisabled}
             onNext={handleNextCase}
             onPrev={handlePrevCase}
             onCancel={() => setIsViewModalVisible(false)}
-            onComplete={handleCompleteTestcase}
+            onMarkPassed={(testcase) => updateTestcaseExecutionStatus(testcase, TestCaseStatus.PASSED)}
+            onMarkFailed={(testcase, bugId) => updateTestcaseExecutionStatus(testcase, TestCaseStatus.FAILED, bugId)}
           />
           <TestCaseExecutionLogModal
             visible={isExecutionLogModalVisible}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button, Input, Select, notification, Switch } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
@@ -13,6 +13,7 @@ interface TestCaseManagerProps {
   modules: Module[];
   selectedModule: number | string;
   testcases: TestCase[];
+  selectedTestcaseId?: number | null;
   testcasesResponse: TestCaseResponse;
   filters?: TestCaseFilters;
   onFiltersChange: (filters: TestCaseFilters) => void;
@@ -35,7 +36,7 @@ const statItems = (resp: TestCaseResponse, filters?: TestCaseFilters) => [
   { key: 'passed', label: '已通过', value: resp.passed, color: 'var(--color-success)', bg: 'var(--color-success-bg)', active: filters?.status === TestCaseStatus.PASSED, status: TestCaseStatus.PASSED, exist_bug: false },
   { key: 'not_run', label: '未执行', value: resp.not_run, color: 'var(--color-warning)', bg: 'var(--color-warning-bg)', active: filters?.status === TestCaseStatus.NOT_RUN, status: TestCaseStatus.NOT_RUN, exist_bug: false },
   { key: 'failed', label: '未通过', value: resp.failed, color: 'var(--color-danger)', bg: 'var(--color-danger-bg)', active: filters?.status === TestCaseStatus.FAILED, status: TestCaseStatus.FAILED, exist_bug: false },
-  { key: 'bug', label: 'Bug', value: resp.totalBugs, color: 'var(--color-danger)', bg: 'var(--color-danger-bg)', active: !!filters?.exist_bug, status: undefined, exist_bug: true },
+  { key: 'bug', label: '有 Bug', value: resp.totalBugs, color: 'var(--color-danger)', bg: 'var(--color-danger-bg)', active: !!filters?.exist_bug, status: undefined, exist_bug: true },
 ];
 
 const TestCaseManager: React.FC<TestCaseManagerProps> = ({
@@ -43,6 +44,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   modules,
   selectedModule,
   testcases,
+  selectedTestcaseId,
   testcasesResponse,
   filters,
   onFiltersChange,
@@ -57,13 +59,12 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onViewExecutionLogs,
   onInferDependencies,
   onMove,
-  onBatchMove
+  onBatchMove,
 }) => {
   const [bugLinkTemplate, setBugLinkTemplate] = useState('');
 
-  // 加载 Bug 链接模板
   useEffect(() => {
-    configApi.getConfig().then(res => {
+    configApi.getConfig().then((res) => {
       if (res.code === 200 && res.data) {
         setBugLinkTemplate(res.data.bug_link_template || '');
       }
@@ -75,34 +76,41 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       notification.warning({ message: '导出失败', description: '当前没有可导出的测试用例', placement: 'topRight' });
       return;
     }
+
     try {
-      const exportData = testcases.map(tc => ({
-        '模块名称': tc.module_id ? modules.find(m => m.id === tc.module_id)?.module_name || '未知模块' : '未分配模块',
-        '用例名称': tc.case_name,
-        '用例级别': `P${tc.case_level}`,
-        '前置条件': tc.preset_conditions.map((item: any, idx) => {
+      const exportData = testcases.map((tc) => ({
+        模块名称: tc.module_id ? modules.find((m) => m.id === tc.module_id)?.module_name || '未知模块' : '未分配模块',
+        用例名称: tc.case_name,
+        用例级别: `P${tc.case_level}`,
+        前置条件: tc.preset_conditions.map((item: any, idx) => {
           const text = typeof item === 'string' ? item : formatStep(item);
           return `${idx + 1}. ${text}`;
         }).join('\n'),
-        '测试步骤': tc.steps.map((item: any, idx) => `${idx + 1}. ${typeof item === 'string' ? item : formatStep(item)}`).join('\n'),
-        '预期结果': tc.expected_results.map((item, idx) => `${idx + 1}. ${item}`).join('\n'),
-        '状态': tc.status === TestCaseStatus.PASSED ? '已通过' : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
-        'bug': tc.bug_id ? (bugLinkTemplate ? bugLinkTemplate.replace('{bug_id}', String(tc.bug_id)) : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}`) : '',
+        测试步骤: tc.steps.map((item: any, idx) => `${idx + 1}. ${typeof item === 'string' ? item : formatStep(item)}`).join('\n'),
+        预期结果: tc.expected_results.map((item, idx) => `${idx + 1}. ${typeof item === 'string' ? item : formatStep(item)}`).join('\n'),
+        状态: tc.status === TestCaseStatus.PASSED ? '已通过' : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行',
+        Bug: tc.bug_id
+          ? (bugLinkTemplate ? bugLinkTemplate.replace('{bug_id}', String(tc.bug_id)) : `http://zt.luban.fit/index.php?m=bug&f=view&bugID=${tc.bug_id}`)
+          : '',
       }));
+
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, '测试用例');
       XLSX.writeFile(wb, `测试用例_${new Date().toISOString().slice(0, 10)}.xlsx`);
       notification.success({ message: '导出成功', description: `已导出 ${testcases.length} 条测试用例`, placement: 'topRight' });
     } catch (error) {
-      console.error('导出Excel失败:', error);
-      notification.error({ message: '导出失败', description: '导出Excel时发生错误，请重试', placement: 'topRight' });
+      console.error('导出 Excel 失败:', error);
+      notification.error({ message: '导出失败', description: '导出 Excel 时发生错误，请重试', placement: 'topRight' });
     }
   };
 
-  const setFilter = (status: TestCaseStatus | undefined, exist_bug: boolean) => {
+  const setFilter = (status: TestCaseStatus | undefined, existBug: boolean) => {
     onFiltersChange({
-      case_name: '', bug_id: '', exist_bug, status,
+      case_name: '',
+      bug_id: '',
+      exist_bug: existBug,
+      status,
       module_id: selectedModule === 0 ? undefined : Number(selectedModule),
     });
   };
@@ -116,9 +124,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
         </div>
       ) : (
         <>
-          {/* Stats bar */}
           <div className="tcm-stats-bar">
-            {statItems(testcasesResponse, filters).map(item => (
+            {statItems(testcasesResponse, filters).map((item) => (
               <div
                 key={item.key}
                 className={`tcm-stat-pill ${item.active ? 'is-active' : ''}`}
@@ -140,7 +147,6 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             </div>
           </div>
 
-          {/* Filter bar */}
           <div className="tcm-filter-bar">
             <label>名称</label>
             <Input
@@ -149,7 +155,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
               value={filters?.case_name ?? ''}
               onChange={(e) => onFiltersChange({ ...filters, case_name: e.target.value } as TestCaseFilters)}
               onPressEnter={() => selectedSession && onLoadTestcases(selectedSession.id, filters)}
-              style={{ width: 160 }}
+              style={{ width: 180 }}
               allowClear
             />
             <label>状态</label>
@@ -159,7 +165,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
               allowClear
               value={filters?.status ?? undefined}
               onChange={(value) => onFiltersChange({ ...filters, status: value } as TestCaseFilters)}
-              style={{ width: 100 }}
+              style={{ width: 110 }}
               options={[
                 { label: '未执行', value: TestCaseStatus.NOT_RUN },
                 { label: '已通过', value: TestCaseStatus.PASSED },
@@ -169,14 +175,14 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             <label>Bug ID</label>
             <Input
               size="small"
-              placeholder="Bug ID"
+              placeholder="输入 Bug ID"
               value={filters?.bug_id ?? ''}
               onChange={(e) => onFiltersChange({ ...filters, bug_id: e.target.value } as TestCaseFilters)}
               onPressEnter={() => selectedSession && onLoadTestcases(selectedSession.id, filters)}
               style={{ width: 120 }}
               allowClear
             />
-            <label>仅Bug</label>
+            <label>仅看有 Bug</label>
             <Switch
               size="small"
               checked={filters?.exist_bug ?? false}
@@ -190,7 +196,13 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
               size="small"
               icon={<ReloadOutlined />}
               onClick={() => {
-                const reset = { case_name: '', status: undefined, bug_id: '', exist_bug: false, module_id: filters?.module_id ?? undefined };
+                const reset = {
+                  case_name: '',
+                  status: undefined,
+                  bug_id: '',
+                  exist_bug: false,
+                  module_id: filters?.module_id ?? undefined,
+                };
                 onFiltersChange(reset as TestCaseFilters);
                 selectedSession && onLoadTestcases(selectedSession.id, reset as TestCaseFilters);
               }}
@@ -199,9 +211,9 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             </Button>
           </div>
 
-          {/* Table */}
           <TestCaseTable
             testcases={testcases}
+            selectedTestcaseId={selectedTestcaseId}
             onView={onView}
             onEdit={onEdit}
             onComplete={onComplete}

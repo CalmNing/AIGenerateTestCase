@@ -1,0 +1,54 @@
+.etm-collapse .ant-collapse-header {
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+.etm-collapse__label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  font-weight: 600;
+}
+
+.etm-collapse__meta {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.etm-api {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.etm-api__toggle,
+.etm-api__block {
+  padding: 14px;
+  border: 1px solid var(--color-border-light);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.etm-api__toggle {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.etm-api__toggle-title,
+.etm-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.etm-api__toggle-help,
+.etm-field-help,
+.etm-empty-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}

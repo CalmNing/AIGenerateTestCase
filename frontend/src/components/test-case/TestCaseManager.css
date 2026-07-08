@@ -296,6 +296,14 @@
   background: var(--color-primary-bg) !important;
 }
 
+.tcm-table .ant-table-tbody > tr.tcm-table-row {
+  cursor: pointer;
+}
+
+.tcm-table .ant-table-tbody > tr.tcm-table-row.is-active > td {
+  background: color-mix(in srgb, var(--color-primary-bg) 72%, white) !important;
+}
+
 .tcm-table .ant-table-tbody > tr.ant-table-row-selected > td {
   background: var(--color-primary-bg) !important;
 }
