@@ -11,6 +11,7 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from db.models import ApiEndpoint
+from utils.models import ApiCallStep, ApiCallKeyValue, PostAction
 
 
 def parse_json_field(raw: Optional[str], default=None):
@@ -255,3 +256,175 @@ def map_endpoint_dependencies(
                 if best:
                     mapping[ep.id] = best.id
     return mapping
+
+
+_PATH_ID_RE = re.compile(r'\{([^}]+)\}', re.IGNORECASE)
+
+
+def _find_id_jsonpath(schema) -> str:
+    """从响应 schema 中找到 id 字段的 JSONPath；找不到则返回默认 ``$.data.id``。"""
+    GENERIC = {"code", "msg", "message", "success", "data", "result",
+               "results", "list", "items", "rows", "total", "page", "size", "status"}
+
+    def search(props, prefix):
+        for name, prop in (props or {}).items():
+            if not isinstance(prop, dict):
+                continue
+            if name.lower().endswith("id") and name.lower() not in GENERIC:
+                return f"{prefix}.{name}"
+            sub = prop.get("properties")
+            if isinstance(sub, dict):
+                r = search(sub, f"{prefix}.{name}")
+                if r:
+                    return r
+            if prop.get("type") == "array" and isinstance(prop.get("items"), dict):
+                items_props = prop["items"].get("properties")
+                if isinstance(items_props, dict):
+                    r = search(items_props, f"{prefix}.{name}[0]")
+                    if r:
+                        return r
+        return None
+
+    if isinstance(schema, dict):
+        top = schema.get("properties")
+        if isinstance(top, dict):
+            r = search(top, "$")
+            if r:
+                return r
+    return "$.data.id"
+
+
+def _var_from_post_actions(post_actions) -> str | None:
+    """返回第一个 extract_jsonpath 动作的变量名。"""
+    for a in (post_actions or []):
+        if isinstance(a, PostAction):
+            return a.key
+        if isinstance(a, dict) and a.get("type") == "extract_jsonpath":
+            return a.get("key")
+    return None
+
+
+def _bind_id_param(step: ApiCallStep, endpoint, var_name: str) -> None:
+    """把步骤路径中的 ``{id}`` 参数绑定到 ``{{var_name}}``。"""
+    if not endpoint or not endpoint.path:
+        return
+    param_name = None
+    for m in _PATH_ID_RE.finditer(endpoint.path or ""):
+        name = m.group(1).split(":")[0]
+        if 'id' in name.lower():
+            param_name = name
+            break
+    if not param_name:
+        return
+    params = list(step.parameters) if step.parameters else []
+    for p in params:
+        if p.key == param_name:
+            p.value = "{{" + var_name + "}}"
+            if getattr(p, "in_field", None) is None:
+                p.in_field = "path"
+            step.parameters = params
+            return
+    params.append(ApiCallKeyValue(key=param_name, value="{{" + var_name + "}}", in_field="path"))
+    step.parameters = params
+
+
+def ensure_prerequisite_steps(
+    local_testcases: list,
+    *,
+    endpoint_index_to_id: dict,
+    db_session: Session,
+    api_project_id,
+) -> list:
+    """为依赖接口用例注入"新增"前置步骤并绑定 id，保证独立可执行。
+
+    仅当 endpoint_index_to_id / db_session / api_project_id 齐备时生效。
+    直接修改并返回 local_testcases（pydantic 用例列表）。
+    """
+    if not endpoint_index_to_id or not db_session or not api_project_id:
+        return local_testcases
+    all_ids = list(endpoint_index_to_id.values())
+    mapping = map_endpoint_dependencies(db_session, all_ids, api_project_id)
+    if not mapping:
+        return local_testcases
+
+    id_to_ordinal = {eid: ordinal for ordinal, eid in endpoint_index_to_id.items()}
+    needed_ids = set(mapping.keys()) | set(mapping.values())
+    endpoint_map: dict[int, ApiEndpoint] = {}
+    if needed_ids:
+        rows = db_session.exec(
+            select(ApiEndpoint).where(ApiEndpoint.id.in_(list(needed_ids)))
+        ).all()
+        endpoint_map = {e.id: e for e in rows}
+
+    # 跨用例收集"新增"接口的可用 body（优先复用模型生成的新增用例体）
+    create_body_by_id: dict[int, str] = {}
+    for tc in local_testcases:
+        for step in (getattr(tc, "steps", []) or []):
+            if isinstance(step, ApiCallStep) and step.endpoint_ref in endpoint_index_to_id:
+                eid = endpoint_index_to_id[step.endpoint_ref]
+                if eid in mapping.values() and step.body and eid not in create_body_by_id:
+                    create_body_by_id[eid] = step.body
+
+    for tc in local_testcases:
+        referenced: set[int] = set()
+        if getattr(tc, "api_endpoint_ref", None):
+            for ref in tc.api_endpoint_ref:
+                if ref in endpoint_index_to_id:
+                    referenced.add(endpoint_index_to_id[ref])
+        for step in (getattr(tc, "steps", []) or []):
+            if isinstance(step, ApiCallStep) and step.endpoint_ref in endpoint_index_to_id:
+                referenced.add(endpoint_index_to_id[step.endpoint_ref])
+        for pc in (getattr(tc, "preset_conditions", []) or []):
+            if isinstance(pc, ApiCallStep) and pc.endpoint_ref in endpoint_index_to_id:
+                referenced.add(endpoint_index_to_id[pc.endpoint_ref])
+
+        dependents = [did for did in referenced if did in mapping]
+        if not dependents:
+            continue
+
+        # 该用例中已存在的新增步骤 -> 复用其变量名（避免重复注入）
+        existing_var: dict[int, str] = {}
+        for step in (list(getattr(tc, "preset_conditions", []) or []) + list(getattr(tc, "steps", []) or [])):
+            if isinstance(step, ApiCallStep) and step.endpoint_ref in endpoint_index_to_id:
+                eid = endpoint_index_to_id[step.endpoint_ref]
+                if eid in mapping.values():
+                    v = _var_from_post_actions(step.post_actions)
+                    if v:
+                        existing_var[eid] = v
+
+        preset_conditions = list(getattr(tc, "preset_conditions", []) or [])
+        for dep_id in dependents:
+            create_id = mapping[dep_id]
+            if create_id not in id_to_ordinal:
+                continue
+            if create_id in existing_var:
+                continue
+            has_preset = any(
+                isinstance(pc, ApiCallStep) and pc.endpoint_ref == id_to_ordinal[create_id]
+                for pc in preset_conditions
+            )
+            if has_preset:
+                continue
+            create_ordinal = id_to_ordinal[create_id]
+            create_ep = endpoint_map.get(create_id)
+            jsonpath = _find_id_jsonpath(create_ep.response_schema if create_ep else None)
+            body = create_body_by_id.get(create_id) or (create_ep.body if create_ep else None)
+            preset_conditions.insert(0, ApiCallStep(
+                endpoint_ref=create_ordinal,
+                description="前置：调用新增接口创建测试数据",
+                post_actions=[PostAction(type="extract_jsonpath", key="created_id", jsonpath=jsonpath)],
+                body=body,
+            ))
+            existing_var[create_id] = "created_id"
+
+        # 绑定：依赖步骤的路径 {id} 参数 -> {{变量名}}
+        bind_steps = list(getattr(tc, "steps", []) or []) + list(preset_conditions)
+        for step in bind_steps:
+            if isinstance(step, ApiCallStep) and step.endpoint_ref in endpoint_index_to_id:
+                eid = endpoint_index_to_id[step.endpoint_ref]
+                if eid in mapping:
+                    var = existing_var.get(mapping[eid]) or "created_id"
+                    _bind_id_param(step, endpoint_map.get(eid), var)
+
+        tc.preset_conditions = preset_conditions
+    return local_testcases
