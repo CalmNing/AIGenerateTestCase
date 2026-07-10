@@ -193,3 +193,65 @@ def infer_endpoint_dependencies(
             result_ids.add(best_match.id)
 
     return list(result_ids)
+
+
+def map_endpoint_dependencies(
+    session: Session,
+    endpoint_ids: list[int],
+    api_project_id: int | str | None,
+) -> dict[int, int]:
+    """计算 {依赖接口id: 新增接口id} 映射。
+
+    依赖方判定（与 ``infer_endpoint_dependencies`` 一致）：
+    - 路径含 ``{id}``；或
+    - body/parameters 含 id 字段且响应 schema 不含 id（详情/编辑/删除类）。
+    新增候选：POST 且路径不含 ``/{`` 或 ``:``（整个项目范围，含已选中的）。
+    """
+    if not api_project_id or not endpoint_ids:
+        return {}
+    try:
+        project_id = int(api_project_id)
+    except (ValueError, TypeError):
+        return {}
+
+    all_endpoints = session.exec(
+        select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)
+    ).all()
+    if not all_endpoints:
+        return {}
+
+    selected_ids = set(endpoint_ids)
+    selected_eps = [e for e in all_endpoints if e.id in selected_ids]
+    path_param_pattern = re.compile(r'/\{|/:')
+    candidate_create_eps = [
+        e for e in all_endpoints
+        if e.method.upper() == 'POST' and not path_param_pattern.search(e.path)
+    ]
+    if not candidate_create_eps:
+        return {}
+
+    id_param_pattern = re.compile(r'\{[^}]*id[^}]*\}', re.IGNORECASE)
+    mapping: dict[int, int] = {}
+    for ep in selected_eps:
+        if id_param_pattern.search(ep.path or ""):
+            best = _best_matching_create_endpoint(ep.path, candidate_create_eps)
+            if best:
+                mapping[ep.id] = best.id
+            continue
+
+        has_id_field = False
+        for field_list in [ep.parameters or [], _parse_body_fields(ep.body)]:
+            for field in field_list:
+                fn = field.get('key', '') or field.get('name', '') or ''
+                if 'id' in fn.lower():
+                    has_id_field = True
+                    break
+            if has_id_field:
+                break
+        if has_id_field:
+            resp_fields = _get_response_top_fields(ep.response_schema)
+            if not any('id' in f.lower() for f in resp_fields):
+                best = _best_matching_create_endpoint(ep.path, candidate_create_eps)
+                if best:
+                    mapping[ep.id] = best.id
+    return mapping
