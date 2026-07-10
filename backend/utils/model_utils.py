@@ -1227,6 +1227,19 @@ async def generate_testcases(
         if not isinstance(local_testcases, list):
             raise ValueError(f"测试用例必须是列表类型，实际类型: {type(local_testcases).__name__}")
 
+        # 自动补全依赖接口的前置"新增"步骤（仅接口测试且已加载接口映射时）
+        if is_api_test and kwargs.get("endpoint_index_to_id"):
+            try:
+                from app.services.testcase_service import ensure_prerequisite_steps
+                local_testcases = ensure_prerequisite_steps(
+                    local_testcases,
+                    endpoint_index_to_id=kwargs.get("endpoint_index_to_id", {}),
+                    db_session=kwargs.get("db_session"),
+                    api_project_id=kwargs.get("api_project_id"),
+                )
+            except Exception as e:
+                logger.warning(f"前置依赖补全失败（已忽略，不影响生成）: {e}")
+
         # 转换为 DBTestCase 并保存历史提示词
         db_testcases = _persist_testcases(
             local_testcases,
