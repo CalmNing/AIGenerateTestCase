@@ -78,3 +78,24 @@ def test_build_api_context_applies_overrides(db_session):
     ctx, _ = _build_api_context(db_session, [ep1.id], project.id, overrides)
     assert "overridden" in ctx
     assert "demo" not in ctx  # original body replaced
+
+
+def test_build_api_context_includes_request_skeleton(db_session):
+    from app.services.swagger_parser import build_body_from_schema
+    project, ep1, _ = _make_project_with_endpoints(db_session)
+    # 给 ep1 一个 request_schema
+    ep1.request_schema = {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "status": {"type": "string", "enum": ["active", "disabled"]},
+        },
+    }
+    db_session.add(ep1)
+    db_session.commit()
+    ctx, _ = _build_api_context(db_session, [ep1.id], project.id, {})
+    assert "请求骨架" in ctx
+    assert "必填字段" in ctx
+    assert "name" in ctx
+    assert "enum" in ctx or "active" in ctx

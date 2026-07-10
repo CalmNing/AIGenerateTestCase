@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Button, Input, Select, message, Switch } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
-import { configApi } from '../../services/api';
+import { configApi, testcaseApi } from '../../services/api';
 import TestCaseTable from './TestCaseTable';
 import * as XLSX from 'xlsx';
 import { formatStep } from '../../utils/stepUtils';
@@ -28,6 +28,7 @@ interface TestCaseManagerProps {
   onApiExecute?: (testcase: TestCase) => void;
   onViewExecutionLogs?: (testcase: TestCase) => void;
   onInferDependencies?: (testcase: TestCase) => void;
+  onValidate?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
 }
 
@@ -69,9 +70,38 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onApiExecute,
   onViewExecutionLogs,
   onInferDependencies,
+  onValidate,
   onMove,
   onBatchMove,
 }) => {
+  const handleValidate = async (testcase: TestCase) => {
+    if (onValidate) {
+      onValidate(testcase);
+      return;
+    }
+    try {
+      const res = await testcaseApi.validateTestcase(testcase.id);
+      if (res.code === 200 && res.data) {
+        const status = res.data.validation_status;
+        if (status === 'passed') {
+          message.success(`测试用例 ${testcase.case_name} 真实执行通过`);
+        } else if (status === 'failed') {
+          message.warning(`测试用例 ${testcase.case_name} 真实执行未通过`);
+        } else {
+          message.error(`测试用例 ${testcase.case_name} 验证执行出错`);
+        }
+      } else {
+        message.error(res.message || '验证失败');
+      }
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error.message || '验证失败');
+    } finally {
+      if (selectedSession) {
+        onLoadTestcases(selectedSession.id, filters);
+      }
+    }
+  };
+
   const [bugLinkTemplate, setBugLinkTemplate] = useState('');
 
   useEffect(() => {
@@ -234,6 +264,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onApiExecute={onApiExecute}
             onViewExecutionLogs={onViewExecutionLogs}
             onInferDependencies={onInferDependencies}
+            onValidate={onValidate ?? handleValidate}
             onBatchMove={onBatchMove}
             bugLinkTemplate={bugLinkTemplate}
           />

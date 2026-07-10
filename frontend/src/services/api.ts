@@ -84,13 +84,16 @@ export const sessionApi = {
 // 测试用例管理API
 export const testcaseApi = {
   // 获取会话的测试用例
-  getTestcases: (sessionId: number | undefined, filters?: { case_name?: string; status?: string; bug_id?: string; exist_bug?: boolean; module_id?: number | string }): Promise<ApiResponse<TestCaseResponse>> => {
+  getTestcases: (sessionId: number | undefined, filters?: { case_name?: string; status?: string; bug_id?: string; exist_bug?: boolean; module_id?: number | string; test_point_id?: number }, pagination?: { offset?: number; limit?: number }): Promise<ApiResponse<TestCaseResponse>> => {
     const params = new URLSearchParams();
     if (filters?.case_name) params.append('case_name', filters.case_name);
     if (filters?.status) params.append('status', filters.status);
     if (filters?.bug_id) params.append('bug_id', filters.bug_id);
     if (filters?.exist_bug !== undefined) params.append('exist_bug', filters.exist_bug.toString());
     if (filters?.module_id !== undefined) params.append('module_id', filters.module_id.toString());
+    if (filters?.test_point_id !== undefined) params.append('test_point_id', filters.test_point_id.toString());
+    if (pagination?.offset !== undefined) params.append('offset', String(pagination.offset));
+    if (pagination?.limit !== undefined) params.append('limit', String(pagination.limit));
     return api.get(`/testcases/${sessionId}/testcases?${params.toString()}`);
   },
 
@@ -219,6 +222,11 @@ export const testcaseApi = {
   inferDependencies: (sessionId: number, testcaseId: number): Promise<ApiResponse<{ added_post_actions: number; replaced_fields: number; extra_endpoint_ids: number[] }>> =>
     api.post(`/testcases/${sessionId}/testcases/${testcaseId}/infer-dependencies`),
 
+  /** 手动触发真实执行验证，回写一致性/置信度/验证结果 */
+  validateTestcase: (testcaseId: number, environmentId?: number): Promise<ApiResponse<{ validation_status: string; validation_detail: string; validation_at: string }>> =>
+    api.post(`/testcases/${testcaseId}/validate`, environmentId ? { environment_id: environmentId } : {}),
+
+
   // ========== 4阶段 Pipeline 深度生成 ==========
 
   /** 启动 4 阶段深度生成（支持接口测试和功能测试） */
@@ -267,26 +275,101 @@ export const testcaseApi = {
     error: string | null;
   }>> => api.get(`/testcases/pipeline/${taskId}/status`),
 
-  /** 获取需求点列表 */
-  getRequirementPoints: (sessionId: number): Promise<ApiResponse<Array<{
-    id: number;
-    content: string;
-    module: string;
-    priority: string;
-    order_index: number;
-    created_at: string;
-  }>>> => api.get(`/testcases/sessions/${sessionId}/requirement-points`),
+  /** 获取需求点列表（分页，可按模块过滤，附带每个需求点的测试点计数） */
+  getRequirementPoints: (sessionId: number, pagination?: { offset?: number; limit?: number; module_id?: number | null }): Promise<ApiResponse<{
+    items: Array<{
+      id: number;
+      content: string;
+      module_id?: number | null;
+      module: string;
+      priority: string;
+      order_index: number;
+      test_point_count: number;
+      api_project_id?: number | null;
+      api_endpoint_ids?: string | null;
+      created_at: string;
+    }>;
+    totalNumber: number;
+  }>> => {
+    const params = new URLSearchParams();
+    if (pagination?.offset !== undefined) params.append('offset', String(pagination.offset));
+    if (pagination?.limit !== undefined) params.append('limit', String(pagination.limit));
+    if (pagination?.module_id !== undefined && pagination?.module_id !== null) params.append('module_id', String(pagination.module_id));
+    return api.get(`/testcases/sessions/${sessionId}/requirement-points?${params.toString()}`);
+  },
 
-  /** 获取测试点列表 */
-  getTestPoints: (sessionId: number): Promise<ApiResponse<Array<{
-    id: number;
+  /** 获取测试点列表（可按需求点过滤、分页，附带每个测试点的用例计数） */
+  getTestPoints: (sessionId: number, opts?: { requirement_point_id?: number; offset?: number; limit?: number }): Promise<ApiResponse<{
+    items: Array<{
+      id: number;
+      requirement_point_id: number;
+      content: string;
+      test_type: string;
+      design_method: string;
+      priority: string;
+      case_count: number;
+      api_project_id?: number | null;
+      api_endpoint_ids?: string | null;
+      created_at: string;
+    }>;
+    totalNumber: number;
+  }>> => {
+    const params = new URLSearchParams();
+    if (opts?.requirement_point_id !== undefined) params.append('requirement_point_id', String(opts.requirement_point_id));
+    if (opts?.offset !== undefined) params.append('offset', String(opts.offset));
+    if (opts?.limit !== undefined) params.append('limit', String(opts.limit));
+    return api.get(`/testcases/sessions/${sessionId}/test-points?${params.toString()}`);
+  },
+
+  // ========== 需求点 / 测试点 手动管理 ==========
+
+  /** 手动新增需求点 */
+  createRequirementPoint: (data: {
+    session_id: number;
+    content: string;
+    module_id?: number | null;
+    priority?: string;
+    api_project_id?: number | null;
+    api_endpoint_ids?: string | null;
+  }): Promise<ApiResponse<{ id: number }>> => api.post('/testcases/requirement-points', data),
+
+  /** 编辑需求点 */
+  updateRequirementPoint: (id: number, data: {
+    content?: string; module_id?: number | null; priority?: string;
+  }): Promise<ApiResponse<{ id: number }>> => api.put(`/testcases/requirement-points/${id}`, data),
+
+  /** 删除需求点（级联） */
+  deleteRequirementPoint: (id: number): Promise<ApiResponse> =>
+    api.delete(`/testcases/requirement-points/${id}`),
+
+  /** 需求点级联重生成测试点（异步，返回 task_id） */
+  regenerateRequirementPoint: (id: number): Promise<ApiResponse<{ task_id: string }>> =>
+    api.post(`/testcases/requirement-points/${id}/regenerate`),
+
+  /** 手动新增测试点 */
+  createTestPoint: (data: {
+    session_id: number;
     requirement_point_id: number;
     content: string;
-    test_type: string;
-    design_method: string;
-    priority: string;
-    created_at: string;
-  }>>> => api.get(`/testcases/sessions/${sessionId}/test-points`),
+    test_type?: string;
+    design_method?: string;
+    priority?: string;
+    api_project_id?: number | null;
+    api_endpoint_ids?: string | null;
+  }): Promise<ApiResponse<{ id: number }>> => api.post('/testcases/test-points', data),
+
+  /** 编辑测试点 */
+  updateTestPoint: (id: number, data: {
+    content?: string; test_type?: string; design_method?: string; priority?: string;
+  }): Promise<ApiResponse<{ id: number }>> => api.put(`/testcases/test-points/${id}`, data),
+
+  /** 删除测试点（级联） */
+  deleteTestPoint: (id: number): Promise<ApiResponse> =>
+    api.delete(`/testcases/test-points/${id}`),
+
+  /** 测试点重生成用例（异步，返回 task_id） */
+  regenerateTestPoint: (id: number): Promise<ApiResponse<{ task_id: string }>> =>
+    api.post(`/testcases/test-points/${id}/regenerate`),
 };
 
 // 模块管理API

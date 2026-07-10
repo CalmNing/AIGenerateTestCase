@@ -14,6 +14,7 @@ import HeaderComponent from './components/HeaderComponent';
 import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/test-case/TestCaseGenerator';
 import TestCaseManager from './components/test-case/TestCaseManager';
+import RequirementTestPointManager from './components/test-case/RequirementTestPointManager';
 import SessionApiConfig from './components/api/SessionApiConfig';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
 import ApiScenarioTestTool from './components/api/ApiScenarioTestTool';
@@ -1368,8 +1369,9 @@ const App: React.FC = () => {
               onOpenAddModuleModal={handleOpenAddModuleModal}
             />
             <Layout style={{ padding: 'var(--space-4)', minHeight: 0, overflow: 'hidden' }}>
-              <Content style={{ background: 'var(--color-bg-elevated)', padding: 'var(--space-4)', margin: 0, borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border-light)' }}>
+              <Content style={{ background: 'var(--color-bg-elevated)', padding: 'var(--space-4)', margin: 0, borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border-light)', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <Tabs
+                  className="rtp-tabs-host"
                   activeKey={activeTab}
                   onChange={(key) => {
                     setActiveTab(key);
@@ -1455,6 +1457,17 @@ const App: React.FC = () => {
                                 onApiProjectChange={setSelectedApiProjectId}
                                 apiEndpointOverrides={apiEndpointOverrides}
                                 onApiEndpointOverridesChange={setApiEndpointOverrides}
+                              />
+                            ),
+                          },
+                          {
+                            key: 'structure',
+                            label: '用例结构',
+                            children: (
+                              <RequirementTestPointManager
+                                sessionId={selectedSession?.id ?? null}
+                                modules={modules}
+                                selectedModule={selectedModule}
                               />
                             ),
                           },

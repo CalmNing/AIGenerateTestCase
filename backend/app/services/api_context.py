@@ -75,6 +75,35 @@ def build_api_context(
                 ep_lines.append('请求参数: ' + json.dumps(ep_parameters, ensure_ascii=False, indent=2))
             if endpoint_db.request_schema:
                 ep_lines.append('请求 Schema:\n' + json.dumps(endpoint_db.request_schema, ensure_ascii=False, indent=2))
+                # ---- 请求骨架（硬约束，供 LLM 严格遵循）----
+                try:
+                    from app.services.swagger_parser import build_body_from_schema
+                    skeleton_body = build_body_from_schema(endpoint_db.request_schema)
+                    schema = endpoint_db.request_schema
+                    props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+                    required = schema.get("required", []) if isinstance(schema, dict) else []
+                    lines = ["[请求骨架-硬约束，必须严格遵循，不得新增 schema 外字段]"]
+                    lines.append(f"方法: {endpoint_db.method}")
+                    lines.append(f"路径: {endpoint_db.path}")
+                    if required:
+                        lines.append("必填字段: " + ", ".join(str(r) for r in required))
+                    for pname, pdef in props.items():
+                        if not isinstance(pdef, dict):
+                            continue
+                        ptype = pdef.get("type", "")
+                        extra = []
+                        if "enum" in pdef:
+                            extra.append("enum=" + "/".join(str(v) for v in pdef["enum"]))
+                        for c in ("minLength", "maxLength", "minimum", "maximum", "pattern"):
+                            if c in pdef:
+                                extra.append(f"{c}={pdef[c]}")
+                        suffix = f" ({ptype}" + (", " + ", ".join(extra) if extra else "") + ")"
+                        lines.append(f"- {pname}{suffix}")
+                    lines.append("请求体模板(JSON):")
+                    lines.append(skeleton_body)
+                    ep_lines.append("请求骨架:\n" + "\n".join(lines))
+                except Exception:
+                    pass
             if endpoint_db.response_schema:
                 ep_lines.append('响应 Schema:\n' + json.dumps(endpoint_db.response_schema, ensure_ascii=False, indent=2))
             if ep_body:
