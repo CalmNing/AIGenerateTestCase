@@ -821,6 +821,8 @@ def _persist_testcases(
                     step_dict["variables"] = [v.model_dump(by_alias=True) for v in step.variables]
                 if step.assertions:
                     step_dict["assertions"] = [a.model_dump() for a in step.assertions]
+                if step.post_actions:
+                    step_dict["post_actions"] = [a.model_dump() for a in step.post_actions]
                 converted_steps.append(step_dict)
             else:
                 converted_steps.append(str(step))
@@ -865,6 +867,8 @@ def _persist_testcases(
                     pc_dict["variables"] = [v.model_dump(by_alias=True) for v in pc.variables]
                 if pc.assertions:
                     pc_dict["assertions"] = [a.model_dump() for a in pc.assertions]
+                if pc.post_actions:
+                    pc_dict["post_actions"] = [a.model_dump() for a in pc.post_actions]
                 converted_preset_conditions.append(pc_dict)
             else:
                 converted_preset_conditions.append(str(pc))
