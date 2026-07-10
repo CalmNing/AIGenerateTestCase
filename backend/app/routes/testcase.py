@@ -546,9 +546,11 @@ async def generate_testcases(
     # 自动填充 user_id
     for tc in testcases:
         tc.user_id = user.user_id
-        if api_endpoint_id:
-            # Save as comma-separated string for multi-endpoint support
-            tc.api_endpoint_id = api_endpoint_id
+        # 保留 _persist_testcases 按模型实际引用计算出的 attached_ids（每条用例只关联
+        # 自己真正引用的接口，可能包含依赖补全接口）。仅当模型未给出任何接口引用时，
+        # 才回退到全部选中的接口（api_endpoint_ids 已含依赖补全接口）。
+        if not tc.api_endpoint_id and api_endpoint_ids:
+            tc.api_endpoint_id = ",".join(str(eid) for eid in api_endpoint_ids)
         if api_project_id_int is not None:
             tc.api_project_id = api_project_id_int
     session.add_all(testcases)

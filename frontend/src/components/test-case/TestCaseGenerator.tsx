@@ -126,6 +126,19 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     if (onApiEndpointChange) onApiEndpointChange(vals);
   };
 
+  // 全选 / 取消全选 当前项目下的所有接口
+  const allSelected = apiEndpoints.length > 0 &&
+    apiEndpoints.every(ep => (selectedApiEndpointId || []).includes(ep.id));
+
+  const handleToggleSelectAll = () => {
+    if (!onApiEndpointChange) return;
+    if (allSelected) {
+      onApiEndpointChange([]);
+    } else {
+      onApiEndpointChange(apiEndpoints.map(ep => ep.id));
+    }
+  };
+
   // Pipeline 进度轮询
   useEffect(() => {
     if (!pipelineTaskId || !pipelinePolling) return;
@@ -298,16 +311,30 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                     </span>
                     关联 API 接口
                   </span>
-                  <Tooltip title="根据需求文本自动匹配API接口">
+                  <div className="tcg-api-actions">
                     <button
-                      className={`tcg-smart-btn ${smartMatching ? 'is-loading' : ''}`}
-                      onClick={handleSmartMatch}
-                      disabled={!requirement.trim() || smartMatching}
+                      className="tcg-smart-btn"
+                      onClick={handleToggleSelectAll}
+                      disabled={!selectedApiProjectId || apiEndpoints.length === 0 || loadingApis}
                     >
-                      <ThunderboltOutlined style={{ fontSize: 12 }} />
-                      {smartMatching ? '匹配中...' : '智能匹配'}
+                      {allSelected ? '取消全选' : '全选'}
+                      {apiEndpoints.length > 0 && (
+                        <span className="tcg-select-all-count">
+                          ({selectedApiEndpointId?.length || 0}/{apiEndpoints.length})
+                        </span>
+                      )}
                     </button>
-                  </Tooltip>
+                    <Tooltip title="根据需求文本自动匹配API接口">
+                      <button
+                        className={`tcg-smart-btn ${smartMatching ? 'is-loading' : ''}`}
+                        onClick={handleSmartMatch}
+                        disabled={!requirement.trim() || smartMatching}
+                      >
+                        <ThunderboltOutlined style={{ fontSize: 12 }} />
+                        {smartMatching ? '匹配中...' : '智能匹配'}
+                      </button>
+                    </Tooltip>
+                  </div>
                 </div>
                 <div className="tcg-api-selects">
                   <Select
