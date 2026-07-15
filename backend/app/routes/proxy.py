@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 import httpx
 
-from db.db import get_db
+from app.deps import get_db
 from db.models import GlobalParameter, MockConfig
 from app.deps import CurrentUser
 from app.permissions import Permission, get_user_permissions

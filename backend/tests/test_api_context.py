@@ -78,3 +78,62 @@ def test_build_api_context_applies_overrides(db_session):
     ctx, _ = _build_api_context(db_session, [ep1.id], project.id, overrides)
     assert "overridden" in ctx
     assert "demo" not in ctx  # original body replaced
+
+
+def test_build_api_context_includes_request_skeleton(db_session):
+    from app.services.swagger_parser import build_body_from_schema
+    project, ep1, _ = _make_project_with_endpoints(db_session)
+    # 给 ep1 一个 request_schema
+    ep1.request_schema = {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "status": {"type": "string", "enum": ["active", "disabled"]},
+        },
+    }
+    db_session.add(ep1)
+    db_session.commit()
+    ctx, _ = _build_api_context(db_session, [ep1.id], project.id, {})
+    assert "请求骨架" in ctx
+    assert "必填字段" in ctx
+    assert "name" in ctx
+    assert "enum" in ctx or "active" in ctx
+
+
+def test_build_api_context_includes_description(db_session):
+    project, ep1, _ = _make_project_with_endpoints(db_session)
+    ep1.description = "该接口用于创建用户，写入用户表并返回用户ID"
+    db_session.add(ep1)
+    db_session.commit()
+    ctx, _ = _build_api_context(db_session, [ep1.id], project.id, {})
+    assert "接口描述: 该接口用于创建用户" in ctx
+
+
+def test_analyze_field_dependencies_detects_path_dependency(db_session):
+    from app.services.api_context import analyze_field_dependencies as _analyze
+
+    project, ep1, ep2 = _make_project_with_endpoints(db_session)
+    # ep1 提供字段 id（响应），ep2 通过路径 {id} 引用
+    ep1.response_schema = {"properties": {"id": {"type": "integer"}}}
+    ep2.path = "/users/{id}"
+    db_session.add(ep1)
+    db_session.add(ep2)
+    db_session.commit()
+
+    descs, labels = _analyze(db_session, [ep1.id, ep2.id], project.id)
+    assert any("依赖" in d for d in descs)
+    assert any("提供字段" in v for v in labels.values())
+
+
+def test_build_api_context_appends_dependency_section(db_session):
+    project, ep1, ep2 = _make_project_with_endpoints(db_session)
+    ep1.response_schema = {"properties": {"id": {"type": "integer"}}}
+    ep2.path = "/users/{id}"
+    db_session.add(ep1)
+    db_session.add(ep2)
+    db_session.commit()
+
+    ctx, _ = _build_api_context(db_session, [ep1.id, ep2.id], project.id, {})
+    assert "## 接口间依赖关系" in ctx
+    assert "依赖" in ctx

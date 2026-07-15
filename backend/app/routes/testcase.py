@@ -1,9 +1,6 @@
-import json
-import re
 from typing import List, Annotated, Optional
 
-from fastapi import APIRouter, Query, status, Form
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Query, status, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import delete
 from sqlmodel import select, desc, func
@@ -12,170 +9,20 @@ from app.deps import SessionDep, CurrentUser
 from app.permissions import Permission, get_user_permissions
 from db.models import Session, TestCase, StatusValue, McpServer, TestCaseExecutionLog, ApiEndpoint, ApiProject, ApiScenario
 from utils.base_response import Response
+from app.services.testcase_service import (
+    infer_endpoint_dependencies,
+    _parse_endpoint_ids,
+    parse_json_field,
+)
 import traceback
+import json
+from datetime import datetime
 # NOTE: api_test_tool is imported lazily inside the functions that use it
 # (run_scenario / run_endpoint_steps) to avoid a circular import: api_test_tool
 # imports app.routes.proxy, which triggers app/routes/__init__.py to import this
 # module before api_test_tool has finished initializing.
 
 router = APIRouter(prefix="/testcases", tags=["testcases"])
-
-
-def infer_endpoint_dependencies(
-    session,
-    selected_endpoint_ids: list[int],
-    api_project_id: int | str | None,
-) -> list[int]:
-    """推断选中接口缺失的前置依赖接口，返回需要补全的接口 ID 列表。
-
-    规则：
-    1. 识别候选"新增"接口：POST 方法且路径不含 /{ 或 /:
-    2. 识别"依赖方"接口：路径含 /{xxx} 且参数名含 id，或 body/parameters 含 id 字段但响应无该字段
-    3. 如果存在依赖方但未选中任何候选新增接口，则按路径前缀匹配补全
-    """
-    if not api_project_id or not selected_endpoint_ids:
-        return []
-
-    try:
-        project_id = int(api_project_id)
-    except (ValueError, TypeError):
-        return []
-
-    # 加载同项目所有接口
-    all_endpoints = session.exec(
-        select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)
-    ).all()
-
-    if not all_endpoints:
-        return []
-
-    selected_ids_set = set(selected_endpoint_ids)
-    selected_eps = [ep for ep in all_endpoints if ep.id in selected_ids_set]
-    non_selected_eps = [ep for ep in all_endpoints if ep.id not in selected_ids_set]
-
-    # 1. 识别候选新增接口（POST + 非路径参数化）
-    path_param_pattern = re.compile(r'/\{|/:')
-    candidate_create_eps = [
-        ep for ep in non_selected_eps
-        if ep.method.upper() == 'POST' and not path_param_pattern.search(ep.path)
-    ]
-
-    if not candidate_create_eps:
-        return []
-
-    # 2. 检查是否已选中新增接口
-    already_has_create = False
-    for sel_ep in selected_eps:
-        if sel_ep.method.upper() == 'POST' and not path_param_pattern.search(sel_ep.path):
-            already_has_create = True
-            break
-
-    if already_has_create:
-        return []
-
-    # 3. 识别依赖方接口
-    id_param_pattern = re.compile(r'\{[^}]*id[^}]*\}', re.IGNORECASE)
-    has_dependency = False
-    dependency_paths = []
-
-    for ep in selected_eps:
-        if id_param_pattern.search(ep.path):
-            has_dependency = True
-            dependency_paths.append(ep.path)
-            continue
-
-        has_id_field = False
-        for field_list in [ep.parameters or [], _parse_body_fields(ep.body)]:
-            for field in field_list:
-                field_name = field.get('key', '') or field.get('name', '') or ''
-                if 'id' in field_name.lower():
-                    has_id_field = True
-                    break
-            if has_id_field:
-                break
-
-        if has_id_field:
-            resp_fields = _get_response_top_fields(ep.response_schema)
-            has_id_in_response = any('id' in f.lower() for f in resp_fields)
-            if not has_id_in_response:
-                has_dependency = True
-                dependency_paths.append(ep.path)
-
-    if not has_dependency:
-        return []
-
-    # 4. 为每个依赖方匹配最合适的候选新增接口
-    result_ids = set()
-    for dep_path in dependency_paths:
-        best_match = _best_matching_create_endpoint(dep_path, candidate_create_eps)
-        if best_match:
-            result_ids.add(best_match.id)
-
-    return list(result_ids)
-
-
-def _parse_body_fields(body: str | None) -> list[dict]:
-    """从 body JSON 字符串中解析顶层字段列表。"""
-    if not body:
-        return []
-    try:
-        parsed = json.loads(body)
-        if isinstance(parsed, dict):
-            return [{'key': k} for k in parsed.keys()]
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return []
-
-
-def _get_response_top_fields(response_schema: dict | None) -> list[str]:
-    """从响应 schema 中提取顶层字段名。"""
-    if not response_schema:
-        return []
-    props = response_schema.get('properties', {})
-    if not props:
-        items = response_schema.get('items', {})
-        props = items.get('properties', {})
-    return list(props.keys())
-
-
-def _best_matching_create_endpoint(
-    dependency_path: str,
-    candidates: list,
-):
-    """为依赖方接口选择最匹配的候选新增接口。"""
-    def path_segments(path: str) -> list[str]:
-        return [s for s in path.strip('/').split('/') if s]
-
-    dep_segments = path_segments(dependency_path)
-    dep_prefix = '/'.join(dep_segments[:-1]) if len(dep_segments) > 1 else ''
-
-    best = None
-    best_score = -1
-
-    for ep in candidates:
-        cand_segments = path_segments(ep.path)
-        cand_prefix = '/'.join(cand_segments)
-
-        if dep_prefix and cand_prefix == dep_prefix:
-            return ep
-
-        if dep_prefix and cand_prefix.startswith(dep_prefix):
-            score = len(dep_prefix)
-            if score > best_score:
-                best_score = score
-                best = ep
-        elif dep_prefix and dep_prefix.startswith(cand_prefix):
-            score = len(cand_prefix)
-            if score > best_score:
-                best_score = score
-                best = ep
-
-    if best:
-        return best
-
-    dep_len = len(dep_segments)
-    candidates_sorted = sorted(candidates, key=lambda ep: abs(len(path_segments(ep.path)) - dep_len))
-    return candidates_sorted[0] if candidates_sorted else None
 
 
 class TestCasePage(BaseModel):
@@ -221,21 +68,71 @@ def _save_execution_log(db_session, testcase: TestCase, result: dict, passed: bo
 
 
 
-def _parse_endpoint_ids(endpoint_id_str: str | int | None) -> list[int]:
-    """Parse comma-separated endpoint IDs string into int list."""
-    if not endpoint_id_str:
-        return []
-    if isinstance(endpoint_id_str, int):
-        return [endpoint_id_str]
-    ids = []
-    for part in endpoint_id_str.split(","):
-        part = part.strip()
-        if part:
-            try:
-                ids.append(int(part))
-            except ValueError:
-                pass
-    return ids
+# NOTE: _parse_endpoint_ids 已下沉至 app.services.testcase_service，路由通过顶部导入复用。
+
+
+async def _run_validation(db, tc: TestCase, env_id: Optional[int] = None) -> dict:
+    """手动「验证」：真实执行用例并回写结果（复用 scenario_runner.run_scenario）。
+
+    优先复用用例已有的 ApiScenario；否则基于 api_endpoint_id + steps 临时构建。
+    """
+    from app.services.scenario_runner import run_scenario
+    from db.models import ApiScenario, ApiEndpoint as ApiEndpointModel, ApiProject as ApiProjectModel
+
+    project = db.get(ApiProjectModel, tc.api_project_id)
+    if not project:
+        raise ValueError("关联 API 项目不存在")
+    env_id = env_id or project.environment_id
+
+    scenario = None
+    if tc.scenario_id:
+        scenario = db.get(ApiScenario, tc.scenario_id)
+    if scenario is None:
+        endpoint_ids = [int(x) for x in str(tc.api_endpoint_id).split(",") if x.strip().isdigit()]
+        index_to_id = {i + 1: eid for i, eid in enumerate(endpoint_ids)}
+        scenario_steps = []
+        for step in (tc.steps or []):
+            if not isinstance(step, dict):
+                continue
+            ref = step.get("endpoint_ref") or step.get("endpoint_id")
+            eid = index_to_id.get(ref) if isinstance(ref, int) else None
+            ep = db.get(ApiEndpointModel, eid) if eid else None
+            if not ep:
+                continue
+            scenario_steps.append({
+                "endpoint_id": ep.id,
+                "description": step.get("description", ""),
+                "headers": step.get("headers"),
+                "parameters": step.get("parameters"),
+                "body": step.get("body"),
+                "assertions": step.get("assertions") or tc.assertions,
+                "post_actions": step.get("post_actions"),
+            })
+        scenario = ApiScenario(
+            name=f"verify-{tc.id}",
+            project_id=project.id,
+            environment_id=env_id,
+            steps=scenario_steps,
+            user_id=tc.user_id,
+        )
+        db.add(scenario)
+        db.commit()
+        db.refresh(scenario)
+        tc.scenario_id = scenario.id
+
+    result = await run_scenario(db, scenario, project)
+    passed = bool(result.get("passed"))
+    tc.validation_status = "passed" if passed else "failed"
+    tc.validation_detail = json.dumps(result, ensure_ascii=False)
+    tc.validation_at = datetime.now()
+    db.add(tc)
+    db.commit()
+    db.refresh(tc)
+    return {
+        "validation_status": tc.validation_status,
+        "validation_detail": tc.validation_detail,
+        "validation_at": str(tc.validation_at),
+    }
 
 
 def _session_api_overrides(db_session, session_id: int) -> dict:
@@ -397,13 +294,16 @@ def get_testcases(
         case_name: str = None,
         status: str = None,
         bug_id: str = None,
-        exist_bug: bool = False
+        exist_bug: bool = False,
+        test_point_id: int = None
 ):
     """获取会话的测试用例"""
     query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
                                                                                desc(TestCase.created_at))
     if module_id:
         query = query.where(TestCase.module_id == module_id)
+    if test_point_id:
+        query = query.where(TestCase.test_point_id == test_point_id)
 
     if case_name:
         query = query.where(TestCase.case_name.contains(case_name))
@@ -445,6 +345,8 @@ def get_testcases(
     status_count_base = [TestCase.session_id == session_id]
     if module_id is not None:
         status_count_base.append(TestCase.module_id == module_id)
+    if test_point_id is not None:
+        status_count_base.append(TestCase.test_point_id == test_point_id)
 
     status_rows = session.exec(
         select(TestCase.status, func.count())
@@ -461,6 +363,8 @@ def get_testcases(
     total_bugs_query = [TestCase.session_id == session_id, TestCase.bug_id != None]
     if module_id is not None:
         total_bugs_query.append(TestCase.module_id == module_id)
+    if test_point_id is not None:
+        total_bugs_query.append(TestCase.test_point_id == test_point_id)
     totalBugs = session.scalar(select(func.count()).where(*total_bugs_query))
 
     testcases = TestCasePage(
@@ -542,7 +446,6 @@ async def generate_testcases(
                         data="Ollama 配置不完整（ollama_url/ollama_model）")
 
     # MCP 服务器配置只允许从服务端持久化配置读取，避免生成接口绕过 /api/mcp 的权限控制。
-    import json
     from app.services.mcp_loader import load_user_mcp_configs
     if mcp_servers and mcp_servers.strip():
         logger.info("忽略客户端传入的 MCP 服务器配置，改用服务端已保存配置")
@@ -551,12 +454,11 @@ async def generate_testcases(
     # 解析选中的技能名称
     selected_skill_names = []
     if selected_skills and selected_skills.strip():
-        try:
-            parsed_skills = json.loads(selected_skills)
-            if isinstance(parsed_skills, list):
-                selected_skill_names = parsed_skills
-                logger.info(f"接收到 {len(selected_skill_names)} 个选中技能: {selected_skill_names}")
-        except json.JSONDecodeError:
+        parsed_skills = parse_json_field(selected_skills)
+        if isinstance(parsed_skills, list):
+            selected_skill_names = parsed_skills
+            logger.info(f"接收到 {len(selected_skill_names)} 个选中技能: {selected_skill_names}")
+        else:
             logger.warning(f"Skills 配置解析失败: {selected_skills[:200]}")
 
     # 解析 API 端点 Schema 和定义
@@ -579,13 +481,16 @@ async def generate_testcases(
     # 解析 API 端点覆盖配置（用户编辑过的 body/headers/parameters）
     endpoint_overrides: dict[int, dict] = {}
     if api_endpoint_overrides:
-        try:
-            raw_overrides = json.loads(api_endpoint_overrides)
-            for eid_str, override in raw_overrides.items():
-                eid = int(eid_str)
-                if eid in api_endpoint_ids:
-                    endpoint_overrides[eid] = override
-        except (json.JSONDecodeError, ValueError, TypeError):
+        raw_overrides = parse_json_field(api_endpoint_overrides)
+        if isinstance(raw_overrides, dict):
+            try:
+                for eid_str, override in raw_overrides.items():
+                    eid = int(eid_str)
+                    if eid in api_endpoint_ids:
+                        endpoint_overrides[eid] = override
+            except (ValueError, TypeError):
+                logger.warning("端点覆盖配置解析失败，继续使用数据库默认值")
+        else:
             logger.warning("端点覆盖配置解析失败，继续使用数据库默认值")
 
     _proj_id_int = None
@@ -600,7 +505,10 @@ async def generate_testcases(
     )
 
     if api_context:
-        effective_requirement = api_context + "\n\n## 用户需求\n\n" + requirement
+        # 接口测试中用户需求降为补充背景，避免模型脱离接口信息凭空生成用例
+        effective_requirement = (
+            api_context + "\n\n## 补充背景（次要，仅用于理解业务语境）\n\n" + requirement
+        )
     else:
         effective_requirement = requirement
 
@@ -634,22 +542,18 @@ async def generate_testcases(
         )
     except ModelServiceUnavailableError as e:
         logger.error(f"生成测试用例失败: {e}")
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content=Response(code=status.HTTP_503_SERVICE_UNAVAILABLE, message=str(e)).model_dump(),
-        )
+        return Response(code=status.HTTP_503_SERVICE_UNAVAILABLE, message=str(e))
     except ValueError as e:
         logger.error(f"生成测试用例失败: {e}")
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=Response(code=status.HTTP_400_BAD_REQUEST, message=str(e)).model_dump(),
-        )
+        return Response(code=status.HTTP_400_BAD_REQUEST, message=str(e))
     # 自动填充 user_id
     for tc in testcases:
         tc.user_id = user.user_id
-        if api_endpoint_id:
-            # Save as comma-separated string for multi-endpoint support
-            tc.api_endpoint_id = api_endpoint_id
+        # 保留 _persist_testcases 按模型实际引用计算出的 attached_ids（每条用例只关联
+        # 自己真正引用的接口，可能包含依赖补全接口）。仅当模型未给出任何接口引用时，
+        # 才回退到全部选中的接口（api_endpoint_ids 已含依赖补全接口）。
+        if not tc.api_endpoint_id and api_endpoint_ids:
+            tc.api_endpoint_id = ",".join(str(eid) for eid in api_endpoint_ids)
         if api_project_id_int is not None:
             tc.api_project_id = api_project_id_int
     session.add_all(testcases)
@@ -929,3 +833,27 @@ def infer_testcase_dependencies(
         "replaced_fields": 0,
         "extra_endpoint_ids": extra_ids,
     })
+
+
+@router.post("/{testcase_id}/validate", response_model=Response)
+async def validate_testcase(
+    testcase_id: int,
+    payload: Optional[dict] = None,
+    user: CurrentUser = None,
+    db: SessionDep = None,
+):
+    """手动触发真实执行验证：复用 scenario_runner 实跑并回写结果。"""
+    tc = db.get(TestCase, testcase_id)
+    if not tc:
+        raise HTTPException(status_code=404, detail="测试用例不存在")
+    if not tc.api_project_id or not tc.api_endpoint_id:
+        raise HTTPException(status_code=400, detail="仅接口测试用例支持验证")
+
+    env_id = None
+    if isinstance(payload, dict):
+        env_id = payload.get("environment_id")
+    try:
+        data = await _run_validation(db, tc, env_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return Response(data=data)

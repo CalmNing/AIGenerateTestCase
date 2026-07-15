@@ -573,6 +573,10 @@ class _TokenUsageCallback(BaseCallbackHandler):
         self._mcp_validation_error_count = 0
         self._last_mcp_validation_error: str | None = None
         self.last_llm_response: str | None = None  # 捕获最后一次 LLM 原始响应
+        # 缓存命中埋点
+        self.prompt_tokens: int = 0
+        self.cache_hit_tokens: int = 0
+        self.cache_creation_tokens: int = 0
 
     def on_chat_model_start(self, serialized, messages, **kwargs):
         total = 0
@@ -587,8 +591,61 @@ class _TokenUsageCallback(BaseCallbackHandler):
             total += len(tools_str)
         logger.warning(f"[诊断] 预估总计: {total} chars / {total//4} tokens / {total//2} CJK tokens")
 
+    def _record_cache_usage(self, response):
+        """解析 LLM 返回的 usage，记录 prompt 缓存命中/创建 token 与命中率。
+
+        兼容两种字段命名：
+        - DeepSeek / OpenAI 兼容：prompt_cache_hit_tokens / prompt_cache_creation_tokens
+        - Anthropic / LangChain usage_metadata：cache_read_input_tokens / cache_creation_input_tokens
+        """
+        usage = None
+        try:
+            if response is not None and getattr(response, "llm_output", None):
+                usage = response.llm_output.get("token_usage") or response.llm_output.get("usage")
+            if not usage and getattr(response, "usage_metadata", None):
+                um = response.usage_metadata
+                usage = {
+                    "prompt_tokens": um.get("input_tokens", 0),
+                    "completion_tokens": um.get("output_tokens", 0),
+                    "total_tokens": um.get("total_tokens", 0),
+                    "prompt_cache_hit_tokens": um.get("cache_read_input_tokens", 0),
+                    "prompt_cache_creation_tokens": um.get("cache_creation_input_tokens", 0),
+                }
+        except Exception:
+            return
+        if not usage:
+            return
+        try:
+            prompt = int(usage.get("prompt_tokens", 0) or 0)
+            hit = int(
+                usage.get("prompt_cache_hit_tokens")
+                or usage.get("cache_read_input_tokens")
+                or 0
+            )
+            creation = int(
+                usage.get("prompt_cache_creation_tokens")
+                or usage.get("cache_creation_input_tokens")
+                or 0
+            )
+            self.prompt_tokens = prompt
+            self.cache_hit_tokens = hit
+            self.cache_creation_tokens = creation
+            if prompt > 0:
+                rate = hit / prompt * 100
+                logger.info(
+                    f"[缓存命中] prompt_tokens={prompt} cache_hit={hit} "
+                    f"cache_creation={creation} 命中率={rate:.1f}%"
+                )
+            else:
+                logger.info(
+                    f"[缓存命中] prompt_tokens={prompt} cache_hit={hit} cache_creation={creation}"
+                )
+        except Exception as e:
+            logger.warning(f"[缓存命中] 解析 usage 失败: {e}")
+
     def on_llm_end(self, response, **kwargs):
-        """捕获 LLM 原始响应，用于调试结构化输出失败。"""
+        """捕获 LLM 原始响应，用于调试结构化输出失败；同时记录缓存命中。"""
+        self._record_cache_usage(response)
         try:
             if response and hasattr(response, 'generations') and response.generations:
                 for gen_list in response.generations:

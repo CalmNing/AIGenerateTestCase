@@ -1,0 +1,367 @@
+/* ===== Requirement / Test Point Chain Board ===== */
+
+/* Establish a bounded height chain from the Tabs host down to the board,
+   so the columns can scroll independently instead of stretching the page. */
+.rtp-tabs-host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.rtp-tabs-host > .ant-tabs-content-holder {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rtp-tabs-host > .ant-tabs-content-holder > .ant-tabs-content,
+.rtp-tabs-host > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  height: 100%;
+  min-height: 0;
+}
+
+.rtp-tabs-host > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  overflow: hidden;
+}
+
+.rtp-board {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 4px 0 0;
+}
+
+/* --- Toolbar --- */
+.rtp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 4px 4px 14px;
+  border-bottom: 1px solid var(--color-border-light);
+  margin-bottom: 14px;
+}
+
+.rtp-toolbar__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.rtp-toolbar__sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.rtp-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.rtp-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rtp-stats-chip {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-full, 999px);
+  padding: 2px 10px;
+}
+
+/* --- Columns layout --- */
+.rtp-columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+
+.rtp-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 14px;
+  border-left: 1px solid var(--color-border-light);
+}
+
+.rtp-col:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+
+.rtp-col:last-child {
+  padding-right: 0;
+}
+
+.rtp-col__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px dashed var(--color-border-light);
+  flex-shrink: 0;
+}
+
+.rtp-col__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.rtp-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  border-radius: var(--radius-full, 999px);
+}
+
+.rtp-col__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+/* Pagination footer under each scrollable column */
+.rtp-col__pager {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 2px;
+  border-top: 1px dashed var(--color-border-light);
+  margin-top: 4px;
+}
+
+.rtp-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 0;
+}
+
+.rtp-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 120px;
+  font-size: 13px;
+  color: var(--color-text-disabled);
+  text-align: center;
+}
+
+/* --- Card (需求点 / 测试点) --- */
+.rtp-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.rtp-card:hover {
+  border-color: var(--color-primary-border);
+  box-shadow: 0 2px 10px rgba(79, 70, 229, 0.10);
+}
+
+.rtp-card.is-selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.rtp-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rtp-card__title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rtp-card__icon {
+  margin-top: 2px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.rtp-card__icon--req {
+  color: var(--color-primary);
+}
+
+.rtp-card__icon--tp {
+  color: #0ea5e9;
+}
+
+.rtp-card__text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.rtp-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.rtp-card:hover .rtp-card__actions,
+.rtp-card.is-selected .rtp-card__actions {
+  opacity: 1;
+}
+
+.rtp-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.rtp-card__meta .ant-tag {
+  margin: 0;
+  font-size: 11px;
+}
+
+.rtp-card__foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border-light);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+/* Card footer time info (创建 / 更新) */
+.rtp-card__time {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.rtp-card__time span {
+  white-space: nowrap;
+}
+
+/* --- Case row (测试用例) --- */
+.rtp-case {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.rtp-case:hover {
+  border-color: var(--color-border);
+  background: var(--color-bg);
+}
+
+.rtp-case__icon {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.rtp-case__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rtp-case .ant-tag {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* Case row creation / update time */
+.rtp-case__time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* --- Responsive: stack columns on narrow screens --- */
+@media (max-width: 960px) {
+  .rtp-columns {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .rtp-col {
+    border-left: none;
+    border-top: 1px solid var(--color-border-light);
+    padding: 14px 0 0;
+    margin-top: 14px;
+  }
+
+  .rtp-col:first-child {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .rtp-col__body {
+    overflow: visible;
+  }
+
+  .rtp-card__actions {
+    opacity: 1;
+  }
+}

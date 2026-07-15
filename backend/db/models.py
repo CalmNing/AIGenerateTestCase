@@ -95,6 +95,14 @@ class TestCase(BaseModel, table=True):
     test_type: Optional[str] = Field(default=None, description="测试类别（继承自测试点，如 functional/performance/security）")
     design_method: Optional[str] = Field(default=None, description="测试设计方法（继承自测试点，如 equivalence_partitioning/boundary_value）")
 
+    # ===== 准确性保证字段 =====
+    consistency_report: Optional[str] = Field(default=None, description="一致性检查报告(JSON字符串)")
+    confidence_score: Optional[float] = Field(default=None, description="置信度评分 0~1")
+    confidence_level: Optional[str] = Field(default=None, description="置信度等级: high/medium/low")
+    validation_status: Optional[str] = Field(default=None, description="验证状态: pending/passed/failed/error")
+    validation_detail: Optional[str] = Field(default=None, description="验证结果详情(JSON字符串)")
+    validation_at: Optional[datetime] = Field(default=None, description="验证执行时间(UTC+8)")
+
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
 
@@ -102,10 +110,12 @@ class RequirementPoint(BaseModel, table=True):
     """需求点数据模型（4阶段pipeline阶段1产物）"""
     session_id: Optional[int] = Field(default=None, foreign_key="session.id", index=True)
     content: str = Field(default="", description="需求点描述")
-    module: str = Field(default="", description="所属功能模块名称")
+    module_id: Optional[int] = Field(default=None, foreign_key="module.id", description="关联模块ID（所属功能模块）")
     priority: str = Field(default="medium", description="优先级: high/medium/low")
     order_index: int = Field(default=0, description="排序序号")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+    api_project_id: Optional[int] = Field(default=None, description="关联的 API 项目ID（接口测试用，从需求点级联到测试点/用例）")
+    api_endpoint_ids: Optional[str] = Field(default=None, description="关联的 API Endpoint ID 列表（逗号分隔，接口测试用）")
 
     # 关系
     session: Optional[Session] = Relationship(back_populates="requirement_points")
@@ -121,6 +131,8 @@ class TestPoint(BaseModel, table=True):
     design_method: str = Field(default="", description="测试设计方法: equivalence_partitioning/boundary_value/decision_table/state_transition")
     priority: str = Field(default="medium", description="优先级: high/medium/low")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+    api_project_id: Optional[int] = Field(default=None, description="关联的 API 项目ID（接口测试用例重生成时重建上下文用）")
+    api_endpoint_ids: Optional[str] = Field(default=None, description="关联的 API Endpoint ID 列表（逗号分隔，接口测试用）")
 
     # 关系
     requirement_point: Optional[RequirementPoint] = Relationship(back_populates="test_points")
@@ -245,6 +257,7 @@ class ApiEndpoint(BaseModel, table=True):
     """接口测试工具中的单个接口定义"""
     project_id: int = Field(foreign_key="apiproject.id", description="接口项目ID")
     name: str = Field(default="", description="接口名称")
+    description: Optional[str] = Field(default=None, description="接口业务描述")
     method: str = Field(default="GET", description="HTTP 方法")
     path: str = Field(default="", description="接口路径")
     url: Optional[str] = Field(default=None, description="覆盖完整 URL")

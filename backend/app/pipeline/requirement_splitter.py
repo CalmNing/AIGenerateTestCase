@@ -6,7 +6,12 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from app.pipeline.prompts import REQUIREMENT_SPLITTER_SYSTEM, REQUIREMENT_ANALYSIS_USER
+from app.pipeline.prompts import (
+    REQUIREMENT_SPLITTER_SYSTEM,
+    REQUIREMENT_ANALYSIS_USER,
+    API_REQUIREMENT_SPLITTER_SYSTEM,
+    API_REQUIREMENT_ANALYSIS_USER,
+)
 from app.pipeline.schemas import RequirementAnalysisResult
 from utils.llm_factory import build_chat_model, normalize_priority
 
@@ -27,18 +32,39 @@ class RequirementSplitter:
             api_key, api_base_url, api_model, api_proxy_url, max_tokens=None
         )
 
-    async def analyze(self, requirement_text: str) -> List[Dict[str, Any]]:
+    async def analyze(
+        self,
+        requirement_text: str,
+        *,
+        is_api_test: bool = False,
+        api_context: str = "",
+    ) -> List[Dict[str, Any]]:
         """
-        分析需求文档，提取需求点列表
+        分析需求文档，提取需求点列表。
+
+        API 测试模式（is_api_test=True 且提供 api_context）下，接口 Schema
+        作为需求拆分的主要依据，用户文本降为辅助背景。
 
         Returns:
             List[dict]: 每个 dict 包含 content, module, priority, order_index
         """
         from utils.model_utils import _structured_output_robust
 
-        user_prompt = REQUIREMENT_ANALYSIS_USER.format(content=requirement_text)
+        if is_api_test and api_context:
+            system_prompt = API_REQUIREMENT_SPLITTER_SYSTEM
+            # 注意：api_context 含 JSON 大括号，必须用字符串拼接，禁用 .format()
+            user_prompt = (
+                "===== API 接口信息（需求拆分的主要依据）=====\n\n"
+                + api_context
+                + "\n\n## 用户补充说明（次要，仅用于理解业务语境，"
+                "不得脱离上述接口信息编造字段/路径）\n\n"
+                + (requirement_text or "(无用户补充说明)")
+            )
+        else:
+            system_prompt = REQUIREMENT_SPLITTER_SYSTEM
+            user_prompt = REQUIREMENT_ANALYSIS_USER.format(content=requirement_text)
         messages = [
-            {"role": "system", "content": REQUIREMENT_SPLITTER_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 

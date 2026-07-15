@@ -48,6 +48,7 @@ from utils.helpers import (
     _HISTORY_PROMPT_LIMIT,
 )
 from utils.llm_factory import build_chat_model
+from config import config_manager
 
 
 def _parse_step_from_string(step_str: str) -> dict | str:
@@ -376,6 +377,10 @@ async def _fallback_raw_api_call(
 
         client = AsyncOpenAI(api_key=api_key, base_url=base_url or None)
 
+        # 复用主模型的 extra_body（含 prompt 缓存 / thinking 决定），保持与主路径一致
+        fallback_extra_body = dict(getattr(model, 'extra_body', {}) or {})
+        fallback_extra_body.setdefault("thinking", {"type": "disabled"})
+
         # 将 LangChain messages 转为 OpenAI 格式
         # DeepSeek/OpenAI API 只接受 system/user/assistant/tool 角色，不接受 human
         oai_messages = []
@@ -415,6 +420,7 @@ async def _fallback_raw_api_call(
                 tool_choice={'type': 'function', 'function': {'name': schema.__name__}},
                 max_completion_tokens=model.max_tokens or 16384,
                 temperature=model.temperature or 0,
+                extra_body=fallback_extra_body,
             )
 
             msg = response.choices[0].message
@@ -471,6 +477,7 @@ async def _fallback_raw_api_call(
             messages=b_messages,
             max_completion_tokens=model.max_tokens or 16384,
             temperature=model.temperature or 0,
+            extra_body=fallback_extra_body,
         )
 
         b_content = b_response.choices[0].message.content or ""
@@ -543,6 +550,7 @@ async def create_testcase_agent(
         custom_tools: list | None = None,
         system_prompt: str = "",
         response_format: type = ResponseFormat,
+        prompt_cache: Optional[bool] = None,
 ):
     """创建测试用例生成agent，自动集成蓝湖 MCP 工具（如果可用）。"""
 
@@ -556,7 +564,8 @@ async def create_testcase_agent(
         api_model = api_model.strip() if api_model else "deepseek-v4-flash"
 
         model = build_chat_model(
-            api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
+            api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384,
+            prompt_cache=prompt_cache,
         )
 
         # 尝试加载蓝湖 MCP 工具
@@ -581,7 +590,10 @@ async def create_testcase_agent(
 
         # 构建系统提示词（根据可用工具生成不同提示）
         if has_tools:
-            tool_names = "\n".join(f"- {t.name}: {t.description}" for t in all_tools)
+            # 按工具名排序，保证相同工具集下系统提示词前缀完全一致，提升缓存命中率
+            tool_names = "\n".join(
+                f"- {t.name}: {t.description}" for t in sorted(all_tools, key=lambda t: t.name)
+            )
             tool_notes = []
             if mcp_tools:
                 tool_notes.extend([
@@ -821,6 +833,8 @@ def _persist_testcases(
                     step_dict["variables"] = [v.model_dump(by_alias=True) for v in step.variables]
                 if step.assertions:
                     step_dict["assertions"] = [a.model_dump() for a in step.assertions]
+                if step.post_actions:
+                    step_dict["post_actions"] = [a.model_dump() for a in step.post_actions]
                 converted_steps.append(step_dict)
             else:
                 converted_steps.append(str(step))
@@ -865,6 +879,8 @@ def _persist_testcases(
                     pc_dict["variables"] = [v.model_dump(by_alias=True) for v in pc.variables]
                 if pc.assertions:
                     pc_dict["assertions"] = [a.model_dump() for a in pc.assertions]
+                if pc.post_actions:
+                    pc_dict["post_actions"] = [a.model_dump() for a in pc.post_actions]
                 converted_preset_conditions.append(pc_dict)
             else:
                 converted_preset_conditions.append(str(pc))
@@ -1068,6 +1084,8 @@ async def generate_testcases(
 
     if model_type == "api":
         try:
+            # prompt 缓存开关：None=按 base_url 自动判定（DeepSeek 开启），可由 config 强制
+            prompt_cache_cfg = config_manager.get_prompt_cache_enabled()
             # 诊断回调在所有分支前初始化，避免 parsed_content 直连分支引用未赋值变量
             _diagnostic_cb = _TokenUsageCallback()
             # 从用户配置的 MCP 服务器构建工具
@@ -1086,7 +1104,8 @@ async def generate_testcases(
                 # 外部文档内容已预取到 prompt，直接调用模型结构化输出，跳过 agent ReAct 循环。
                 logger.info("文档内容已预取，直接调用模型（跳过 agent）")
                 model = build_chat_model(
-                    api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
+                    api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384,
+                    prompt_cache=prompt_cache_cfg,
                 )
                 response = await _structured_output_robust(
                     model,
@@ -1111,6 +1130,7 @@ async def generate_testcases(
                         custom_tools=custom_mcp_tools,
                         system_prompt=selected_prompt,
                         response_format=selected_schema,
+                        prompt_cache=prompt_cache_cfg,
                     )
                     logger.info(f"调用agent: requirement size={len(requirement)} preview={requirement[:300]}... tail={requirement[-200:]}")
                     _diagnostic_cb = _TokenUsageCallback()
@@ -1132,7 +1152,8 @@ async def generate_testcases(
                     # 无 MCP 工具时直接调用模型结构化输出，跳过 agent
                     logger.info("无 MCP 工具，直接调用模型结构化输出（跳过 agent）")
                     model = build_chat_model(
-                        api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
+                        api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384,
+                        prompt_cache=prompt_cache_cfg,
                     )
                     _diagnostic_cb = _TokenUsageCallback()
                     response = await _structured_output_robust(
@@ -1226,6 +1247,19 @@ async def generate_testcases(
         # 验证local_testcases是否为列表
         if not isinstance(local_testcases, list):
             raise ValueError(f"测试用例必须是列表类型，实际类型: {type(local_testcases).__name__}")
+
+        # 自动补全依赖接口的前置"新增"步骤（仅接口测试且已加载接口映射时）
+        if is_api_test and kwargs.get("endpoint_index_to_id"):
+            try:
+                from app.services.testcase_service import ensure_prerequisite_steps
+                local_testcases = ensure_prerequisite_steps(
+                    local_testcases,
+                    endpoint_index_to_id=kwargs.get("endpoint_index_to_id", {}),
+                    db_session=kwargs.get("db_session"),
+                    api_project_id=kwargs.get("api_project_id"),
+                )
+            except Exception as e:
+                logger.warning(f"前置依赖补全失败（已忽略，不影响生成）: {e}")
 
         # 转换为 DBTestCase 并保存历史提示词
         db_testcases = _persist_testcases(

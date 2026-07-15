@@ -9,6 +9,7 @@ import {
   ExclamationCircleOutlined,
   HistoryOutlined,
   BranchesOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
 
@@ -24,6 +25,7 @@ interface TestCaseTableProps {
   onApiExecute?: (testcase: TestCase) => void;
   onViewExecutionLogs?: (testcase: TestCase) => void;
   onInferDependencies?: (testcase: TestCase) => void;
+  onValidate?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
   bugLinkTemplate?: string;
 }
@@ -32,6 +34,22 @@ const statusConfig: Record<string, { label: string; dotClass: string; textClass:
   PASSED: { label: '已通过', dotClass: 'tcm-status-dot--passed', textClass: 'tcm-status-text--passed' },
   FAILED: { label: '未通过', dotClass: 'tcm-status-dot--failed', textClass: 'tcm-status-text--failed' },
   NOT_RUN: { label: '未执行', dotClass: 'tcm-status-dot--not_run', textClass: 'tcm-status-text--not_run' },
+};
+
+const safeParse = (text?: string | null): any => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const validationStatusMeta: Record<string, { label: string; color: string }> = {
+  passed: { label: '验证通过', color: 'green' },
+  failed: { label: '验证未通过', color: 'red' },
+  error: { label: '验证错误', color: 'volcano' },
+  pending: { label: '待验证', color: 'default' },
 };
 
 const TestCaseTable: React.FC<TestCaseTableProps> = ({
@@ -46,6 +64,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onApiExecute,
   onViewExecutionLogs,
   onInferDependencies,
+  onValidate,
   onBatchMove,
   bugLinkTemplate,
 }) => {
@@ -168,6 +187,46 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       },
     },
     {
+      title: '准确性',
+      key: 'accuracy',
+      width: 150,
+      align: 'center' as const,
+      render: (_: unknown, record: TestCase) => {
+        if (!record.api_endpoint_id) {
+          return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
+        }
+        const report = safeParse(record.consistency_report);
+        const passRate = report?.pass_rate;
+        const confLevel = record.confidence_level;
+        const valStatus = record.validation_status;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+            {passRate !== undefined && passRate !== null ? (
+              <Tooltip title="一致性通过率（对照 Swagger）">
+                <Tag color={passRate >= 1 ? 'green' : passRate >= 0.6 ? 'orange' : 'red'} style={{ margin: 0 }}>
+                  一致 {Math.round(passRate * 100)}%
+                </Tag>
+              </Tooltip>
+            ) : null}
+            {confLevel ? (
+              <Tooltip title="置信度等级：高/中/低（人工复核优先级）">
+                <Tag color={confLevel === 'high' ? 'green' : confLevel === 'medium' ? 'gold' : 'red'} style={{ margin: 0 }}>
+                  {confLevel === 'high' ? '高置信' : confLevel === 'medium' ? '中置信' : '低置信'}
+                </Tag>
+              </Tooltip>
+            ) : null}
+            {valStatus ? (
+              <Tooltip title="真实执行验证结果">
+                <Tag color={validationStatusMeta[valStatus]?.color || 'default'} style={{ margin: 0 }}>
+                  {validationStatusMeta[valStatus]?.label || valStatus}
+                </Tag>
+              </Tooltip>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
@@ -250,6 +309,13 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             <Tooltip title="推断依赖" placement="top">
               <button className="tcm-action-btn tcm-action-btn--infer" onClick={(event) => { stopRowClick(event); onInferDependencies(record); }}>
                 <BranchesOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onValidate && record.api_endpoint_id && (
+            <Tooltip title="验证（真实执行）" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--validate" onClick={(event) => { stopRowClick(event); onValidate!(record); }}>
+                <SafetyCertificateOutlined />
               </button>
             </Tooltip>
           )}

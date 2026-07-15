@@ -24,6 +24,23 @@ from utils.document_prefetch import (
 
 logger = logging.getLogger(__name__)
 
+from app.services.api_consistency import check_testcase_consistency, score_confidence
+from utils.helpers import _upsert_history_prompt
+
+
+def _compute_accuracy(case_data: dict, endpoint_index_to_id: dict, session) -> "tuple[dict, float, str]":
+    """计算用例一致性与置信度，返回 (report_dict, score, level)。无 LLM。"""
+    from db.models import ApiEndpoint
+    endpoints = {}
+    for ordinal, eid in endpoint_index_to_id.items():
+        ep = session.get(ApiEndpoint, eid)
+        if ep is not None:
+            endpoints[eid] = ep
+    report = check_testcase_consistency(case_data, endpoint_index_to_id, endpoints)
+    score, level = score_confidence(report, case_data)
+    return report, score, level
+
+
 # 内存中的 pipeline 任务状态存储
 _pipeline_tasks: Dict[str, Dict[str, Any]] = {}
 
@@ -142,6 +159,74 @@ def _build_pipeline_scenario_steps(testcase, endpoint_map: dict, endpoint_index_
     return scenario_steps
 
 
+def merge_entities_by_position(
+    existing: list,
+    generated: list,
+    *,
+    max_keep: int | None = None,
+) -> tuple[list, list, list]:
+    """
+    按位置顺序匹配，计算就地更新动作。
+
+    Args:
+        existing: 已存在的实体列表（按稳定顺序，如按 id 升序）。
+        generated: 新生成的实体数据列表（可能为含空 dict 的占位）。
+        max_keep: 最多保留的生成数量（None 表示全部保留）。
+
+    Returns:
+        (to_update, to_create, to_delete)
+        - to_update: [(existing[i], generated[i])] 需要更新的 (实体, 新数据) 对
+        - to_create: [generated[i]] 需要新建的数据（i >= len(existing)）
+        - to_delete: [existing[i]] 多余的旧实体（i >= 生成数量）
+    保留 generated 中位置 < len(existing) 但内容为空的占位项（跳过，不更新也不删）。
+    """
+    if max_keep is not None:
+        generated = generated[:max_keep]
+
+    to_update: list = []
+    to_create: list = []
+    to_delete: list = []
+
+    for i, gen in enumerate(generated):
+        is_empty = (gen is None) or (isinstance(gen, dict) and not gen)
+        if i < len(existing):
+            if is_empty:
+                # 占位空项：既不更新也不删除已有实体（保留现状）
+                continue
+            to_update.append((existing[i], gen))
+        else:
+            if is_empty:
+                continue
+            to_create.append(gen)
+
+    # 多余旧实体删除
+    for i in range(len(generated), len(existing)):
+        to_delete.append(existing[i])
+
+    return to_update, to_create, to_delete
+
+
+def _is_empty_case(tc: "TestCase") -> bool:
+    return not (tc.case_name or tc.steps)
+
+
+def _is_empty_tp(tp: "TestPoint") -> bool:
+    return not tp.content
+
+
+def _cascade_delete_test_point(session, tp):
+    """级联删除测试点及其下所有用例 + 孤儿场景（提交由调用方统一处理）。"""
+    from db.models import TestCase, ApiScenario
+    cases = session.exec(select(TestCase).where(TestCase.test_point_id == tp.id)).all()
+    for c in cases:
+        if c.scenario_id:
+            sc = session.get(ApiScenario, c.scenario_id)
+            if sc:
+                session.delete(sc)
+        session.delete(c)
+    session.delete(tp)
+
+
 class PipelineRunner:
     """4阶段 Pipeline 编排器（支持功能测试和接口测试）"""
 
@@ -228,6 +313,47 @@ class PipelineRunner:
                 "error": error,
             })
 
+    def _save_history_prompt(
+        self,
+        task_id: str,
+        session_id: int,
+        module_id: Optional[int],
+        user_id: Optional[str],
+        requirement_text: str,
+        original_requirement: str,
+    ):
+        """保存本次生成的需求描述到历史提示词记录。
+
+        仅保存用户原始需求（或文档链接预取后的正文），不保存技能注入前缀与
+        接口 schema 上下文，避免历史记录被无关内容污染。
+        """
+        # 剥离技能注入前缀（"## 激活的测试方法论技能 ... ## 用户需求\\n\\n"）
+        content = requirement_text
+        if content.startswith("## 激活的测试方法论技能"):
+            idx = content.find("## 用户需求")
+            if idx != -1:
+                content = content[idx + len("## 用户需求"):].lstrip("\n")
+
+        # 若需求文本与原始输入不同（说明含文档链接且已被预取为文档正文），
+        # 优先保存预取后的文档正文；否则保存用户原始输入
+        has_doc_url = bool(
+            _FEISHU_URL_RE.search(original_requirement)
+            or _LANHU_URL_RE.search(original_requirement)
+        )
+        if has_doc_url and content.strip() != original_requirement.strip():
+            save_content = content
+        else:
+            save_content = original_requirement
+
+        _upsert_history_prompt(
+            self.db,
+            content=save_content,
+            module_id=module_id,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        logger.info(f"[Pipeline {task_id[:8]}] 已保存历史提示词")
+
     async def run(
         self,
         session_id: int,
@@ -240,6 +366,7 @@ class PipelineRunner:
         api_project_id: Optional[int] = None,
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
         api_context: str = "",
+        original_requirement: str = "",
     ) -> str:
         """
         启动 4 阶段 pipeline（异步执行）
@@ -259,6 +386,9 @@ class PipelineRunner:
             task_id: 任务ID，可用于查询进度
         """
         task_id = self._create_task()
+
+        # 保留用户原始需求（注入技能前），用于保存历史提示词
+        original_requirement = requirement_text
 
         # 注入技能内容到需求文本
         if selected_skills:
@@ -285,6 +415,7 @@ class PipelineRunner:
                 api_project_id=api_project_id,
                 endpoint_index_to_id=endpoint_index_to_id or {},
                 api_context=api_context,
+                original_requirement=original_requirement,
             )
         )
 
@@ -306,6 +437,7 @@ class PipelineRunner:
         api_project_id: Optional[int] = None,
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
         api_context: str = "",
+        original_requirement: str = "",
     ):
         """执行完整的 4 阶段 pipeline"""
         from db.models import RequirementPoint, TestPoint, TestCase
@@ -324,7 +456,11 @@ class PipelineRunner:
             # ========== 阶段1: 需求拆分 (0-25%) ==========
             self._update_progress(task_id, 1, "需求拆分", 5, "正在分析需求文档...")
 
-            requirement_points_data = await self.splitter.analyze(requirement_text)
+            requirement_points_data = await self.splitter.analyze(
+                requirement_text,
+                is_api_test=is_api_test,
+                api_context=api_context,
+            )
 
             if not requirement_points_data:
                 raise ValueError("未生成任何需求点")
@@ -335,7 +471,7 @@ class PipelineRunner:
                 rp = RequirementPoint(
                     session_id=session_id,
                     content=rp_data.get("content", ""),
-                    module=rp_data.get("module", ""),
+                    module_id=module_id,
                     priority=rp_data.get("priority", "medium"),
                     order_index=rp_data.get("order_index", idx),
                     user_id=user_id,
@@ -360,7 +496,11 @@ class PipelineRunner:
             async def _gen_for_point(rp):
                 async with sem:
                     try:
-                        return rp, await self.tp_generator.generate(rp.content)
+                        return rp, await self.tp_generator.generate(
+                            rp.content,
+                            is_api_test=is_api_test,
+                            api_context=api_context,
+                        )
                     except Exception as e:
                         logger.error(f"需求点 {rp.id} 测试点生成失败: {e}")
                         return rp, []
@@ -495,6 +635,16 @@ class PipelineRunner:
                         tc_kwargs["expected_results"] = [
                             s.get("expected", "") for s in steps
                         ] if steps else []
+
+                    # 准确性后处理（一致性 + 置信度），仅接口测试
+                    if is_api_test and api_endpoint_ids and endpoint_index_to_id:
+                        try:
+                            report, score, level = _compute_accuracy(case_data, endpoint_index_to_id, self.db)
+                            tc_kwargs["consistency_report"] = json.dumps(report, ensure_ascii=False)
+                            tc_kwargs["confidence_score"] = score
+                            tc_kwargs["confidence_level"] = level
+                        except Exception as _acc_err:
+                            logger.warning("[Pipeline] 准确性计算失败: %s", _acc_err)
 
                     tc = TestCase(**tc_kwargs)
                     self.db.add(tc)
@@ -699,6 +849,15 @@ class PipelineRunner:
                 except Exception as e:
                     logger.error(f"用例优化失败: {e}")
 
+            # 保存历史提示词（需求描述），仅整体生成成功时记录
+            try:
+                self._save_history_prompt(
+                    task_id, session_id, module_id, user_id,
+                    requirement_text, original_requirement,
+                )
+            except Exception as e:
+                logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
+
             # 完成
             self._complete_task(task_id, {
                 "requirement_points_count": len(req_points),
@@ -715,4 +874,465 @@ class PipelineRunner:
 
         except Exception as e:
             logger.error(f"Pipeline 执行失败: {e}", exc_info=True)
+            self._fail_task(task_id, str(e))
+
+    # ===================== 复用：用例构造 + 场景同步 =====================
+
+    def _build_testcase_kwargs(
+        self,
+        case_data: dict,
+        *,
+        test_point_id: int,
+        session_id: int,
+        requirement_content: str,
+        is_api_test: bool,
+        api_context: str,
+        endpoint_index_to_id: Dict[int, int],
+        api_project_id: Optional[int],
+        api_endpoint_ids: Optional[List[int]],
+        module_id: Optional[int],
+        user_id: Optional[str],
+        test_type: Optional[str] = None,
+        design_method: Optional[str] = None,
+        priority: Optional[str] = "medium",
+    ) -> dict:
+        """从 designer 输出的单条 case_data 构造 TestCase 构造参数（不含 id）。"""
+        steps = case_data.get("test_steps", [])
+
+        if is_api_test and isinstance(steps, list):
+            converted = []
+            for s in steps:
+                if isinstance(s, dict):
+                    s = dict(s)
+                    if s.get("endpoint_id") or s.get("endpoint_ref"):
+                        if not s.get("type"):
+                            s["type"] = "api_call"
+                    if s.get("endpoint_ref") and endpoint_index_to_id:
+                        ref = s.pop("endpoint_ref", None)
+                        eid = endpoint_index_to_id.get(int(ref)) if ref else None
+                        if eid:
+                            s["endpoint_id"] = eid
+                converted.append(s)
+            steps = converted
+            steps = _normalize_pipeline_api_steps(steps, endpoint_index_to_id)
+
+        tc_kwargs = dict(
+            case_name=case_data.get("title", ""),
+            steps=steps if isinstance(steps, list) else [],
+            preset_conditions=case_data.get("preconditions", []) or [],
+            case_level=case_data.get("case_level", 1),
+            session_id=session_id,
+            module_id=module_id,
+            test_point_id=test_point_id,
+            test_type=case_data.get("test_type") or test_type,
+            design_method=case_data.get("design_method") or design_method,
+            user_id=user_id,
+        )
+
+        if is_api_test:
+            tc_kwargs["expected_results"] = [
+                s.get("description", "") if isinstance(s, dict) else str(s)
+                for s in steps
+            ] if steps else []
+            if api_endpoint_ids:
+                tc_kwargs["api_endpoint_id"] = ",".join(str(eid) for eid in api_endpoint_ids)
+            if api_project_id:
+                tc_kwargs["api_project_id"] = api_project_id
+            assertions = case_data.get("assertions")
+            if assertions:
+                tc_kwargs["assertions"] = assertions
+        else:
+            tc_kwargs["expected_results"] = [
+                s.get("expected", "") for s in steps
+            ] if steps else []
+
+        return tc_kwargs
+
+    def _sync_api_scenarios(
+        self,
+        test_cases: list,
+        *,
+        api_project_id: int,
+        endpoint_index_to_id: Dict[int, int],
+        user_id: Optional[str],
+    ) -> None:
+        """为 test_cases 中带 API 调用步骤的用例创建/更新 ApiScenario，并回写 scenario_id。"""
+        from db.models import ApiScenario, ApiEndpoint as ApiEndpointModel
+
+        all_endpoint_ids = _collect_pipeline_endpoint_ids(test_cases, endpoint_index_to_id)
+        endpoint_map: dict[int, ApiEndpointModel] = {}
+        if all_endpoint_ids:
+            rows = self.db.exec(
+                select(ApiEndpointModel).where(ApiEndpointModel.id.in_(list(all_endpoint_ids)))
+            ).all()
+            endpoint_map = {e.id: e for e in rows}
+
+        for tc in test_cases:
+            api_steps = []
+            for pc in (tc.preset_conditions or []):
+                if _is_pipeline_api_call_step(pc) and _resolve_pipeline_endpoint_id(pc, endpoint_index_to_id):
+                    api_steps.append(("preset", pc))
+            for step in (tc.steps or []):
+                if _is_pipeline_api_call_step(step) and _resolve_pipeline_endpoint_id(step, endpoint_index_to_id):
+                    api_steps.append(("step", step))
+            if not api_steps:
+                continue
+
+            scenario_steps = []
+            for step_type, s in api_steps:
+                step_copy = _normalize_pipeline_api_step(s, endpoint_index_to_id)
+                eid = _resolve_pipeline_endpoint_id(s, endpoint_index_to_id)
+                if eid:
+                    step_copy["endpoint_id"] = eid
+                    step_copy.pop("endpoint_ref", None)
+                ep = endpoint_map.get(eid) if eid else None
+                if ep:
+                    step_copy.setdefault("method", ep.method)
+                    step_copy.setdefault("path", ep.path)
+                    step_copy.setdefault("url", ep.url or ep.path)
+                    step_copy.setdefault("endpoint_name", ep.name)
+                    step_copy.setdefault("enabled", True)
+                    step_copy.setdefault("continue_on_failure", True)
+                if step_type == "preset":
+                    step_copy["is_preset"] = True
+                scenario_steps.append(step_copy)
+
+            if tc.scenario_id:
+                scenario = self.db.get(ApiScenario, tc.scenario_id)
+                if scenario:
+                    scenario.steps = scenario_steps
+                    scenario.name = f"{tc.case_name}_场景"
+                    self.db.add(scenario)
+                    continue
+            scenario = ApiScenario(
+                project_id=api_project_id,
+                name=f"{tc.case_name}_场景",
+                description=f"测试用例 {tc.case_name} 的接口场景",
+                steps=scenario_steps,
+                user_id=user_id,
+            )
+            self.db.add(scenario)
+            self.db.flush()
+            tc.scenario_id = scenario.id
+
+    # ===================== 就地更新：用例 =====================
+
+    async def _inplace_update_cases(
+        self,
+        test_point,
+        requirement_content: str,
+        *,
+        is_api_test: bool,
+        api_context: str = "",
+        endpoint_index_to_id: Optional[Dict[int, int]] = None,
+        api_project_id: Optional[int] = None,
+        api_endpoint_ids: Optional[List[int]] = None,
+        module_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+    ) -> int:
+        """
+        用 LLM 为一个测试点重设计用例，并就地更新其下已有关联用例（去重、不重复）。
+
+        Returns: 该测试点下最终用例数量。
+        """
+        from db.models import TestCase
+
+        endpoint_index_to_id = endpoint_index_to_id or {}
+
+        # 1) 调 LLM 生成（design_batch 强制 len == 1，缺失返回 {}）
+        cases_data = await self.tc_designer.design_batch(
+            [{
+                "id": test_point.id,
+                "content": test_point.content,
+                "test_type": test_point.test_type,
+                "design_method": test_point.design_method,
+                "priority": test_point.priority,
+            }],
+            requirement_content,
+            is_api_test=is_api_test,
+            api_context=api_context,
+        )
+        generated = cases_data[0] if cases_data else {}
+
+        # 2) 读取该测试点下已有关联用例（按 id 稳定顺序）
+        existing: list = self.db.exec(
+            select(TestCase).where(TestCase.test_point_id == test_point.id).order_by(TestCase.id)
+        ).all()
+
+        # 3) 按位置匹配
+        to_update, to_create, to_delete = merge_entities_by_position(existing, [generated])
+
+        # 4) 删除多余旧用例（同时清理其孤儿场景）
+        for old in to_delete:
+            if old.scenario_id:
+                from db.models import ApiScenario
+                sc = self.db.get(ApiScenario, old.scenario_id)
+                if sc:
+                    self.db.delete(sc)
+            self.db.delete(old)
+
+        # 5) 更新已有（保留 id）
+        for old, gen in to_update:
+            kwargs = self._build_testcase_kwargs(
+                gen,
+                test_point_id=test_point.id,
+                session_id=test_point.session_id,
+                requirement_content=requirement_content,
+                is_api_test=is_api_test,
+                api_context=api_context,
+                endpoint_index_to_id=endpoint_index_to_id,
+                api_project_id=api_project_id,
+                api_endpoint_ids=api_endpoint_ids,
+                module_id=module_id,
+                user_id=user_id,
+                test_type=test_point.test_type,
+                design_method=test_point.design_method,
+                priority=test_point.priority,
+            )
+            for k, v in kwargs.items():
+                setattr(old, k, v)
+            self.db.add(old)
+
+        # 6) 新建缺失
+        created: list = []
+        for gen in to_create:
+            kwargs = self._build_testcase_kwargs(
+                gen,
+                test_point_id=test_point.id,
+                session_id=test_point.session_id,
+                requirement_content=requirement_content,
+                is_api_test=is_api_test,
+                api_context=api_context,
+                endpoint_index_to_id=endpoint_index_to_id,
+                api_project_id=api_project_id,
+                api_endpoint_ids=api_endpoint_ids,
+                module_id=module_id,
+                user_id=user_id,
+                test_type=test_point.test_type,
+                design_method=test_point.design_method,
+                priority=test_point.priority,
+            )
+            tc = TestCase(**kwargs)
+            self.db.add(tc)
+            created.append(tc)
+
+        kept_existing = [old for old, _ in to_update]
+        self.db.commit()
+        for tc in (kept_existing + created):
+            self.db.refresh(tc)
+
+        # 7) 接口测试：为所有（更新+新建）用例同步 ApiScenario
+        # 仅包含保留下来的用例，避免为已删除用例生成孤儿场景
+        all_cases = [t for t in (kept_existing + created) if not _is_empty_case(t)]
+        if is_api_test and api_project_id and all_cases:
+            self._sync_api_scenarios(
+                all_cases,
+                api_project_id=api_project_id,
+                endpoint_index_to_id=endpoint_index_to_id,
+                user_id=user_id,
+            )
+            self.db.commit()
+
+        return len(all_cases)
+
+    # ===================== 就地更新：测试点（级联到用例） =====================
+
+    async def _inplace_update_test_points(
+        self,
+        requirement_point,
+        requirement_content: str,
+        *,
+        is_api_test: bool,
+        api_context: str = "",
+        endpoint_index_to_id: Optional[Dict[int, int]] = None,
+        api_project_id: Optional[int] = None,
+        api_endpoint_ids: Optional[List[int]] = None,
+        module_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+    ) -> list:
+        """
+        用 LLM 为需求点重生成测试点，并就地更新其下已有关联测试点；
+        每个（更新/新建的）测试点再就地重生成用例（一步到位）。
+        返回最终测试点列表。
+        """
+        from db.models import TestPoint
+
+        endpoint_index_to_id = endpoint_index_to_id or {}
+
+        tp_data_list = await self.tp_generator.generate(
+            requirement_point.content,
+            is_api_test=is_api_test,
+            api_context=api_context,
+        )
+
+        existing: list = self.db.exec(
+            select(TestPoint)
+            .where(TestPoint.requirement_point_id == requirement_point.id)
+            .order_by(TestPoint.id)
+        ).all()
+
+        to_update, to_create, to_delete = merge_entities_by_position(existing, tp_data_list)
+
+        # 删除多余旧测试点（级联删其用例 + 孤儿场景）
+        for old in to_delete:
+            _cascade_delete_test_point(self.db, old)
+
+        # 更新已有测试点（保留 id）
+        for old, gen in to_update:
+            old.content = gen.get("content", old.content)
+            old.test_type = gen.get("test_type", old.test_type)
+            old.design_method = gen.get("design_method", old.design_method)
+            old.priority = gen.get("priority", old.priority)
+            old.api_project_id = api_project_id
+            old.api_endpoint_ids = ",".join(str(e) for e in api_endpoint_ids) if api_endpoint_ids else None
+            self.db.add(old)
+
+        # 新建缺失测试点
+        created: list = []
+        for gen in to_create:
+            tp = TestPoint(
+                requirement_point_id=requirement_point.id,
+                session_id=requirement_point.session_id,
+                content=gen.get("content", ""),
+                test_type=gen.get("test_type", "functional"),
+                design_method=gen.get("design_method", ""),
+                priority=gen.get("priority", "medium"),
+                user_id=user_id,
+                api_project_id=api_project_id,
+                api_endpoint_ids=",".join(str(e) for e in api_endpoint_ids) if api_endpoint_ids else None,
+            )
+            self.db.add(tp)
+            created.append(tp)
+
+        kept_existing = [old for old, _ in to_update]
+        self.db.commit()
+        for tp in (kept_existing + created):
+            self.db.refresh(tp)
+
+        # 一步到位：为每个测试点就地重生成用例
+        # 仅对保留下来的测试点执行，避免为已删除测试点生成孤儿用例
+        kept_existing = [old for old, _ in to_update]
+        final_tps = [t for t in (kept_existing + created) if not _is_empty_tp(t)]
+        for tp in final_tps:
+            await self._inplace_update_cases(
+                tp,
+                requirement_content,
+                is_api_test=is_api_test,
+                api_context=api_context,
+                endpoint_index_to_id=endpoint_index_to_id,
+                api_project_id=api_project_id,
+                api_endpoint_ids=api_endpoint_ids,
+                module_id=module_id,
+                user_id=user_id,
+            )
+        return final_tps
+
+    # ===================== 重生成入口（异步任务包装） =====================
+
+    def _resolve_api_context(self, api_project_id, api_endpoint_ids_str):
+        """根据测试点/需求点上的 api 字段重建接口上下文。"""
+        from app.services.api_context import build_api_context, parse_endpoint_ids
+        from app.routes.testcase import infer_endpoint_dependencies
+
+        api_endpoint_ids = parse_endpoint_ids(api_endpoint_ids_str) if api_endpoint_ids_str else []
+        is_api_test = bool(api_endpoint_ids and api_project_id)
+        endpoint_index_to_id: Dict[int, int] = {}
+        api_context = ""
+        if is_api_test:
+            extra = infer_endpoint_dependencies(self.db, api_endpoint_ids, api_project_id)
+            for eid in extra:
+                if eid not in api_endpoint_ids:
+                    api_endpoint_ids.append(eid)
+            api_context, endpoint_index_to_id = build_api_context(
+                self.db, api_endpoint_ids, api_project_id, {},
+            )
+        return is_api_test, api_context, endpoint_index_to_id, api_project_id, api_endpoint_ids
+
+    async def regenerate_test_point(
+        self,
+        task_id: str,
+        test_point_id: int,
+        user_id: Optional[str] = None,
+        *,
+        module_id: Optional[int] = None,
+    ) -> None:
+        """重生成单个测试点的用例（就地更新）。"""
+        from db.db import engine
+        from sqlmodel import Session as DBSession
+        from db.models import TestPoint
+        try:
+            with DBSession(engine) as session:
+                self.db = session
+                tp = session.get(TestPoint, test_point_id)
+                if not tp:
+                    raise ValueError("测试点不存在")
+
+                is_api_test, api_context, endpoint_index_to_id, api_project_id, api_endpoint_ids = \
+                    self._resolve_api_context(tp.api_project_id, tp.api_endpoint_ids)
+
+                requirement_content = tp.content  # 测试点级用测试点内容作为上下文
+                count = await self._inplace_update_cases(
+                    tp,
+                    requirement_content,
+                    is_api_test=is_api_test,
+                    api_context=api_context,
+                    endpoint_index_to_id=endpoint_index_to_id,
+                    api_project_id=api_project_id,
+                    api_endpoint_ids=api_endpoint_ids,
+                    module_id=module_id,
+                    user_id=user_id,
+                )
+                self._complete_task(task_id, {
+                    "test_point_id": test_point_id,
+                    "cases_count": count,
+                    "is_api_test": is_api_test,
+                })
+        except Exception as e:
+            logger.error(f"重生成测试点用例失败: {e}", exc_info=True)
+            self._fail_task(task_id, str(e))
+
+    async def regenerate_requirement_point(
+        self,
+        task_id: str,
+        requirement_point_id: int,
+        user_id: Optional[str] = None,
+        *,
+        module_id: Optional[int] = None,
+    ) -> None:
+        """重生成需求点下的测试点（一步到位级联到用例）。"""
+        from db.db import engine
+        from sqlmodel import Session as DBSession
+        from db.models import RequirementPoint
+        try:
+            with DBSession(engine) as session:
+                self.db = session
+                rp = session.get(RequirementPoint, requirement_point_id)
+                if not rp:
+                    raise ValueError("需求点不存在")
+
+                # 未显式传入时继承需求点已有的 module_id
+                if module_id is None:
+                    module_id = rp.module_id
+
+                is_api_test, api_context, endpoint_index_to_id, api_project_id, api_endpoint_ids = \
+                    self._resolve_api_context(rp.api_project_id, rp.api_endpoint_ids)
+
+                final_tps = await self._inplace_update_test_points(
+                    rp,
+                    rp.content,
+                    is_api_test=is_api_test,
+                    api_context=api_context,
+                    endpoint_index_to_id=endpoint_index_to_id,
+                    api_project_id=api_project_id,
+                    api_endpoint_ids=api_endpoint_ids,
+                    module_id=module_id,
+                    user_id=user_id,
+                )
+                self._complete_task(task_id, {
+                    "requirement_point_id": requirement_point_id,
+                    "test_points_count": len(final_tps),
+                    "is_api_test": is_api_test,
+                })
+        except Exception as e:
+            logger.error(f"重生成需求点测试点失败: {e}", exc_info=True)
             self._fail_task(task_id, str(e))

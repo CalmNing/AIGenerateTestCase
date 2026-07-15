@@ -243,6 +243,11 @@
   color: var(--color-text-secondary);
 }
 
+.tcm-action-btn--validate:hover {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
 /* --- Batch Action Bar --- */
 .tcm-batch-bar {
   display: flex;

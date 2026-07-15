@@ -95,6 +95,19 @@
   margin-bottom: 10px;
 }
 
+.tcg-api-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tcg-select-all-count {
+  margin-left: 4px;
+  font-size: 11px;
+  opacity: 0.8;
+  font-weight: 400;
+}
+
 .tcg-api-label {
   font-size: 13px;
   font-weight: 600;

@@ -21,6 +21,7 @@ export interface TestCase {
   case_level: number;
   preset_conditions: (string | Record<string, any>)[];
   created_at: string;
+  updated_at?: string;
   status?: TestCaseStatus; // 测试用例状态：NOT_RUN（未运行）、PASSED（通过）、FAILED（未通过）
   bug_id?: number;
   session_id: number;
@@ -31,6 +32,14 @@ export interface TestCase {
   assertions?: Record<string, any>[] | null;
   scenario_id?: number | null;
   scenario_steps?: { method: string; path: string; name: string }[];
+  test_point_id?: number | null; // 关联的测试点 ID（4 阶段 pipeline 生成时回填）
+  // 准确性保证字段
+  consistency_report?: string | null;
+  confidence_score?: number | null;
+  confidence_level?: 'high' | 'medium' | 'low' | null;
+  validation_status?: 'pending' | 'passed' | 'failed' | 'error' | null;
+  validation_detail?: string | null;
+  validation_at?: string | null;
   steps: (string | Record<string, any>)[];
   expected_results: (string | Record<string, any>)[];
 }
@@ -259,6 +268,7 @@ export interface ApiEndpoint {
   id: number;
   project_id: number;
   name: string;
+  description?: string;   // 接口业务描述（生成接口测试用例时使用）
   method: string;
   path: string;
   url?: string | null;
