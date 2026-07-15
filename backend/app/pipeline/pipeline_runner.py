@@ -25,6 +25,7 @@ from utils.document_prefetch import (
 logger = logging.getLogger(__name__)
 
 from app.services.api_consistency import check_testcase_consistency, score_confidence
+from utils.helpers import _upsert_history_prompt
 
 
 def _compute_accuracy(case_data: dict, endpoint_index_to_id: dict, session) -> "tuple[dict, float, str]":
@@ -312,6 +313,47 @@ class PipelineRunner:
                 "error": error,
             })
 
+    def _save_history_prompt(
+        self,
+        task_id: str,
+        session_id: int,
+        module_id: Optional[int],
+        user_id: Optional[str],
+        requirement_text: str,
+        original_requirement: str,
+    ):
+        """保存本次生成的需求描述到历史提示词记录。
+
+        仅保存用户原始需求（或文档链接预取后的正文），不保存技能注入前缀与
+        接口 schema 上下文，避免历史记录被无关内容污染。
+        """
+        # 剥离技能注入前缀（"## 激活的测试方法论技能 ... ## 用户需求\\n\\n"）
+        content = requirement_text
+        if content.startswith("## 激活的测试方法论技能"):
+            idx = content.find("## 用户需求")
+            if idx != -1:
+                content = content[idx + len("## 用户需求"):].lstrip("\n")
+
+        # 若需求文本与原始输入不同（说明含文档链接且已被预取为文档正文），
+        # 优先保存预取后的文档正文；否则保存用户原始输入
+        has_doc_url = bool(
+            _FEISHU_URL_RE.search(original_requirement)
+            or _LANHU_URL_RE.search(original_requirement)
+        )
+        if has_doc_url and content.strip() != original_requirement.strip():
+            save_content = content
+        else:
+            save_content = original_requirement
+
+        _upsert_history_prompt(
+            self.db,
+            content=save_content,
+            module_id=module_id,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        logger.info(f"[Pipeline {task_id[:8]}] 已保存历史提示词")
+
     async def run(
         self,
         session_id: int,
@@ -324,6 +366,7 @@ class PipelineRunner:
         api_project_id: Optional[int] = None,
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
         api_context: str = "",
+        original_requirement: str = "",
     ) -> str:
         """
         启动 4 阶段 pipeline（异步执行）
@@ -343,6 +386,9 @@ class PipelineRunner:
             task_id: 任务ID，可用于查询进度
         """
         task_id = self._create_task()
+
+        # 保留用户原始需求（注入技能前），用于保存历史提示词
+        original_requirement = requirement_text
 
         # 注入技能内容到需求文本
         if selected_skills:
@@ -369,6 +415,7 @@ class PipelineRunner:
                 api_project_id=api_project_id,
                 endpoint_index_to_id=endpoint_index_to_id or {},
                 api_context=api_context,
+                original_requirement=original_requirement,
             )
         )
 
@@ -390,6 +437,7 @@ class PipelineRunner:
         api_project_id: Optional[int] = None,
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
         api_context: str = "",
+        original_requirement: str = "",
     ):
         """执行完整的 4 阶段 pipeline"""
         from db.models import RequirementPoint, TestPoint, TestCase
@@ -408,7 +456,11 @@ class PipelineRunner:
             # ========== 阶段1: 需求拆分 (0-25%) ==========
             self._update_progress(task_id, 1, "需求拆分", 5, "正在分析需求文档...")
 
-            requirement_points_data = await self.splitter.analyze(requirement_text)
+            requirement_points_data = await self.splitter.analyze(
+                requirement_text,
+                is_api_test=is_api_test,
+                api_context=api_context,
+            )
 
             if not requirement_points_data:
                 raise ValueError("未生成任何需求点")
@@ -444,7 +496,11 @@ class PipelineRunner:
             async def _gen_for_point(rp):
                 async with sem:
                     try:
-                        return rp, await self.tp_generator.generate(rp.content)
+                        return rp, await self.tp_generator.generate(
+                            rp.content,
+                            is_api_test=is_api_test,
+                            api_context=api_context,
+                        )
                     except Exception as e:
                         logger.error(f"需求点 {rp.id} 测试点生成失败: {e}")
                         return rp, []
@@ -793,6 +849,15 @@ class PipelineRunner:
                 except Exception as e:
                     logger.error(f"用例优化失败: {e}")
 
+            # 保存历史提示词（需求描述），仅整体生成成功时记录
+            try:
+                self._save_history_prompt(
+                    task_id, session_id, module_id, user_id,
+                    requirement_text, original_requirement,
+                )
+            except Exception as e:
+                logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
+
             # 完成
             self._complete_task(task_id, {
                 "requirement_points_count": len(req_points),
@@ -1094,7 +1159,11 @@ class PipelineRunner:
 
         endpoint_index_to_id = endpoint_index_to_id or {}
 
-        tp_data_list = await self.tp_generator.generate(requirement_point.content)
+        tp_data_list = await self.tp_generator.generate(
+            requirement_point.content,
+            is_api_test=is_api_test,
+            api_context=api_context,
+        )
 
         existing: list = self.db.exec(
             select(TestPoint)

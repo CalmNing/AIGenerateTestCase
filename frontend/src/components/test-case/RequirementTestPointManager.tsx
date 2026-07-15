@@ -321,6 +321,18 @@ const RequirementTestPointManager: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // 深度生成（generate-v2）完成后自动刷新用例结构，避免“生成完但看不到需求点”
+  useEffect(() => {
+    const onPipelineCompleted = () => {
+      loadReqPoints(1, reqPageSize, true, filterModule);
+    };
+    window.addEventListener('pipeline-completed', onPipelineCompleted as EventListener);
+    return () => {
+      window.removeEventListener('pipeline-completed', onPipelineCompleted as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadReqPoints, reqPageSize, filterModule]);
+
   // 父级全局选中的模块变化时，同步到用例结构过滤条件并刷新
   const selectedModuleRef = useRef<number | string | undefined>(selectedModule);
   useEffect(() => {
@@ -813,10 +825,20 @@ const RequirementTestPointManager: React.FC<{
                 </div>
                 <div>
                   <div style={{ marginBottom: 4 }}>设计方法</div>
-                  <Input
-                    value={draft.design_method}
-                    onChange={(e) => setDraft({ ...draft, design_method: e.target.value })}
-                    placeholder="如 equivalence_partitioning / boundary_value"
+                  <Select
+                    allowClear
+                    showSearch
+                    placeholder="选择设计方法"
+                    style={{ width: '100%' }}
+                    optionFilterProp="label"
+                    value={draft.design_method || undefined}
+                    onChange={(v) => setDraft({ ...draft, design_method: v ?? '' })}
+                    options={[
+                      ...(draft.design_method && !DESIGN_METHOD_LABEL[draft.design_method]
+                        ? [{ value: draft.design_method, label: draft.design_method }]
+                        : []),
+                      ...Object.entries(DESIGN_METHOD_LABEL).map(([value, label]) => ({ value, label })),
+                    ]}
                   />
                 </div>
               </>

@@ -268,6 +268,7 @@ export interface ApiEndpoint {
   id: number;
   project_id: number;
   name: string;
+  description?: string;   // 接口业务描述（生成接口测试用例时使用）
   method: string;
   path: string;
   url?: string | null;

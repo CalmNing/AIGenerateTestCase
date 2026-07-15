@@ -505,7 +505,10 @@ async def generate_testcases(
     )
 
     if api_context:
-        effective_requirement = api_context + "\n\n## 用户需求\n\n" + requirement
+        # 接口测试中用户需求降为补充背景，避免模型脱离接口信息凭空生成用例
+        effective_requirement = (
+            api_context + "\n\n## 补充背景（次要，仅用于理解业务语境）\n\n" + requirement
+        )
     else:
         effective_requirement = requirement
 

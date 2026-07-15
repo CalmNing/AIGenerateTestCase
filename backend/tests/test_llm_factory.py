@@ -22,6 +22,40 @@ def test_build_chat_model_thinking_disabled_in_extra_body():
     assert extra.get("thinking") == {"type": "disabled"}
 
 
+def test_build_chat_model_prompt_cache_auto_on_for_deepseek():
+    model = build_chat_model("sk-test", api_model="m")
+    extra = getattr(model, "extra_body", None) or {}
+    assert extra.get("enable_prompt_cache") is True
+
+
+def test_build_chat_model_prompt_cache_auto_off_for_other_host():
+    model = build_chat_model(
+        "sk-test", api_base_url="https://api.openai.com/v1", api_model="gpt-4o"
+    )
+    extra = getattr(model, "extra_body", None) or {}
+    assert "enable_prompt_cache" not in extra
+
+
+def test_build_chat_model_prompt_cache_force_on_non_deepseek():
+    model = build_chat_model(
+        "sk-test",
+        api_base_url="https://my-proxy.example.com/v1",
+        api_model="m",
+        prompt_cache=True,
+    )
+    extra = getattr(model, "extra_body", None) or {}
+    assert extra.get("enable_prompt_cache") is True
+
+
+def test_build_chat_model_prompt_cache_force_off_deepseek():
+    model = build_chat_model(
+        "sk-test", api_base_url="https://api.deepseek.com", api_model="m",
+        prompt_cache=False,
+    )
+    extra = getattr(model, "extra_body", None) or {}
+    assert "enable_prompt_cache" not in extra
+
+
 def test_normalize_priority_mapping():
     assert normalize_priority("P0") == "high"
     assert normalize_priority("HIGH") == "high"

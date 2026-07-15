@@ -854,6 +854,7 @@ const ApiScenarioTestTool: React.FC = () => {
       ...selectedEndpoint,
       method: values.method,
       name: values.name,
+      description: values.description ?? selectedEndpoint.description ?? '',
       path: values.path,
       url: values.url || null,
       body: values.body || '',
@@ -2409,6 +2410,9 @@ const ApiScenarioTestTool: React.FC = () => {
             {/* Row 1: Name */}
             <Form.Item name="name" label="接口名称">
               <Input />
+            </Form.Item>
+            <Form.Item name="description" label="接口描述">
+              <Input.TextArea rows={2} placeholder="接口的业务用途说明，如：该接口用于创建用户，写入用户表并返回用户ID" />
             </Form.Item>
             {/* Row 2: Method + Path as a URL bar */}
             <div className="endpoint-url-bar">

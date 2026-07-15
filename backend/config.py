@@ -23,6 +23,8 @@ default_config = {
     "mcp_server_url_fallback": "http://localhost:8002/mcp",
     "lanhu_cookie": "",
     "bug_link_template": "",
+    # prompt caching: None = 按 base_url 自动判定（DeepSeek 开启）；True/False = 强制开关
+    "prompt_cache_enabled": None,
 }
 
 class ConfigManager:
@@ -87,6 +89,17 @@ class ConfigManager:
     def is_mcp_enabled(self) -> bool:
         """是否启用 MCP 工具"""
         return self.config.get("mcp_enabled", True)
+
+    def get_prompt_cache_enabled(self) -> Optional[bool]:
+        """Prompt 缓存开关。
+
+        - None（默认）：由 build_chat_model 按 base_url 自动判定（DeepSeek 开启）。
+        - True / False：强制开启 / 关闭，供不兼容网关或特殊场景使用。
+        """
+        value = self.config.get("prompt_cache_enabled", None)
+        if value is None:
+            return None
+        return bool(value)
 
     def get_mcp_server_url(self) -> str:
         """获取 MCP 服务器地址"""

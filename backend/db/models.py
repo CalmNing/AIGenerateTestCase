@@ -257,6 +257,7 @@ class ApiEndpoint(BaseModel, table=True):
     """接口测试工具中的单个接口定义"""
     project_id: int = Field(foreign_key="apiproject.id", description="接口项目ID")
     name: str = Field(default="", description="接口名称")
+    description: Optional[str] = Field(default=None, description="接口业务描述")
     method: str = Field(default="GET", description="HTTP 方法")
     path: str = Field(default="", description="接口路径")
     url: Optional[str] = Field(default=None, description="覆盖完整 URL")
