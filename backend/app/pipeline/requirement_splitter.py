@@ -11,8 +11,10 @@ from app.pipeline.prompts import (
     REQUIREMENT_ANALYSIS_USER,
     API_REQUIREMENT_SPLITTER_SYSTEM,
     API_REQUIREMENT_ANALYSIS_USER,
+    build_stage_system,
 )
 from app.pipeline.schemas import RequirementAnalysisResult
+from utils.helpers import _TokenUsageCallback
 from utils.llm_factory import build_chat_model, normalize_priority
 
 logger = logging.getLogger(__name__)
@@ -51,17 +53,18 @@ class RequirementSplitter:
         from utils.model_utils import _structured_output_robust
 
         if is_api_test and api_context:
-            system_prompt = API_REQUIREMENT_SPLITTER_SYSTEM
-            # 注意：api_context 含 JSON 大括号，必须用字符串拼接，禁用 .format()
+            # api_context 通过 build_stage_system 注入 system 前缀，便于缓存命中；
+            # user 仅保留动态补充内容。
+            system_prompt = build_stage_system(
+                API_REQUIREMENT_SPLITTER_SYSTEM, api_context=api_context, is_api_test=True
+            )
             user_prompt = (
-                "===== API 接口信息（需求拆分的主要依据）=====\n\n"
-                + api_context
-                + "\n\n## 用户补充说明（次要，仅用于理解业务语境，"
-                "不得脱离上述接口信息编造字段/路径）\n\n"
+                "## 用户补充说明（次要，仅用于理解业务语境，"
+                "不得脱离接口信息编造字段/路径）\n\n"
                 + (requirement_text or "(无用户补充说明)")
             )
         else:
-            system_prompt = REQUIREMENT_SPLITTER_SYSTEM
+            system_prompt = build_stage_system(REQUIREMENT_SPLITTER_SYSTEM)
             user_prompt = REQUIREMENT_ANALYSIS_USER.format(content=requirement_text)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -69,8 +72,10 @@ class RequirementSplitter:
         ]
 
         logger.info("开始需求拆分分析...")
+        _diagnostic_cb = _TokenUsageCallback()
         result = await _structured_output_robust(
-            self.model, RequirementAnalysisResult, messages
+            self.model, RequirementAnalysisResult, messages,
+            config={"callbacks": [_diagnostic_cb]},
         )
 
         if result is None:

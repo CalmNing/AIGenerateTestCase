@@ -23,6 +23,11 @@ default_config = {
     "mcp_server_url_fallback": "http://localhost:8002/mcp",
     "lanhu_cookie": "",
     "bug_link_template": "",
+    # 飞书电子表格(sheet)读取所需的应用身份凭据（应用身份 = tenant_access_token）。
+    # 仅当飞书文档中嵌入了 sheet/多维表格、且需要提取其单元格内容时才需要。
+    # 需同时开通权限范围 sheets:spreadsheet:read（电子表格）与 bitable:app:read（多维表格）。
+    "feishu_app_id": "",
+    "feishu_app_secret": "",
     # prompt caching: None = 按 base_url 自动判定（DeepSeek 开启）；True/False = 强制开关
     "prompt_cache_enabled": None,
 }
@@ -108,6 +113,14 @@ class ConfigManager:
     def get_mcp_server_url_fallback(self) -> str:
         """获取 MCP 服务器备用地址"""
         return self.config.get("mcp_server_url_fallback", "http://localhost:8002/mcp")
+
+    def get_feishu_app_id(self) -> str:
+        """飞书应用 app_id（用于应用身份 tenant_access_token 读取嵌入的 sheet/多维表格）。"""
+        return self.config.get("feishu_app_id", "")
+
+    def get_feishu_app_secret(self) -> str:
+        """飞书应用 app_secret（同上）。"""
+        return self.config.get("feishu_app_secret", "")
 
 # 创建全局配置管理器实例
 config_manager = ConfigManager()

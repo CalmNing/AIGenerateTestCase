@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Button, Card, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal, Progress, Steps } from 'antd';
 import {
   ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined,
-  FileTextOutlined, EditOutlined, ExperimentOutlined,
+  FileTextOutlined, EditOutlined, ExperimentOutlined, UploadOutlined,
   CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined,
 } from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../../types';
@@ -41,6 +41,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   onApiEndpointOverridesChange,
 }) => {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [apiProjects, setApiProjects] = useState<ApiProject[]>([]);
   const [apiEndpoints, setApiEndpoints] = useState<ApiEndpoint[]>([]);
   const [loadingApis, setLoadingApis] = useState(false);
@@ -160,6 +162,9 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
               window.dispatchEvent(new CustomEvent('pipeline-completed', {
                 detail: { sessionId: selectedSession?.id, result: res.data.result }
               }));
+              // 生成成功后清空已选文件，避免重复上传
+              setSelectedFile(null);
+              if (fileInputRef.current) fileInputRef.current.value = '';
             } else if (res.data.status === 'failed') {
               antMessage.error(`深度生成失败：${res.data.error || res.data.message}`);
             }
@@ -174,7 +179,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   }, [pipelineTaskId, pipelinePolling, selectedSession?.id]);
 
   const handleDeepGenerate = async () => {
-    if (!selectedSession || !requirement.trim()) return;
+    if (!selectedSession || (!requirement.trim() && !selectedFile)) return;
 
     setPipelinePolling(true);
     setPipelineStatus({
@@ -194,6 +199,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
         apiProjectId: selectedApiProjectId,
         apiEndpointOverrides: apiEndpointOverrides,
         moduleId: selectedModule,
+        file: selectedFile,
       });
       if (res.code === 200 && res.data?.task_id) {
         setPipelineTaskId(res.data.task_id);
@@ -420,6 +426,44 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                   <FileTextOutlined style={{ color: 'var(--color-text-tertiary)' }} />
                   需求描述
                 </div>
+                <div className="tcg-file-upload-row">
+                  <input
+                    type="file"
+                    accept=".docx,.pdf,.txt,.md"
+                    style={{ display: 'none' }}
+                    ref={fileInputRef}
+                    onChange={(e) => {
+                      const f = e.target.files && e.target.files[0];
+                      setSelectedFile(f || null);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="tcg-smart-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <UploadOutlined style={{ fontSize: 12 }} />
+                    上传需求文件
+                  </button>
+                  {selectedFile && (
+                    <span className="tcg-file-chip">
+                      <FileTextOutlined />
+                      <span className="tcg-file-name" title={selectedFile.name}>{selectedFile.name}</span>
+                      <button
+                        type="button"
+                        className="tcg-file-remove"
+                        onClick={() => {
+                          setSelectedFile(null);
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                        title="移除文件"
+                      >
+                        <CloseCircleOutlined />
+                      </button>
+                    </span>
+                  )}
+                  <span className="tcg-file-hint">支持 .docx / .txt / .md，文件内容作为生成主体（文本框文字作补充）</span>
+                </div>
                 <div className="tcg-textarea-wrapper">
                   <Input.TextArea
                     ref={textAreaRef}
@@ -435,7 +479,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
               <button
                 className={`tcg-generate-btn ${loading || pipelinePolling ? 'is-loading' : ''}`}
                 onClick={handleGenerateWithPreview}
-                disabled={!requirement.trim() || loading || pipelinePolling}
+                disabled={(!requirement.trim() && !selectedFile) || loading || pipelinePolling}
               >
                 {loading || pipelinePolling ? (
                   <>
@@ -459,11 +503,12 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                   borderRadius: 8,
                   border: '1px solid var(--color-border-secondary)',
                 }}>
+                  {/* 横向紧凑四阶段，避免卡片高度被撑高出现滚动条 */}
                   <Steps
                     current={pipelineStatus.current_phase - 1}
                     size="small"
-                    direction="vertical"
-                    style={{ marginBottom: 8 }}
+                    direction="horizontal"
+                    style={{ marginBottom: 4 }}
                     items={[
                       {
                         title: '需求拆分',
@@ -472,7 +517,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                           : pipelineStatus.current_phase > 1
                             ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
                             : undefined,
-                        description: pipelineStatus.current_phase === 1 ? pipelineStatus.message : undefined,
                       },
                       {
                         title: '测试点生成',
@@ -481,7 +525,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                           : pipelineStatus.current_phase > 2
                             ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
                             : undefined,
-                        description: pipelineStatus.current_phase === 2 ? pipelineStatus.message : undefined,
                       },
                       {
                         title: '用例设计',
@@ -490,7 +533,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                           : pipelineStatus.current_phase > 3
                             ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
                             : undefined,
-                        description: pipelineStatus.current_phase === 3 ? pipelineStatus.message : undefined,
                       },
                       {
                         title: '用例优化',
@@ -499,10 +541,13 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                           : pipelineStatus.current_phase > 4
                             ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
                             : undefined,
-                        description: pipelineStatus.current_phase === 4 ? pipelineStatus.message : undefined,
                       },
                     ]}
                   />
+                  {/* 当前阶段提示信息，单行展示 */}
+                  <div className="tcg-pipeline-msg">
+                    {pipelineStatus.message}
+                  </div>
                   <Progress
                     percent={pipelineStatus.progress}
                     size="small"

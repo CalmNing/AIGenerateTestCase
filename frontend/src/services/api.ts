@@ -239,6 +239,7 @@ export const testcaseApi = {
       apiProjectId?: number | null;
       apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
       moduleId?: number | string;
+      file?: File | null;
     }
   ): Promise<ApiResponse<{ task_id: string }>> => {
     const formData = new FormData();
@@ -258,6 +259,9 @@ export const testcaseApi = {
     }
     if (options?.apiEndpointOverrides && Object.keys(options.apiEndpointOverrides).length > 0) {
       formData.append("api_endpoint_overrides", JSON.stringify(options.apiEndpointOverrides));
+    }
+    if (options?.file) {
+      formData.append("file", options.file);
     }
     return api.post('/testcases/generate-v2', formData);
   },

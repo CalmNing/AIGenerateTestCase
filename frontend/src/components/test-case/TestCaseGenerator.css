@@ -44,6 +44,26 @@
   min-height: 0;
 }
 
+/* --- Pipeline 进度面板（横向紧凑，避免卡片被撑高出现滚动条） --- */
+.tcg-pipeline-panel {
+  overflow: hidden;
+}
+
+.tcg-pipeline-panel .ant-steps {
+  margin-bottom: 4px;
+}
+
+.tcg-pipeline-msg {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-text-tertiary);
+  margin: 2px 0 8px;
+  /* 单行截断，进一步控制高度 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* --- Context Info Bar --- */
 .tcg-context-bar {
   display: flex;
@@ -368,3 +388,60 @@
 .tcg-pipeline-panel .ant-progress-text {
   font-size: 12px !important;
 }
+
+/* --- File Upload Row --- */
+.tcg-file-upload-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tcg-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 280px;
+  padding: 3px 8px 3px 10px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-full, 999px);
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tcg-file-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.tcg-file-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.2s, transform 0.2s;
+}
+
+.tcg-file-remove:hover {
+  color: var(--color-danger);
+  transform: scale(1.15);
+}
+
+.tcg-file-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+

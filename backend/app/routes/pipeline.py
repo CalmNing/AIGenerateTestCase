@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Optional, List, Annotated
 
-from fastapi import APIRouter, HTTPException, Form, Query
+from fastapi import APIRouter, HTTPException, Form, Query, File, UploadFile
 from pydantic import BaseModel
 from sqlmodel import select, func
 
@@ -139,12 +139,13 @@ def _check_session_owner(session, session_id: int, user: "CurrentUser"):
 @router.post("/generate-v2")
 async def generate_v2(
     session_id: int = Form(...),
-    requirement_text: str = Form(...),
+    requirement_text: Optional[str] = Form(None),
     module_id: Optional[int] = Form(None),
     selected_skills: Optional[str] = Form(None),
     api_endpoint_id: Optional[str] = Form(None),
     api_project_id: Optional[str] = Form(None),
     api_endpoint_overrides: Optional[str] = Form(default=None),
+    file: Optional[UploadFile] = File(None),
     session: SessionDep = None,
     user: CurrentUser = None,
 ):
@@ -153,7 +154,31 @@ async def generate_v2(
 
     返回 task_id，前端可通过 /pipeline/{task_id}/status 轮询进度
     支持功能测试（无接口）和接口测试（有关联接口）两种模式
+
+    文件上传：上传 .docx/.txt/.md 需求文档时，文件内容作为生成依据主体，
+    文本框内已输入的文字作为「补充背景」拼接在文件内容之后。
     """
+    # 解析上传的需求文件：文件内容作为主体，文本框文字作为补充背景
+    from utils.file_parser import parse_uploaded_file
+    if file is not None:
+        try:
+            file_content = await parse_uploaded_file(file)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if file_content:
+            if requirement_text and requirement_text.strip():
+                requirement_text = (
+                    file_content
+                    + "\n\n---\n## 补充背景（用户额外说明）\n"
+                    + requirement_text.strip()
+                )
+            else:
+                requirement_text = file_content
+
+    # 既无文件又无需求文本时拒绝空生成
+    if not requirement_text or not requirement_text.strip():
+        raise HTTPException(status_code=400, detail="请输入需求描述或上传需求文件")
+
     # 解析 selected_skills
     skills_list = None
     if selected_skills:

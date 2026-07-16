@@ -4,8 +4,13 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from app.pipeline.prompts import TEST_CASE_BATCH_OPTIMIZE_USER, TEST_CASE_OPTIMIZER_SYSTEM
+from app.pipeline.prompts import (
+    TEST_CASE_BATCH_OPTIMIZE_USER,
+    TEST_CASE_OPTIMIZER_SYSTEM,
+    build_stage_system,
+)
 from app.pipeline.schemas import ApiTestCaseOptimizationResult, TestCaseOptimizationResult
+from utils.helpers import _TokenUsageCallback
 from utils.llm_factory import build_chat_model
 
 logger = logging.getLogger(__name__)
@@ -40,6 +45,7 @@ class TestCaseOptimizer:
         test_cases: List[Dict[str, Any]],
         *,
         is_api_test: bool = False,
+        api_context: str = "",
     ) -> List[Dict[str, Any]]:
         """Optimize one batch of test cases."""
         from utils.model_utils import _structured_output_robust
@@ -59,8 +65,12 @@ class TestCaseOptimizer:
 
         cases_json = json.dumps(simplified, ensure_ascii=False, indent=2)
         user_prompt = TEST_CASE_BATCH_OPTIMIZE_USER.format(test_cases=cases_json) + PRECONDITIONS_OUTPUT_RULE
+        # 使用共享前缀构造 system，保证与阶段1/2/3 的前缀可共享缓存命中
+        system_prompt = build_stage_system(
+            TEST_CASE_OPTIMIZER_SYSTEM, api_context=api_context, is_api_test=is_api_test
+        )
         messages = [
-            {"role": "system", "content": TEST_CASE_OPTIMIZER_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -68,7 +78,11 @@ class TestCaseOptimizer:
         mode_label = "接口测试" if is_api_test else "功能测试"
 
         logger.info(f"开始优化{mode_label}用例，共 {len(test_cases)} 个...")
-        result = await _structured_output_robust(self.model, schema, messages)
+        _diagnostic_cb = _TokenUsageCallback()
+        result = await _structured_output_robust(
+            self.model, schema, messages,
+            config={"callbacks": [_diagnostic_cb]},
+        )
 
         if result is None:
             raise ValueError(f"{mode_label}用例优化失败：模型返回空结果")

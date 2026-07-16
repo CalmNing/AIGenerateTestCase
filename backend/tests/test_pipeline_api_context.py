@@ -36,7 +36,7 @@ USER_AUX = "用户说要测登录，顺便覆盖下验证码"
 
 
 def _make_fake_capture(captured):
-    async def _fake(model, schema, messages):
+    async def _fake(model, schema, messages, **kwargs):
         captured["messages"] = messages
         # 返回一个非 None 的对象（既非 *Result 也非 dict），
         # 让生成器安全地得到空列表、不抛异常。
@@ -71,6 +71,9 @@ def test_analyze_injects_schema_as_primary(fake_capture):
     assert "验证码" in joined
     # 系统提示应为 API 变体
     assert "接口测试需求分析专家" in fake_capture["messages"][0]["content"]
+    # 缓存关键：接口 Schema 必须落在 system（前缀）消息，而非 user，
+    # 这样才能被 DeepSeek 前缀缓存命中、跨阶段/跨点复用。
+    assert "/api/login" in fake_capture["messages"][0]["content"]
 
 
 def test_analyze_functional_mode_unchanged(fake_capture):
@@ -95,3 +98,5 @@ def test_generate_injects_schema_as_primary(fake_capture):
     assert "/api/login" in joined
     assert "登录功能" in joined
     assert "接口测试点生成专家" in fake_capture["messages"][0]["content"]
+    # 接口 Schema 必须落在 system（前缀）消息，便于缓存命中
+    assert "/api/login" in fake_capture["messages"][0]["content"]

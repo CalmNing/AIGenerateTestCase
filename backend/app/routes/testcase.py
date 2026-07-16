@@ -504,14 +504,9 @@ async def generate_testcases(
         dependency_labels=dependency_labels,
     )
 
-    if api_context:
-        # 接口测试中用户需求降为补充背景，避免模型脱离接口信息凭空生成用例
-        effective_requirement = (
-            api_context + "\n\n## 补充背景（次要，仅用于理解业务语境）\n\n" + requirement
-        )
-    else:
-        effective_requirement = requirement
-
+    # api_context 不再并入 requirement，改为单独传参；generate_testcases 会把它
+    # 放入「可缓存的 system 前缀」，从而让同一接口项目反复生成时命中前缀 KV 缓存。
+    # （用户需求降为补充背景的逻辑已内移到 generate_testcases 的 human_text 中）
     try:
         # Convert api_project_id to int once for downstream usage
         api_project_id_int: int | None = None
@@ -523,7 +518,8 @@ async def generate_testcases(
 
         testcases, effective_req = await generate_testcases(
             db_session=session,
-            requirement=effective_requirement,
+            requirement=requirement,
+            api_context=api_context,
             session_id=session_id,
             module_id=module_id,
             model_type=model_type,

@@ -33,6 +33,15 @@ class RequirementAnalysisResult(BaseModel):
     requirement_points: List[RequirementPointOut] = Field(default_factory=list)
 
 
+class RequirementDedupResult(BaseModel):
+    """需求点去重结果：返回需保留的新需求点候选编号（0-based）。"""
+    keep_indices: List[int] = Field(
+        default_factory=list,
+        description="需要保留的新需求点候选编号（0-based，对应传入的候选列表下标）。"
+        "若全部候选都与已有需求点语义重复则为空列表。",
+    )
+
+
 class TestPointOut(BaseModel):
     content: str = Field(description="Test point content")
     test_type: str = Field(default="functional", description="Test type")

@@ -10,8 +10,10 @@ from app.pipeline.prompts import (
     TEST_POINT_USER,
     API_TEST_POINT_GENERATOR_SYSTEM,
     API_TEST_POINT_USER,
+    build_stage_system,
 )
 from app.pipeline.schemas import TestPointGenerationResult
+from utils.helpers import _TokenUsageCallback
 from utils.llm_factory import build_chat_model, normalize_priority
 
 logger = logging.getLogger(__name__)
@@ -55,18 +57,14 @@ class TestPointGenerator:
         from utils.model_utils import _structured_output_robust
 
         if is_api_test and api_context:
-            system_prompt = API_TEST_POINT_GENERATOR_SYSTEM
-            # API_TEST_POINT_USER 仅含 {content} 占位，填充安全；
-            # api_context 含 JSON 大括号，必须用字符串拼接注入，禁用 .format()
-            req_block = API_TEST_POINT_USER.format(content=requirement_content)
-            user_prompt = (
-                "===== API 接口信息（测试点生成的主要依据）=====\n\n"
-                + api_context
-                + "\n\n"
-                + req_block
+            # api_context 注入 system 前缀（见 build_stage_system），user 仅保留动态内容
+            system_prompt = build_stage_system(
+                API_TEST_POINT_GENERATOR_SYSTEM, api_context=api_context, is_api_test=True
             )
+            req_block = API_TEST_POINT_USER.format(content=requirement_content)
+            user_prompt = req_block
         else:
-            system_prompt = TEST_POINT_GENERATOR_SYSTEM
+            system_prompt = build_stage_system(TEST_POINT_GENERATOR_SYSTEM)
             user_prompt = TEST_POINT_USER.format(content=requirement_content)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -74,8 +72,10 @@ class TestPointGenerator:
         ]
 
         logger.info("开始生成测试点...")
+        _diagnostic_cb = _TokenUsageCallback()
         result = await _structured_output_robust(
-            self.model, TestPointGenerationResult, messages
+            self.model, TestPointGenerationResult, messages,
+            config={"callbacks": [_diagnostic_cb]},
         )
 
         if result is None:

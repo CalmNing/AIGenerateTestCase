@@ -968,6 +968,45 @@ def _persist_testcases(
     return db_testcases
 
 
+def _build_generation_messages(
+        *,
+        selected_prompt: str,
+        core_requirement: str,
+        selected_skill_names: list[str] | None,
+        api_context: str = "",
+        is_api_test: bool = False,
+) -> tuple[str, str]:
+    """把「可复用静态上下文」与「动态指令」拆开，以提升 prompt 缓存命中率。
+
+    返回 (system_text, human_text)：
+    - system_text：selected_prompt +（可选）技能方法论 +（可选）接口上下文。
+      这部分在同一接口项目 / 同一技能组合下逐字节一致，是 DeepSeek 前缀 KV
+      缓存的稳定锚点（位于消息最前端，整段可被命中）。
+    - human_text：用户真实需求（接口测试时加「补充背景」标签）。这部分每次
+      不同，放最后，不参与前缀缓存。
+
+    关键约束：selected_prompt 必须始终是 system_text 的开头，这样即使没有
+    api_context / 技能，全局基础提示词也始终能命中缓存。
+    """
+    system_parts = [selected_prompt]
+    if selected_skill_names:
+        skill_context = _load_skill_bodies(selected_skill_names)
+        if skill_context:
+            system_parts.append("## 参考技能与方法论\n" + skill_context)
+    if api_context:
+        system_parts.append(
+            "## 接口上下文（核心依据，请基于以下接口信息设计测试用例）\n" + api_context
+        )
+    system_text = "\n\n".join(system_parts)
+
+    if is_api_test and api_context:
+        # 接口测试中用户需求降为补充背景，避免模型脱离接口信息凭空生成用例
+        human_text = "## 补充背景（次要，仅用于理解业务语境）\n\n" + core_requirement
+    else:
+        human_text = core_requirement
+    return system_text, human_text
+
+
 async def generate_testcases(
         session_id: int,
         module_id: int,
@@ -982,6 +1021,7 @@ async def generate_testcases(
         mcp_configs: list | None = None,
         selected_skill_names: list[str] | None = None,
         is_api_test: bool = False,
+        api_context: str = "",
         **kwargs
 ) -> tuple[List[DBTestCase], str]:
     """根据需求生成测试用例，返回 (testcases, effective_requirement)。"""
@@ -1075,12 +1115,20 @@ async def generate_testcases(
         f"schema={len(str(selected_schema.model_json_schema()))}"
     )
 
-    # 注入选中的技能内容到提示词（适用于所有模型类型）
-    if selected_skill_names:
-        skill_context = _load_skill_bodies(selected_skill_names)
-        if skill_context:
-            requirement = skill_context + "\n\n---\n\n## 用户需求\n\n" + requirement
-            logger.info(f"已注入 {len(selected_skill_names)} 个技能到提示词: {selected_skill_names}")
+    # 拆分静态（可缓存）前缀与动态指令：
+    #  - 技能正文 + 接口上下文(api_context) 进入 SYSTEM 前缀（同一项目/技能组合逐字节一致，可被缓存命中）
+    #  - 用户真实需求进入 HUMAN 消息末尾（每次不同，不参与前缀缓存）
+    # 这样同一接口项目反复生成时，大段规格/api_context 会被缓存，大幅提升命中率。
+    system_text, human_text = _build_generation_messages(
+        selected_prompt=selected_prompt,
+        core_requirement=requirement,
+        selected_skill_names=selected_skill_names,
+        api_context=api_context,
+        is_api_test=is_api_test,
+    )
+    logger.info(
+        f"消息拆分: system(可缓存前缀)={len(system_text)} chars | human(动态)={len(human_text)} chars"
+    )
 
     if model_type == "api":
         try:
@@ -1110,7 +1158,7 @@ async def generate_testcases(
                 response = await _structured_output_robust(
                     model,
                     selected_schema,
-                    [("system", selected_prompt), ("human", requirement)],
+                    [("system", system_text), ("human", human_text)],
                     config={"callbacks": [_diagnostic_cb]},
                 )
                 if _diagnostic_cb.mcp_permission_error:
@@ -1128,14 +1176,14 @@ async def generate_testcases(
                         api_model=api_model,
                         with_mcp_tools=has_lanhu_url,
                         custom_tools=custom_mcp_tools,
-                        system_prompt=selected_prompt,
+                        system_prompt=system_text,
                         response_format=selected_schema,
                         prompt_cache=prompt_cache_cfg,
                     )
-                    logger.info(f"调用agent: requirement size={len(requirement)} preview={requirement[:300]}... tail={requirement[-200:]}")
+                    logger.info(f"调用agent: requirement size={len(human_text)} preview={human_text[:300]}... tail={human_text[-200:]}")
                     _diagnostic_cb = _TokenUsageCallback()
                     response = await agent.ainvoke(
-                        {"messages": [{"role": "user", "content": requirement}]},
+                        {"messages": [{"role": "user", "content": human_text}]},
                         config={
                             "configurable": {
                                 "thread_id": f"{session_id}-{uuid.uuid4().hex[:12]}",
@@ -1159,7 +1207,7 @@ async def generate_testcases(
                     response = await _structured_output_robust(
                         model,
                         selected_schema,
-                        [("system", selected_prompt), ("human", requirement)],
+                        [("system", system_text), ("human", human_text)],
                         config={"callbacks": [_diagnostic_cb]},
                     )
         except _McpPermissionError:
@@ -1204,12 +1252,12 @@ async def generate_testcases(
             ollama_model=ollama_model
         )
         messages = [
-            ("system", f"{selected_prompt}"),
+            ("system", f"{system_text}"),
             ("system", f""
                        f"严格使用json schema，"
                        f"格式为：{selected_schema.model_json_schema()}，"
                        f"只用JSON回复。"),
-            ("human", requirement),
+            ("human", human_text),
         ]
         response = await model.ainvoke(messages)
         logger.info(f"本地模型调用: type={model_type}")
@@ -1262,11 +1310,12 @@ async def generate_testcases(
                 logger.warning(f"前置依赖补全失败（已忽略，不影响生成）: {e}")
 
         # 转换为 DBTestCase 并保存历史提示词
+        # 历史保存用户真实需求(human_text)，不含已拆入 system 前缀的技能/api_context 冗余
         db_testcases = _persist_testcases(
             local_testcases,
             session_id=session_id,
             module_id=module_id,
-            requirement=requirement,
+            requirement=human_text,
             history_save_content=_history_save_content,
             endpoint_index_to_id=kwargs.get("endpoint_index_to_id", {}),
             db_session=kwargs.get("db_session"),
@@ -1274,7 +1323,7 @@ async def generate_testcases(
             api_project_id=kwargs.get("api_project_id"),
         )
 
-        return db_testcases, requirement
+        return db_testcases, human_text
     except Exception as e:
         logger.error(f"解析测试用例失败: {str(e)}, 响应格式: {type(response).__name__}")
         logger.error(f"完整响应: {response}")

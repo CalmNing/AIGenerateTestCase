@@ -16,6 +16,7 @@ from app.pipeline.test_point_generator import TestPointGenerator
 from app.pipeline.test_case_designer import TestCaseDesigner
 from app.pipeline.test_case_optimizer import TestCaseOptimizer
 from app.routes.skills import get_skill_body
+from app.pipeline.schemas import RequirementDedupResult
 from utils.document_prefetch import (
     FEISHU_URL_RE as _FEISHU_URL_RE,
     LANHU_URL_RE as _LANHU_URL_RE,
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from app.services.api_consistency import check_testcase_consistency, score_confidence
 from utils.helpers import _upsert_history_prompt
+from utils.model_utils import _structured_output_robust
 
 
 def _compute_accuracy(case_data: dict, endpoint_index_to_id: dict, session) -> "tuple[dict, float, str]":
@@ -39,6 +41,121 @@ def _compute_accuracy(case_data: dict, endpoint_index_to_id: dict, session) -> "
     report = check_testcase_consistency(case_data, endpoint_index_to_id, endpoints)
     score, level = score_confidence(report, case_data)
     return report, score, level
+
+
+def _resolve_keep_indices(keep_indices: Any, n: int) -> List[int]:
+    """把 LLM 返回的保留编号解析为合法的 0-based 去重索引列表（自动去重、升序）。
+
+    约定模型以 0-based 返回（提示词已显式标注编号从 0 开始），此处仅做范围校验。
+    """
+    if not keep_indices:
+        return []
+    resolved: set = set()
+    for i in keep_indices:
+        if isinstance(i, int) and 0 <= i < n:
+            resolved.add(i)
+    return sorted(resolved)
+
+
+def _assign_requirement_order(
+    new_points: List[dict],
+    existing_points: List[Any],
+    module_id: Optional[int],
+) -> List[dict]:
+    """为待新建需求点分配 order_index（在已有最大 order_index 基础上续接）。"""
+    max_order = -1
+    for p in existing_points:
+        oi = getattr(p, "order_index", None)
+        if oi is not None and oi > max_order:
+            max_order = oi
+    result: List[dict] = []
+    for idx, rp in enumerate(new_points):
+        result.append({
+            "content": rp.get("content", ""),
+            "priority": rp.get("priority", "medium"),
+            "order_index": max_order + 1 + idx,
+            "module_id": module_id,
+        })
+    return result
+
+
+async def _dedup_requirement_points_by_llm(
+    new_points: List[dict],
+    existing_points: List[Any],
+    model: Any,
+    module_id: Optional[int],
+) -> List[dict]:
+    """基于 LLM 语义比对，返回当前模块下需要新建的需求点列表。
+
+    - 范围：同一 module_id（调用方已按 session + module 过滤 existing_points）
+    - 由 LLM 判断新候选是否与已有需求点语义重复，仅保留未覆盖的
+    - LLM 异常/返回空时保守保留全部新候选，避免误删导致覆盖丢失
+    """
+    # 无已有需求点则全部保留
+    if not existing_points:
+        return _assign_requirement_order(new_points, existing_points, module_id)
+
+    existing_contents = [
+        getattr(p, "content", "") for p in existing_points
+        if getattr(p, "content", None)
+    ]
+    candidates = [rp.get("content", "") for rp in new_points]
+    # 候选全部为空则无需创建
+    if not any(candidates):
+        return []
+
+    existing_text = "\n".join(
+        f"{i + 1}. {c}" for i, c in enumerate(existing_contents)
+    ) or "（无，当前模块暂无需求点）"
+    candidates_text = "\n".join(
+        f"[{i}] {c}" for i, c in enumerate(candidates)
+    )
+
+    system_prompt = _REQ_DEDUP_SYSTEM
+    user_prompt = (
+        f"## 当前模块已有需求点（共 {len(existing_contents)} 条，已存在，无需再次创建）\n"
+        f"{existing_text}\n\n"
+        f"## 本次新生成的需求点候选（共 {len(candidates)} 条，编号从 0 开始）\n"
+        f"{candidates_text}\n\n"
+        "请返回需要【保留】的候选编号列表（0-based，即上面 [0]、[1] 对应的数字）。"
+        "若候选全部都是已有需求点的重复，返回空列表。"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        result = await _structured_output_robust(
+            model, RequirementDedupResult, messages, config={}
+        )
+    except Exception as e:
+        logger.warning("需求点 LLM 去重异常，保守保留全部新需求点: %s", e)
+        return _assign_requirement_order(new_points, existing_points, module_id)
+
+    if result is None:
+        logger.warning("需求点 LLM 去重返回空，保守保留全部新需求点")
+        return _assign_requirement_order(new_points, existing_points, module_id)
+
+    keep_indices = getattr(result, "keep_indices", None) or []
+    valid = _resolve_keep_indices(keep_indices, len(new_points))
+    if not valid and keep_indices:
+        # 模型返回了索引但全部越界（异常），保守保留全部
+        logger.warning("需求点 LLM 去重：返回索引全部越界，保守保留全部新需求点")
+        return _assign_requirement_order(new_points, existing_points, module_id)
+
+    to_keep = [new_points[i] for i in valid]
+    return _assign_requirement_order(to_keep, existing_points, module_id)
+
+
+_REQ_DEDUP_SYSTEM = """你是一名资深的测试用例需求去重专家。给定【当前模块已有需求点】与【本次新生成的需求点候选】，请判断每个候选需求点是否在语义上与已有需求点重复。
+
+判定标准：
+- 若候选与任一已有需求点含义相同、或只是换了一种说法、或已被已有需求点完全覆盖，则视为重复，不应保留。
+- 若候选是已有需求点未覆盖的全新内容，则应保留。
+- 候选之间若彼此语义重复，也只保留其中一个（取最先出现的编号）。
+
+只依据给出的文本判断，不要臆造。返回需要保留的候选编号（0-based）。"""
 
 
 # 内存中的 pipeline 任务状态存储
@@ -465,15 +582,36 @@ class PipelineRunner:
             if not requirement_points_data:
                 raise ValueError("未生成任何需求点")
 
+            # 查询当前模块下已有需求点，用于去重（范围：同一 session + 同一 module）
+            existing_stmt = select(RequirementPoint).where(
+                RequirementPoint.session_id == session_id
+            )
+            if module_id is not None:
+                existing_stmt = existing_stmt.where(
+                    RequirementPoint.module_id == module_id
+                )
+            else:
+                # 未选择模块时，按 module_id IS NULL 过滤同一会话下的无模块需求点
+                existing_stmt = existing_stmt.where(
+                    RequirementPoint.module_id.is_(None)
+                )
+            existing_points = self.db.exec(existing_stmt).all()
+
+            # 去重：基于 LLM 语义比对，已存在的相同需求点不再创建，仅新建未覆盖到的
+            to_create = await _dedup_requirement_points_by_llm(
+                requirement_points_data, existing_points, self.splitter.model, module_id
+            )
+            skipped = len(requirement_points_data) - len(to_create)
+
             # 保存需求点到数据库
             req_points = []
-            for idx, rp_data in enumerate(requirement_points_data):
+            for rp_data in to_create:
                 rp = RequirementPoint(
                     session_id=session_id,
-                    content=rp_data.get("content", ""),
-                    module_id=module_id,
-                    priority=rp_data.get("priority", "medium"),
-                    order_index=rp_data.get("order_index", idx),
+                    content=rp_data["content"],
+                    module_id=rp_data["module_id"],
+                    priority=rp_data["priority"],
+                    order_index=rp_data["order_index"],
                     user_id=user_id,
                 )
                 self.db.add(rp)
@@ -485,7 +623,8 @@ class PipelineRunner:
 
             self._update_progress(
                 task_id, 1, "需求拆分", 25,
-                f"需求拆分完成，共 {len(req_points)} 个需求点"
+                f"需求拆分完成，新建 {len(req_points)} 个需求点"
+                + (f"（已跳过 {skipped} 个重复）" if skipped else "")
             )
 
             # ========== 阶段2: 测试点生成 (25-50%) ==========
@@ -780,7 +919,7 @@ class PipelineRunner:
                         cases_for_opt.append(item)
 
                     optimized = await self.optimizer.optimize(
-                        cases_for_opt, is_api_test=is_api_test,
+                        cases_for_opt, is_api_test=is_api_test, api_context=api_context,
                     )
 
                     # 应用优化结果

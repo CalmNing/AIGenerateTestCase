@@ -9,8 +9,10 @@ from app.pipeline.prompts import (
     API_TEST_CASE_DESIGN_USER,
     TEST_CASE_DESIGNER_SYSTEM,
     TEST_CASE_DESIGN_USER,
+    build_stage_system,
 )
 from app.pipeline.schemas import ApiTestCaseDesignResult, TestCaseDesignResult
+from utils.helpers import _TokenUsageCallback
 from utils.llm_factory import build_chat_model
 
 logger = logging.getLogger(__name__)
@@ -55,15 +57,17 @@ class TestCaseDesigner:
         test_points_json = json.dumps(test_points, ensure_ascii=False, indent=2)
 
         if is_api_test:
-            system_prompt = API_TEST_CASE_DESIGNER_SYSTEM
+            # api_context 通过 build_stage_system 注入 system 前缀（已从 user 模板移除）
+            system_prompt = build_stage_system(
+                API_TEST_CASE_DESIGNER_SYSTEM, api_context=api_context, is_api_test=True
+            )
             user_prompt = API_TEST_CASE_DESIGN_USER.format(
                 test_points=test_points_json,
                 requirement_content=requirement_content or "(无需求文档)",
-                api_context=api_context or "(无接口信息)",
             ) + PRECONDITIONS_OUTPUT_RULE
             schema = ApiTestCaseDesignResult
         else:
-            system_prompt = TEST_CASE_DESIGNER_SYSTEM
+            system_prompt = build_stage_system(TEST_CASE_DESIGNER_SYSTEM)
             user_prompt = TEST_CASE_DESIGN_USER.format(
                 test_points=test_points_json,
                 requirement_content=requirement_content or "(无需求文档)",
@@ -77,7 +81,11 @@ class TestCaseDesigner:
 
         mode_label = "接口测试" if is_api_test else "功能测试"
         logger.info(f"开始设计{mode_label}用例，共 {len(test_points)} 个测试点...")
-        result = await _structured_output_robust(self.model, schema, messages)
+        _diagnostic_cb = _TokenUsageCallback()
+        result = await _structured_output_robust(
+            self.model, schema, messages,
+            config={"callbacks": [_diagnostic_cb]},
+        )
 
         if result is None:
             raise ValueError(f"{mode_label}用例设计失败：模型返回空结果")

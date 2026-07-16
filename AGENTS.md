@@ -99,6 +99,8 @@ backend/
 
    **关键逻辑 - 蓝湖内容预取时跳过 agent：** 当需求文本中检测到蓝湖 URL 且成功预取页面内容时，不走 LangChain ReAct agent（避免 40+ 次无用迭代），而是直接调用 `model.with_structured_output()` 一次返回结构化结果。判断逻辑在 `model_utils._check_lanhu_document_size()` 中：先匹配页面名称（已排除 URL 自身文本避免误匹配），再检查文档大小是否超过阈值。
 
+   **飞书文档预取（含嵌入表格）：** 需求文本中检测到飞书 wiki/docx 链接时，由 `utils/document_prefetch.py::fetch_feishu_document` 预取。它先经 MCP（`docx_v1_document_rawContent`）取**正文**，再从正文中抽取嵌入的**电子表格/多维表格 token**（`spreadsheetToken_sheetId` 形式），用应用身份 `tenant_access_token` **直连飞书 Sheets API** 读取单元格并追加为 Markdown 表格。注意：`lark-mcp` 不暴露 sheets 读取工具，MCP 路径读不了表格，必须走 Sheets API；token 取自 `config.feishu_app_id/feishu_app_secret`（或 Feishu MCP 的 `-a/-s` 参数），并需开通 `sheets:spreadsheet:read` 与 `bitable:app:read` 权限范围。详见 `docs/feishu-doc-extraction.md`。
+
    **LangGraph config 注意事项：** `recursion_limit` 必须放在 config 顶层，不能放在 `configurable` 内。LangGraph 只从 `config["recursion_limit"]` 读取该值。
 
 **MCP 集成:** 支持两种传输方式：
