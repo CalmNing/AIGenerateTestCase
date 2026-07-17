@@ -106,10 +106,12 @@ def _backfill_requirement_point_module_id(engine):
         ).scalar()
         logger.info(
             f"一次性迁移: 将 {updated}/{len(to_update)} 条需求点按模块名回填 module_id"
+            + (f"（{remaining} 条未匹配，文本将被丢弃）" if remaining else "")
         )
-        # 仅当没有遗留未匹配文本时才删除 module 列，避免数据丢失
-        if remaining == 0:
-            _try_drop_column(conn, "requirementpoint", "module")
+        # 无条件删除遗留的 module 列：模型已不再使用该字段，
+        # 且其 NOT NULL 约束会导致所有新插入失败 (IntegrityError)。
+        # 回填已尽力将文本映射到 module_id，未匹配的文本无对应模块记录，保留也无意义。
+        _try_drop_column(conn, "requirementpoint", "module")
 
 
 def _migrate_missing_columns(engine):
