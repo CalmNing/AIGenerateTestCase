@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 from app.deps import CurrentUser, SessionDep
 from utils.base_response import Response
-from config import config_manager
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +118,21 @@ async def chat(
     if not req.messages:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
-    # 获取配置
+    # 从数据库获取用户配置（与前端设置页面一致）
     try:
-        api_key = config_manager.get_api_key()
-        api_base_url = config_manager.get("api_base_url", "https://api.deepseek.com")
-        api_model = config_manager.get("api_model", "deepseek-v4-flash")
+        from sqlmodel import select
+        from db.models import SystemConfig
+        user_id = current_user.user_id if current_user else None
+        statement = select(SystemConfig).where(SystemConfig.user_id == user_id)
+        db_config = session.exec(statement).first()
+        if db_config:
+            api_key = db_config.api_key or ""
+            api_base_url = db_config.api_base_url or "https://api.deepseek.com"
+            api_model = db_config.api_model or "deepseek-v4-flash"
+        else:
+            api_key = ""
+            api_base_url = "https://api.deepseek.com"
+            api_model = "deepseek-v4-flash"
     except Exception as e:
         logger.error("获取配置失败: %s", e)
         raise HTTPException(status_code=500, detail="服务配置异常")
