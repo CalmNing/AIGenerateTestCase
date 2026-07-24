@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Form, Select, Input, Button, Tabs, Space, message, Modal, Tooltip, Radio } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined } from '@ant-design/icons';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, DownOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined, FolderOutlined, FolderOpenOutlined, DeleteOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
-import { savedRequestApi, globalParameterApi, proxyApi } from '../../services/api';
-import { SavedRequest as SavedRequestType } from '../../types';
+import { savedRequestApi, savedRequestFolderApi, globalParameterApi, proxyApi } from '../../services/api';
+import { SavedRequest as SavedRequestType, SavedRequestFolder } from '../../types';
 import FileUpload, { UploadedFileResult } from '../FileUpload';
 import './IoTDataPushPlatform.css';
 
@@ -245,6 +245,15 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const [saveRequestName, setSaveRequestName] = useState('');
   const [editingRequest, setEditingRequest] = useState<SavedRequest | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
+  const [folders, setFolders] = useState<SavedRequestFolder[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null | undefined>(undefined);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+  const [creatingParentId, setCreatingParentId] = useState<number | null>(null);
+  const [editingFolderId, setEditingFolderId] = useState<number | null>(null);
+  const [editingFolderName, setEditingFolderName] = useState('');
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<number>>(new Set());
+  const [createLoading, setCreateLoading] = useState(false);
   const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]);
   const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>(() => {
     return localStorage.getItem('currentEnvironmentId') || 'env-1';
@@ -325,6 +334,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   useEffect(() => {
     fetchSavedRequests();
+    fetchFolders();
   }, []);
 
   useEffect(() => {
@@ -502,15 +512,26 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- API Calls ---
 
-  const fetchSavedRequests = async () => {
+  const fetchSavedRequests = async (folderId?: number | null) => {
     try {
-      const response = await savedRequestApi.getRequests();
+      const response = await savedRequestApi.getRequests(folderId);
       if (response.code === 200 && response.data) {
         setSavedRequests(response.data);
       }
     } catch (error) {
       console.error('Failed to fetch saved requests:', error);
       message.error('获取保存的请求配置失败');
+    }
+  };
+
+  const fetchFolders = async () => {
+    try {
+      const response = await savedRequestFolderApi.getFolders();
+      if (response.code === 200 && response.data) {
+        setFolders(response.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch folders:', error);
     }
   };
 
@@ -715,6 +736,13 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   };
 
   const createTabFromSavedRequest = (request: SavedRequest) => {
+    const existingTab = tabs.find(t => t.savedRequestId === request.id);
+    if (existingTab) {
+      setActiveTabId(existingTab.id);
+      setEditingRequest(request);
+      setSaveRequestName(request.name);
+      return;
+    }
     const newTab: Tab = {
       id: `tab-${Date.now()}-${++tabCounter}`,
       name: request.name,
@@ -845,10 +873,11 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         setEditingRequest(null);
       }
 
-      const payload = {
+      const payload: any = {
         name: requestName,
         method, url, headers, parameters, body,
-        post_extractions: postExtractions
+        post_extractions: postExtractions,
+        folder_id: selectedFolderId !== undefined ? selectedFolderId : null,
       };
 
       if (editingRequest) {
@@ -875,7 +904,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       console.error('Save request failed:', error);
       message.error('保存请求配置失败');
     } finally {
-      fetchSavedRequests();
+      const apiFolderId = selectedFolderId === null ? -1 : selectedFolderId;
+      fetchSavedRequests(apiFolderId);
       setSaveLoading(false);
     }
   };
@@ -930,6 +960,181 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     } finally {
       setLoading(false);
     }
+  };
+
+  // --- Folder Handlers ---
+
+  const handleSelectFolder = (folderId: number | null | undefined) => {
+    setSelectedFolderId(folderId);
+    // undefined → all, null → uncategorized (-1), number → specific folder
+    const apiFolderId = folderId === null ? -1 : folderId;
+    fetchSavedRequests(apiFolderId);
+  };
+
+  const handleCreateFolder = async (parentId?: number | null) => {
+    if (!newFolderName.trim()) return;
+    setCreateLoading(true);
+    try {
+      const payload: any = { name: newFolderName.trim() };
+      if (parentId) payload.parent_id = parentId;
+      const response = await savedRequestFolderApi.createFolder(payload);
+      if (response.code === 200 && response.data) {
+        setNewFolderName('');
+        setShowNewFolderInput(false);
+        setCreatingParentId(null);
+        if (parentId) {
+          setExpandedFolderIds(prev => new Set(prev).add(parentId));
+        }
+        fetchFolders();
+        message.success('文件夹已创建');
+      }
+    } catch (error) {
+      console.error('Create folder failed:', error);
+      message.error('创建文件夹失败');
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const handleRenameFolder = async (folderId: number) => {
+    if (!editingFolderName.trim()) return;
+    try {
+      const response = await savedRequestFolderApi.updateFolder(folderId, { name: editingFolderName.trim() });
+      if (response.code === 200 && response.data) {
+        setEditingFolderId(null);
+        fetchFolders();
+        message.success('文件夹已重命名');
+      }
+    } catch (error) {
+      console.error('Rename folder failed:', error);
+      message.error('重命名文件夹失败');
+    }
+  };
+
+  const handleDeleteFolder = async (folderId: number) => {
+    Modal.confirm({
+      title: '确认删除文件夹',
+      content: '确定要删除此文件夹吗？文件夹必须为空才能删除。',
+      okText: '确定',
+      okType: 'danger',
+      cancelText: '取消',
+      className: 'iot-modal iot-confirm',
+      onOk: async () => {
+        try {
+          const response = await savedRequestFolderApi.deleteFolder(folderId);
+          if (response.code === 200) {
+            if (selectedFolderId === folderId) {
+              setSelectedFolderId(undefined);
+            }
+            fetchFolders();
+            message.success('文件夹已删除');
+          } else {
+            message.error(response.message || '删除文件夹失败');
+          }
+        } catch (error) {
+          console.error('Delete folder failed:', error);
+          message.error('删除文件夹失败');
+        }
+      },
+    });
+  };
+
+  // --- Recursive Folder Tree Renderer ---
+
+  const toggleFolderExpand = (folderId: number) => {
+    setExpandedFolderIds(prev => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  };
+
+  const renderFolderTreeNodes = (nodes: SavedRequestFolder[], depth: number): React.ReactNode => {
+    return nodes.map(f => {
+      const hasChildren = f.children && f.children.length > 0;
+      const isExpanded = expandedFolderIds.has(f.id);
+
+      return (
+        <React.Fragment key={f.id}>
+          <div
+            className={`iot-folder-item ${selectedFolderId === f.id ? 'is-active' : ''}`}
+            style={{ paddingLeft: 8 + depth * 16 }}
+          >
+            <span className="iot-folder-toggle" onClick={(e) => { e.stopPropagation(); toggleFolderExpand(f.id); }}>
+              {hasChildren ? (
+                isExpanded ? <DownOutlined style={{ fontSize: 10 }} /> : <RightOutlined style={{ fontSize: 10 }} />
+              ) : (
+                <span style={{ width: 10, display: 'inline-block' }} />
+              )}
+            </span>
+            <div
+              style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}
+              onClick={() => handleSelectFolder(f.id)}
+            >
+              {editingFolderId === f.id ? (
+                <Input
+                  size="small"
+                  value={editingFolderName}
+                  onChange={(e) => setEditingFolderName(e.target.value)}
+                  onPressEnter={() => handleRenameFolder(f.id)}
+                  onBlur={() => handleRenameFolder(f.id)}
+                  style={{ height: 22, fontSize: 12, padding: '0 6px' }}
+                  onClick={(e) => e.stopPropagation()}
+                  autoFocus
+                />
+              ) : (
+                <>
+                  <FolderOpenOutlined style={{ fontSize: 13, flexShrink: 0 }} />
+                  <span className="iot-folder-item-name">{f.name}</span>
+                </>
+              )}
+            </div>
+            <div className="iot-folder-item-actions">
+              <Button type="text" size="small" icon={<PlusOutlined />} className="iot-folder-action-btn" onClick={(e) => { e.stopPropagation(); setShowNewFolderInput(true); setCreatingParentId(f.id); setNewFolderName(''); }} />
+              <Button type="text" size="small" className="iot-folder-action-btn" onClick={(e) => { e.stopPropagation(); setEditingFolderId(f.id); setEditingFolderName(f.name); }}>重命名</Button>
+              <Button type="text" size="small" className="iot-folder-action-btn iot-folder-action-btn--danger" onClick={(e) => { e.stopPropagation(); handleDeleteFolder(f.id); }}>删除</Button>
+            </div>
+          </div>
+          {/* Inline create subfolder input */}
+          <div className={`iot-folder-create-inline iot-folder-create-inline--sub ${showNewFolderInput && creatingParentId === f.id ? 'is-visible' : ''}`}
+               style={{ paddingLeft: 8 + (depth + 1) * 16 }}>
+            <div className="iot-folder-create-label">新建子文件夹</div>
+            <div className="iot-folder-create-row">
+              <Input
+                size="small"
+                placeholder="输入文件夹名称"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onPressEnter={() => handleCreateFolder(f.id)}
+                className="iot-folder-create-input"
+              />
+              <Space size={4}>
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={createLoading}
+                  onClick={() => handleCreateFolder(f.id)}
+                  className="iot-btn-primary"
+                  style={{ minWidth: 52, height: 28 }}
+                >
+                  确定
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); setCreatingParentId(null); }}
+                  style={{ minWidth: 52, height: 28 }}
+                >
+                  取消
+                </Button>
+              </Space>
+            </div>
+          </div>
+          {/* Children */}
+          {hasChildren && isExpanded && renderFolderTreeNodes(f.children, depth + 1)}
+        </React.Fragment>
+      );
+    });
   };
 
   // --- Response Status Helper ---
@@ -1392,7 +1597,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   <Button
                     icon={<SyncOutlined />}
                     className="iot-refresh-btn"
-                    onClick={fetchSavedRequests}
+                    onClick={() => { fetchSavedRequests(selectedFolderId); fetchFolders(); }}
                     size="small"
                     loading={loading}
                   />
@@ -1407,6 +1612,71 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   </Tooltip>
                 </Space>
               </div>
+
+              {/* Folder Navigation — Tree */}
+              <div style={{ padding: '8px 12px 4px', borderBottom: '1px solid var(--color-border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', flex: 1 }}>文件夹</span>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<PlusOutlined />}
+                    onClick={() => { setShowNewFolderInput(true); setCreatingParentId(null); setNewFolderName(''); }}
+                    style={{ color: 'var(--color-text-tertiary)' }}
+                  />
+                </div>
+                <div className={`iot-folder-create-inline ${showNewFolderInput && creatingParentId === null ? 'is-visible' : ''}`}>
+                  <div className="iot-folder-create-label">新建根文件夹</div>
+                  <div className="iot-folder-create-row">
+                    <Input
+                      size="small"
+                      placeholder="输入文件夹名称"
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      onPressEnter={() => handleCreateFolder(null)}
+                      className="iot-folder-create-input"
+                    />
+                    <Space size={4}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={createLoading}
+                        onClick={() => handleCreateFolder(null)}
+                        className="iot-btn-primary"
+                        style={{ minWidth: 52, height: 28 }}
+                      >
+                        确定
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); setCreatingParentId(null); }}
+                        style={{ minWidth: 52, height: 28 }}
+                      >
+                        取消
+                      </Button>
+                    </Space>
+                  </div>
+                </div>
+                <div className="iot-folder-list">
+                  <div
+                    className={`iot-folder-item ${selectedFolderId === undefined ? 'is-active' : ''}`}
+                    onClick={() => handleSelectFolder(undefined)}
+                  >
+                    <FolderOutlined style={{ fontSize: 13 }} />
+                    <span>全部请求</span>
+                  </div>
+                  <div
+                    className={`iot-folder-item ${selectedFolderId === null ? 'is-active' : ''}`}
+                    onClick={() => handleSelectFolder(null)}
+                  >
+                    <InboxOutlined style={{ fontSize: 13 }} />
+                    <span>未分类</span>
+                  </div>
+                  {renderFolderTreeNodes(folders, 0)}
+                </div>
+              </div>
+
+              {/* Search */}
               <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>
                 <Input.Search
                   placeholder="搜索名称..."
@@ -1417,11 +1687,13 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   onSearch={(val) => setSearchRequests(val)}
                 />
               </div>
+
+              {/* Saved Request List */}
               <div className="iot-saved-list">
                 {filteredSavedRequests.length === 0 ? (
                   <div className="iot-saved-empty">
                     <InboxOutlined style={{ fontSize: 24, opacity: 0.3 }} />
-                    <span>暂无保存的请求</span>
+                    <span>{selectedFolderId === null ? '未分类中没有保存的请求' : '暂无保存的请求'}</span>
                   </div>
                 ) : (
                   filteredSavedRequests.map(record => (

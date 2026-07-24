@@ -1,8 +1,8 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm, message } from 'antd';
-import { PlusOutlined, MinusOutlined, EditOutlined } from '@ant-design/icons';
+import { Layout, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm, Tooltip, message, FloatButton } from 'antd';
+import { PlusOutlined, MinusOutlined, EditOutlined, GlobalOutlined, InfoCircleOutlined, KeyOutlined, AppstoreOutlined, MessageOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, TestCaseExecutionLog } from './types';
 import { sessionApi, testcaseApi, moduleApi, globalParameterApi, configApi } from './services/api';
@@ -19,6 +19,7 @@ import SessionApiConfig from './components/api/SessionApiConfig';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
 import ApiScenarioTestTool from './components/api/ApiScenarioTestTool';
 import VariableAssistant from './components/VariableAssistant';
+import ChatAssistant from './components/chat/ChatAssistant';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
 import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
@@ -80,6 +81,9 @@ const App: React.FC = () => {
   const canManageGlobalParams = hasPermission(Permission.GLOBAL_PARAMETER_MANAGE);
   const canAccessScheduledTask = hasPermission(Permission.SCHEDULED_TASK_MANAGE);
   const canAccessMock = hasPermission(Permission.MOCK_MANAGE);
+
+  // AI 助手抽屉状态
+  const [chatOpen, setChatOpen] = useState(false);
 
   // 状态管理
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1457,6 +1461,9 @@ const App: React.FC = () => {
                                 onApiProjectChange={setSelectedApiProjectId}
                                 apiEndpointOverrides={apiEndpointOverrides}
                                 onApiEndpointOverridesChange={setApiEndpointOverrides}
+                                onRequireConfig={() => {
+                                  setIsSettingModalVisible(true);
+                                }}
                               />
                             ),
                           },
@@ -1733,173 +1740,495 @@ const App: React.FC = () => {
 
       {/* 全局参数模态框 - 全局渲染 */}
       <Modal
-        title="全局参数管理"
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              width: 34,
+              height: 34,
+              borderRadius: 10,
+              background: 'linear-gradient(135deg, #4f46e5, #818cf8)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16,
+              boxShadow: '0 2px 8px rgba(79,70,229,0.2)',
+            }}>
+              <GlobalOutlined style={{ color: '#fff' }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.3, color: '#0f172a' }}>全局参数管理</div>
+              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, lineHeight: 1.3 }}>
+                管理环境变量与全局参数，支持多环境隔离
+              </div>
+            </div>
+          </div>
+        }
         open={isGlobalParamsModalVisible && canManageGlobalParams}
         onOk={() => setIsGlobalParamsModalVisible(false)}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
-        width={600}
-        styles={{ body: { padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '65vh' } }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}>
-          {/* 环境选择和管理 - 固定区域 */}
-          <div style={{ padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--color-border-light)', flexShrink: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
-              <h3 style={{ margin: 0, fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-semibold)' }}>环境管理</h3>
+        width={680}
+        footer={
+          <div style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            borderTop: '1px solid #e2e8f0',
+            paddingTop: 16,
+          }}>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Button
+                onClick={() => setIsGlobalParamsModalVisible(false)}
+                style={{
+                  color: '#64748b',
+                  borderColor: '#e2e8f0',
+                  background: '#ffffff',
+                  height: 40,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  padding: '0 20px',
+                }}
+              >
+                关闭
+              </Button>
               <Button
                 type="primary"
-                size="small"
-                onClick={handleAddEnvironment}
+                onClick={() => setIsGlobalParamsModalVisible(false)}
+                style={{
+                  height: 40,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  padding: '0 24px',
+                  background: 'linear-gradient(135deg, #4f46e5, #4338ca)',
+                  border: 'none',
+                  boxShadow: '0 2px 8px rgba(79,70,229,0.2)',
+                }}
               >
-                添加环境
+                完成
               </Button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-              {environments.map(env => (
-                <div
-                  key={env.id}
+          </div>
+        }
+        styles={{ body: { padding: '20px 0 0' } }}
+        destroyOnClose
+        centered
+      >
+        {/* 环境选择区域 */}
+        <div style={{ padding: '0 24px 16px' }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 12,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <AppstoreOutlined style={{ fontSize: 13, color: '#64748b', opacity: 0.7 }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>环境管理</span>
+            </div>
+            <Button
+              type="primary"
+              size="small"
+              onClick={handleAddEnvironment}
+              style={{
+                height: 28,
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 500,
+                background: 'linear-gradient(135deg, #4f46e5, #6366f1)',
+                border: 'none',
+                padding: '0 12px',
+              }}
+            >
+              <PlusOutlined style={{ fontSize: 11 }} /> 添加环境
+            </Button>
+          </div>
+          <div style={{
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: 10,
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            minHeight: 44,
+          }}>
+            {environments.length === 0 ? (
+              <span style={{ color: '#94a3b8', fontSize: 12, padding: '4px 0', width: '100%', textAlign: 'center' }}>
+                暂无环境，请添加
+              </span>
+            ) : environments.map(env => (
+              <div
+                key={env.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '5px 12px',
+                  borderRadius: 6,
+                  background: currentEnvironmentId === env.id ? '#4f46e5' : '#ffffff',
+                  color: currentEnvironmentId === env.id ? '#fff' : '#1e293b',
+                  border: currentEnvironmentId === env.id ? '1px solid #4f46e5' : '1px solid #e2e8f0',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: currentEnvironmentId === env.id ? 600 : 500,
+                  transition: 'all 0.15s ease',
+                  boxShadow: currentEnvironmentId === env.id ? '0 1px 4px rgba(79,70,229,0.3)' : 'none',
+                }}
+                onClick={() => handleSwitchEnvironment(env.id)}
+              >
+                {env.name}
+                {env.is_default && (
+                  <span style={{ fontSize: 10, opacity: 0.75, marginLeft: 2 }}>默认</span>
+                )}
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
                   style={{
+                    color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#94a3b8',
+                    padding: 0,
+                    fontSize: 11,
+                    width: 18,
+                    height: 18,
                     display: 'flex',
                     alignItems: 'center',
-                    padding: 'var(--space-1) var(--space-3)',
-                    borderRadius: 'var(--radius-full)',
-                    background: currentEnvironmentId === env.id ? 'var(--color-primary)' : 'var(--color-border-light)',
-                    color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-text)',
-                    cursor: 'pointer',
-                    fontSize: 'var(--font-size-xs)',
-                    gap: 'var(--space-1)',
-                    transition: 'all 0.2s ease',
+                    justifyContent: 'center',
+                    marginLeft: 2,
                   }}
-                  onClick={() => handleSwitchEnvironment(env.id)}
+                  onClick={(e) => { e.stopPropagation(); handleOpenEditEnvironment(env); }}
+                />
+                <Popconfirm
+                  title="确定删除该环境？"
+                  description="删除后该环境下的所有参数将丢失"
+                  onConfirm={(e) => { e?.stopPropagation(); handleRemoveEnvironment(env.id); }}
+                  onCancel={(e) => e?.stopPropagation()}
+                  okText="确定"
+                  cancelText="取消"
                 >
-                  {env.name}
-                  {env.is_default && (
-                    <span style={{ fontSize: '10px', opacity: 0.8 }}>(默认)</span>
-                  )}
                   <Button
                     type="text"
                     size="small"
-                    icon={<EditOutlined />}
-                    style={{ color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-text-tertiary)', padding: 0, fontSize: 'var(--font-size-xs)' }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenEditEnvironment(env);
+                    style={{
+                      color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.6)' : '#f43f5e',
+                      padding: 0,
+                      fontSize: 14,
+                      width: 18,
+                      height: 18,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      lineHeight: 1,
+                      opacity: 0.6,
                     }}
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    {/* 编辑 */}
+                    ×
                   </Button>
-                  <Popconfirm
-                    title="确定删除该环境？"
-                    description="删除后该环境下的所有参数将丢失"
-                    onConfirm={(e) => {
-                      e?.stopPropagation();
-                      handleRemoveEnvironment(env.id);
+                </Popconfirm>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 提示条 */}
+        <div style={{
+          margin: '0 24px 16px',
+          padding: '10px 14px',
+          background: '#eef2ff',
+          border: '1px solid #c7d2fe',
+          borderRadius: 6,
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
+        }}>
+          <InfoCircleOutlined style={{ color: '#4f46e5', fontSize: 13, marginTop: 1, flexShrink: 0 }} />
+          <span style={{ fontSize: 12, color: '#4338ca', lineHeight: 1.5 }}>
+            全局参数将应用于所有请求，可在URL、请求头和请求体中使用 <code style={{ background: 'rgba(79,70,229,0.1)', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>{'{{variable}}'}</code> 或 <code style={{ background: 'rgba(79,70,229,0.1)', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>{'${variable}'}</code> 语法引用
+          </span>
+        </div>
+
+        {/* 参数列表标题 */}
+        <div style={{
+          padding: '0 24px',
+          marginBottom: 8,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}>
+          <KeyOutlined style={{ fontSize: 13, color: '#64748b', opacity: 0.7 }} />
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>
+            参数列表
+          </span>
+          <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 4 }}>
+            {getCurrentEnvironment().parameters.length} 项
+          </span>
+        </div>
+
+        {/* 参数列表 */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', maxHeight: '35vh' }}>
+          {getCurrentEnvironment().parameters.length === 0 ? (
+            <div style={{
+              textAlign: 'center',
+              padding: '40px 20px',
+              border: '1px dashed #e2e8f0',
+              borderRadius: 8,
+              background: '#f8fafc',
+            }}>
+              <div style={{
+                width: 44,
+                height: 44,
+                borderRadius: 12,
+                background: '#eef2ff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto',
+              }}>
+                <KeyOutlined style={{ fontSize: 18, color: '#4f46e5' }} />
+              </div>
+              <div style={{ color: '#1e293b', fontSize: 14, fontWeight: 600, marginTop: 12 }}>
+                暂无参数
+              </div>
+              <div style={{ color: '#64748b', fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+                点击下方按钮添加当前环境的全局参数
+              </div>
+            </div>
+          ) : (
+            <div style={{ borderRadius: 8, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: '8px 12px',
+                background: '#f8fafc',
+                borderBottom: '1px solid #e2e8f0',
+                gap: 8,
+              }}>
+                <span style={{ width: 180, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数名</span>
+                <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数值</span>
+                <span style={{ width: 32, fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'center' }}>操作</span>
+              </div>
+              {getCurrentEnvironment().parameters.map((param, index) => (
+                <div
+                  key={index}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 12px',
+                    borderBottom: index < getCurrentEnvironment().parameters.length - 1 ? '1px solid #f1f5f9' : 'none',
+                    transition: 'background 0.12s',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <Input
+                    placeholder="参数名"
+                    value={param.key}
+                    onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
+                    variant="borderless"
+                    style={{
+                      width: 180,
+                      height: 36,
+                      fontSize: 13,
+                      fontWeight: 500,
                     }}
-                    onCancel={(e) => e?.stopPropagation()}
-                    okText="确定"
-                    cancelText="取消"
-                  >
+                    prefix={<KeyOutlined style={{ color: '#94a3b8', fontSize: 12 }} />}
+                  />
+                  <Input
+                    placeholder="参数值"
+                    value={param.value}
+                    onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
+                    variant="borderless"
+                    style={{
+                      flex: 1,
+                      height: 36,
+                      fontSize: 13,
+                    }}
+                  />
+                  <Tooltip title="删除此参数">
                     <Button
-                      type="text"
+                      icon={<MinusOutlined />}
+                      danger
+                      onClick={() => handleRemoveEnvironmentParameter(index)}
                       size="small"
-                      style={{ color: currentEnvironmentId === env.id ? '#fff' : 'var(--color-danger)', padding: 0, fontSize: '14px' }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      ×
-                    </Button>
-                  </Popconfirm>
+                      type="text"
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 6,
+                        flexShrink: 0,
+                        opacity: 0.4,
+                        transition: 'opacity 0.12s',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.4'; }}
+                    />
+                  </Tooltip>
                 </div>
               ))}
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* 参数提示 - 固定区域 */}
-          <p style={{ color: 'var(--color-text-secondary)', margin: 0, padding: 'var(--space-3) var(--space-5)', fontSize: 'var(--font-size-sm)', flexShrink: 0, borderBottom: '1px solid var(--color-border-light)', background: 'var(--color-bg-secondary)' }}>
-            全局参数将应用于所有请求，可在URL、请求头和请求体中使用 &#123;&#123;variable&#125;&#125; 或 $&#123;variable&#125; 语法引用
-          </p>
-
-          {/* 参数列表 - 可滚动区域 */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-3) var(--space-5)' }}>
-            {getCurrentEnvironment().parameters.map((param, index) => (
-              <Space
-                key={index}
-                style={{ width: '100%', marginBottom: 'var(--space-3)' }}
-                align="center"
-              >
-                <Input
-                  placeholder="参数名"
-                  value={param.key}
-                  onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
-                  style={{ width: 150 }}
-                  size="middle"
-                />
-                <Input
-                  placeholder="参数值"
-                  value={param.value}
-                  onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
-                  style={{ flex: 1, width: 330 }}
-                  size="middle"
-                />
-                <Button
-                  icon={<MinusOutlined />}
-                  danger
-                  onClick={() => handleRemoveEnvironmentParameter(index)}
-                  size="small"
-                />
-              </Space>
-            ))}
-          </div>
-
-          {/* 添加按钮 - 固定底部 */}
-          <div style={{ padding: 'var(--space-2) var(--space-5) var(--space-4)', borderTop: '1px solid var(--color-border-light)', flexShrink: 0 }}>
-            <Button
-              type="dashed"
-              icon={<PlusOutlined />}
-              onClick={handleAddEnvironmentParameter}
-              style={{ width: '100%' }}
-              size="middle"
-            >
-              添加全局参数
-            </Button>
-          </div>
+        {/* 添加按钮 */}
+        <div style={{ padding: '12px 24px 20px', borderTop: '1px solid #e2e8f0', marginTop: 12 }}>
+          <Button
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={handleAddEnvironmentParameter}
+            style={{
+              width: '100%',
+              height: 42,
+              color: '#4f46e5',
+              borderColor: '#c7d2fe',
+              background: '#eef2ff',
+              borderStyle: 'dashed',
+              fontSize: 13,
+              fontWeight: 500,
+              borderRadius: 6,
+            }}
+            size="middle"
+          >
+            添加全局参数
+          </Button>
         </div>
       </Modal>
 
-      {/* 添加环境模态框 - 全局渲染 */}
+      {/* 添加环境模态框 */}
       <Modal
-        title="创建新环境"
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 30,
+              height: 30,
+              borderRadius: 8,
+              background: 'linear-gradient(135deg, #4f46e5, #818cf8)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+            }}>
+              <PlusOutlined style={{ color: '#fff', fontSize: 12 }} />
+            </div>
+            <span style={{ fontSize: 15, fontWeight: 600 }}>创建新环境</span>
+          </div>
+        }
         open={isAddEnvModalVisible && canManageGlobalParams}
         onOk={handleConfirmAddEnvironment}
         onCancel={() => setIsAddEnvModalVisible(false)}
-        width={400}
+        width={420}
+        okText="创建"
+        cancelText="取消"
+        okButtonProps={{
+          style: {
+            borderRadius: 6,
+            height: 36,
+            fontWeight: 500,
+            background: 'linear-gradient(135deg, #4f46e5, #4338ca)',
+            border: 'none',
+          }
+        }}
+        cancelButtonProps={{
+          style: {
+            borderRadius: 6,
+            height: 36,
+            color: '#64748b',
+            borderColor: '#e2e8f0',
+          }
+        }}
+        destroyOnClose
+        centered
       >
-        <Input
-          placeholder="请输入环境名称"
-          value={newEnvironmentName}
-          onChange={(e) => setNewEnvironmentName(e.target.value)}
-          style={{ marginBottom: 'var(--space-4)' }}
-        />
-        <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
-          环境名称用于区分不同的参数配置集
+        <div style={{ padding: '4px 0' }}>
+          <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>
+            环境名称
+          </div>
+          <Input
+            placeholder="请输入环境名称，如「开发环境」、「测试环境」"
+            value={newEnvironmentName}
+            onChange={(e) => setNewEnvironmentName(e.target.value)}
+            style={{
+              background: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: 6,
+              height: 40,
+            }}
+            onPressEnter={handleConfirmAddEnvironment}
+            prefix={<AppstoreOutlined style={{ color: '#94a3b8' }} />}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, color: '#94a3b8', fontSize: 12 }}>
+            <InfoCircleOutlined style={{ fontSize: 11 }} />
+            <span>环境名称用于区分不同的参数配置集</span>
+          </div>
         </div>
       </Modal>
 
-      {/* 编辑环境模态框 - 全局渲染 */}
+      {/* 编辑环境模态框 */}
       <Modal
-        title="编辑环境"
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 30,
+              height: 30,
+              borderRadius: 8,
+              background: 'linear-gradient(135deg, #4f46e5, #818cf8)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+            }}>
+              <EditOutlined style={{ color: '#fff', fontSize: 12 }} />
+            </div>
+            <span style={{ fontSize: 15, fontWeight: 600 }}>编辑环境</span>
+          </div>
+        }
         open={isEditEnvModalVisible && canManageGlobalParams}
         onOk={handleConfirmEditEnvironment}
         onCancel={() => setIsEditEnvModalVisible(false)}
-        width={400}
+        width={420}
+        okText="保存"
+        cancelText="取消"
+        okButtonProps={{
+          style: {
+            borderRadius: 6,
+            height: 36,
+            fontWeight: 500,
+            background: 'linear-gradient(135deg, #4f46e5, #4338ca)',
+            border: 'none',
+          }
+        }}
+        cancelButtonProps={{
+          style: {
+            borderRadius: 6,
+            height: 36,
+            color: '#64748b',
+            borderColor: '#e2e8f0',
+          }
+        }}
+        destroyOnClose
+        centered
       >
-        <Input
-          placeholder="请输入环境名称"
-          value={editEnvironmentName}
-          onChange={(e) => setEditEnvironmentName(e.target.value)}
-          onPressEnter={handleConfirmEditEnvironment}
-          style={{ marginBottom: 'var(--space-4)' }}
-        />
-        <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-size-xs)' }}>
-          环境名称用于区分不同的参数配置集
+        <div style={{ padding: '4px 0' }}>
+          <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>
+            环境名称
+          </div>
+          <Input
+            placeholder="请输入环境名称"
+            value={editEnvironmentName}
+            onChange={(e) => setEditEnvironmentName(e.target.value)}
+            onPressEnter={handleConfirmEditEnvironment}
+            style={{
+              background: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: 6,
+              height: 40,
+            }}
+            prefix={<AppstoreOutlined style={{ color: '#94a3b8' }} />}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, color: '#94a3b8', fontSize: 12 }}>
+            <InfoCircleOutlined style={{ fontSize: 11 }} />
+            <span>修改名称不会影响已有参数配置</span>
+          </div>
         </div>
       </Modal>
 
@@ -1908,6 +2237,16 @@ const App: React.FC = () => {
         environmentId={currentEnvironmentId ? parseInt(currentEnvironmentId) || undefined : undefined}
         environmentVariables={getCurrentEnvironment().parameters.filter(p => p.key).map(p => ({ key: p.key, value: p.value }))}
       />
+
+      {/* AI 助手 */}
+      <FloatButton
+        icon={<MessageOutlined />}
+        type="primary"
+        style={{ right: 24, bottom: 140 }}
+        tooltip="AI 助手"
+        onClick={() => setChatOpen(true)}
+      />
+      <ChatAssistant open={chatOpen} onClose={() => setChatOpen(false)} />
     </ConfigProvider>
   );
 };

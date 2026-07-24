@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -423,7 +423,10 @@ export const historyPromptApi = {
 // 保存的请求API
 export const savedRequestApi = {
   // 获取所有保存的请求
-  getRequests: (): Promise<ApiResponse<SavedRequest[]>> => api.get('/saved-requests'),
+  getRequests: (folderId?: number | null): Promise<ApiResponse<SavedRequest[]>> => {
+    const params = folderId !== undefined && folderId !== null ? { folder_id: folderId } : {};
+    return api.get('/saved-requests', { params });
+  },
 
   // 创建保存的请求
   createRequest: (request: Omit<SavedRequest, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<SavedRequest>> => api.post('/saved-requests', request),
@@ -433,6 +436,14 @@ export const savedRequestApi = {
 
   // 删除保存的请求
   deleteRequest: (requestId: number): Promise<ApiResponse> => api.delete(`/saved-requests/${requestId}`)
+};
+
+// 保存的请求文件夹API
+export const savedRequestFolderApi = {
+  getFolders: (): Promise<ApiResponse<SavedRequestFolder[]>> => api.get('/saved-request-folders'),
+  createFolder: (data: { name: string; parent_id?: number | null }): Promise<ApiResponse<SavedRequestFolder>> => api.post('/saved-request-folders', data),
+  updateFolder: (folderId: number, data: Partial<SavedRequestFolder>): Promise<ApiResponse<SavedRequestFolder>> => api.put(`/saved-request-folders/${folderId}`, data),
+  deleteFolder: (folderId: number): Promise<ApiResponse> => api.delete(`/saved-request-folders/${folderId}`)
 };
 
 // 全局参数（环境）API
@@ -508,6 +519,21 @@ export const mcpServerApi = {
 
   // 删除 MCP 服务器配置
   delete: (serverId: number): Promise<ApiResponse> => api.delete(`/mcp/servers/${serverId}`),
+
+  // 从 JSON 数据导入 MCP 配置
+  importJson: (data: Record<string, any>): Promise<ApiResponse<McpServer[]>> => api.post('/mcp/servers/import', data),
+
+  // 从 JSON 文件导入 MCP 配置
+  importJsonFile: (file: File): Promise<ApiResponse<McpServer[]>> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/mcp/servers/import/file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+
+  // 导出为标准 JSON 格式
+  exportJson: (): Promise<{ mcpServers: Record<string, any> }> => api.get('/mcp/servers/export'),
 };
 
 // Skills Hub API
@@ -516,6 +542,15 @@ export const skillsApi = {
   get: (name: string): Promise<ApiResponse<Skill>> => api.get(`/skills/${name}`),
   install: (url: string): Promise<ApiResponse<Skill>> => api.post('/skills/install', { url }),
   delete: (name: string): Promise<ApiResponse> => api.delete(`/skills/${name}`),
+};
+
+// AI 对话 API
+export const chatApi = {
+  send: (
+    messages: Array<{ role: string; content: string }>,
+    selectedSkills?: string[]
+  ): Promise<ApiResponse<{ reply: string }>> =>
+    api.post('/chat', { messages, selected_skills: selectedSkills }),
 };
 
 // 系统配置 API

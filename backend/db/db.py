@@ -29,6 +29,7 @@ from db.models import (
     MockConfig,
     RequirementPoint,
     SavedRequest,
+    SavedRequestFolder,
     ScheduledTask,
     Session,
     TestCase,

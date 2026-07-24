@@ -1,198 +1,466 @@
-# Testcase Generator — repo notes
+# AI 测试用例生成与 API 测试平台
 
-快速说明
+一站式测试工具平台，集成 **AI 驱动测试用例生成**、**接口场景测试**、**HTTP 请求调试**、**Mock 接口服务**和**定时任务调度**五大能力。
 
-- 后端：FastAPI（`backend/main.py`）。启动：
+## 目录
+
+- [平台概览](#平台概览)
+- [快速开始](#快速开始)
+- [平台功能详解](#平台功能详解)
+  - [AI 测试用例平台](#1-ai-测试用例平台)
+  - [接口场景测试工具](#2-接口场景测试工具)
+  - [IoT 数据推送平台](#3-iot-数据推送平台)
+  - [Mock 接口平台](#4-mock-接口平台)
+  - [定时任务平台](#5-定时任务平台)
+- [技术架构](#技术架构)
+- [环境变量与部署](#环境变量与部署)
+- [配置文件提交规则](#配置文件提交规则)
+
+---
+
+## 平台概览
+
+| 平台 | 说明 |
+|---|---|
+| **AI 测试用例平台** | 使用 LLM (DeepSeek/Ollama) 从需求描述自动生成测试用例，4 阶段深度管线 + 接口关联 |
+| **接口场景测试工具** | OpenAPI/Swagger 导入、接口执行、场景编排、断言验证、AI 智能匹配 |
+| **IoT 数据推送平台** | HTTP 请求调试工具，多 Tab 编辑、变量替换、后置提取、全局参数管理 |
+| **Mock 接口平台** | 可配置的 HTTP Mock 服务，支持参数化响应和分页模拟 |
+| **定时任务平台** | 基于 APScheduler 的定时任务引擎，支持间隔/Cron 调度、多请求串行执行 |
+
+---
+
+## 快速开始
+
+### 前置条件
+
+- Python 3.11+
+- Node.js 18+
+- Docker & Docker Compose（可选，用于一键部署）
+
+### 本地开发
+
+#### 后端启动
 
 ```bash
 cd backend
 python -m venv .venv
-# linux
-source .venv/bin/activate  # 创建虚拟环境
-# windows
+
+# Linux / macOS
+source .venv/bin/activate
+# Windows
 .venv/Scripts/activate
+
 pip install -r requirements.txt
-uvicorn backend.main:app --reload
+
+# 启动开发服务器（从 backend/ 目录）
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# 或从项目根目录启动
+cd ..
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-
-- 前端：React + Vite（`frontend/`）。启动：
+#### 前端启动
 
 ```bash
 cd frontend
 npm install
-pnpm dev
+npm run dev    # 默认端口 5173，代理 /api 到 8000
 ```
 
+前端进程会代理 `/api` 请求到后端，开发时无需单独配置跨域。
 
-关键约定
+### Docker Compose 部署（推荐）
 
-- API 返回格式：`response: List[TestCase]`（参见 `backend/utils/model_utils.py`）。
-- 数据库：SQLite 文件位于 `backend/data/testcases.db`。
-- 模型：LangChain agent 在 `backend/utils/model_utils.py`，支持 `api`（DeepSeek）和 `ollama` 两种模式。
+```bash
+# 首次部署
+copy .env.example .env        # Windows
+# cp .env.example .env        # Linux/macOS
 
-## 快速开始
-### 设置
-* deepseek api key:
-![img.png](img/img-0.png)
-* ollama:
-![img.png](img/img-1.png)
-### 测试用例列表页
-![img.png](img/img-2.png)
-### 测试用例详情页
-![img.png](img/img-3.png)
-### 测试用例编辑页
-![img.png](img/img-4.png)
+# 按需要修改 .env 中的配置
 
-## 环境变量与发布配置
+docker compose up -d --build
+```
 
-本项目把“代码/镜像”和“环境配置”分开管理。真实 `.env` 文件不应提交到仓库；仓库只保留 `.env.example`、`backend/.env.example`、`frontend/.env.example` 作为模板。
+部署后访问：
 
-### 应该修改哪个 `.env`
+- 前端：`http://localhost:8001`
+- 后端 API：`http://localhost:8000/api`
+- Keycloak 管理后台：`http://localhost:8090`（admin / admin）
 
-不同启动方式读取的配置文件不同：
+---
 
-| 启动方式 | 需要修改的文件 | 说明 |
-| --- | --- | --- |
-| Docker Compose 部署 | 根目录 `.env` | 生产/测试环境推荐方式。改完后重启容器即可。 |
-| 本地启动后端 | `backend/.env` | 使用 `cd backend && uvicorn main:app --reload` 时生效。 |
-| 本地启动前端 | `frontend/.env`、`frontend/.env.development` | 使用 `cd frontend && npm run dev` 时生效。 |
+## 平台功能详解
 
-生产发布时通常只需要修改根目录 `.env`：
+### 1. AI 测试用例平台
+
+核心能力：从自然语言需求描述中自动生成结构化测试用例。
+
+#### 4 阶段深度生成管线
+
+| 阶段 | 产物 | 说明 |
+|---|---|---|
+| 阶段 1 — 需求分析 | 需求点 | 解析需求文本，提取结构化需求点 |
+| 阶段 2 — 测试点生成 | 测试点 | 对每个需求点生成测试点（含测试类别、设计方法） |
+| 阶段 3 — 用例设计 | 测试用例 | 生成详细测试用例（步骤、断言、预期结果） |
+| 阶段 4 — 合并去重 | 优化用例 | 去重、合并、检查一致性 |
+
+支持两种生成模式：
+
+- **功能测试模式**：纯需求文本生成
+- **接口测试模式**：关联 OpenAPI 端点，自动推断接口依赖，前置步骤注入
+
+#### 核心特性
+
+- **需求输入**：文本框输入 + 文件上传（`.docx` / `.pdf` / `.txt` / `.md`）
+- **API 关联**：选择 API 项目 + 多选接口，支持智能匹配和参数覆盖
+- **技能选择**：将测试方法论注入 AI 提示词（通过 Skills Hub）
+- **用例结构管理**：三级结构（需求点 → 测试点 → 用例），支持分页、搜索、重生成
+- **用例管理**：表格视图、筛选统计、导出 Excel、批量操作（删除/移动）
+- **准确性标签**：一致性检查、置信度评分、验证状态
+- **执行验证**：API 执行 + 断言引擎验证
+- **依赖推断**：自动分析接口间调用依赖关系
+
+#### 支持的操作
+
+- 会话管理（CRUD、选择、切换）
+- 模块管理（树形结构，无限层级）
+- 需求点/测试点/用例的新增、编辑、删除、重生成
+- 测试用例的执行、验证、批量移动
+- 历史需求记录管理
+
+---
+
+### 2. 接口场景测试工具
+
+完整的 API 测试生命周期管理工具。
+
+#### 项目管理
+
+- 创建/编辑/删除 API 项目
+- **OpenAPI/Swagger 导入**：支持 URL 和文件上传，自动解析 YAML/JSON
+- Swagger 同步更新
+
+#### 接口管理
+
+- 接口 CRUD，支持搜索和分组
+- Headers / Parameters / Request Body 配置
+- **前置动作**：在请求前执行的脚本或 API 调用
+- **后置提取**：JSONPath 从响应中提取变量
+- **断言配置**：支持 7 种断言类型
+  - 状态码 / 状态码范围 / 响应时间
+  - JSONPath 存在 / 等于 / 不等于
+  - 变量替换断言
+
+#### 场景编排
+
+- 创建场景，从端点列表拖拽添加步骤
+- 步骤排序、启用/禁用
+- 设置"失败继续"选项
+- **AI 生成场景测试**：自动生成多步骤场景
+
+#### 执行能力
+
+- 单接口执行，实时查看请求/响应详情
+- 单场景运行 / 批量运行
+- 执行结果详情展示
+- AI 生成请求 Body
+
+---
+
+### 3. IoT 数据推送平台
+
+HTTP 请求调试与推送平台。
+
+#### 特性
+
+- **多 Tab 编辑**：同时编辑多个 HTTP 请求
+- **三栏可拖拽布局**：请求配置 / 请求体+响应 / 已保存请求
+- **变量语法**：`{{variable}}` 引用环境变量
+- **参数类型**：文本 / 文件上传
+- **请求头编辑** + 请求体 JSON 编辑器（CodeMirror）
+- **响应展示**：状态码、耗时、JSON 高亮渲染
+
+#### 后置提取
+
+从响应 JSON 中使用 **JSONPath 语法**提取值并保存到当前环境变量。
+
+#### 变量助手
+
+浮动工具面板，支持：
+
+| 类型 | 示例 |
+|---|---|
+| 内置函数 | `{{$timestamp}}`、`{{$uuid}}`、`{{$randomInt}}`、`{{$date}}` |
+| JS 表达式 | `{{@Date.now()}}`、`{{@Math.random().toFixed(4)}}` |
+| 环境变量 | `{{环境变量名}}` |
+
+#### 全局参数管理
+
+多环境支持，通过 `useEnvironments` Hook 统一管理环境变量的 CRUD 和切换。
+
+---
+
+### 4. Mock 接口平台
+
+可配置的 HTTP Mock 服务器，用于接口模拟测试。
+
+#### 特性
+
+- Mock 配置 CRUD（名称、HTTP 方法、URL 路径）
+- 自定义状态码、响应头、响应体
+- 参数化响应
+  - 内置函数：`{{$timestamp}}`、`{{$uuid}}`、`{{$randomInt}}`
+  - JS 表达式：`{{@表达式}}`
+  - 路径参数提取
+- **分页模拟**：`response_count > 1` 时自动生成多条数据
+- 启用/禁用开关
+- 在线测试按钮
+- 请求/响应日志记录
+
+---
+
+### 5. 定时任务平台
+
+基于 **APScheduler** 的定时任务引擎。
+
+#### 特性
+
+- **调度类型**：
+  - 间隔执行（秒）
+  - Cron 表达式（标准 5 段或 6 段）
+- **多请求串行执行**：按顺序依次执行已保存的请求
+- **变量替换**：执行时自动替换 `{{variable}}` 模板
+- **Mock 匹配**：请求可被 Mock 接口拦截
+- **后置提取**：从响应中提取变量并更新环境参数
+- **任务参数**：支持文本和文件类型参数
+- **执行日志**：请求/响应详情、变量提取、错误详情
+
+#### 管理操作
+
+- CRUD 定时任务
+- 启停控制
+- 手动触发执行
+- 执行历史查看
+
+---
+
+## 技术架构
+
+### 后端 (FastAPI + SQLModel + SQLite)
+
+```
+backend/
+├── main.py                   # FastAPI 应用入口
+├── app/
+│   ├── main.py               # 路由聚合 & 权限绑定
+│   ├── auth.py               # Keycloak JWT 验证
+│   ├── deps.py               # 依赖注入
+│   ├── scheduler.py          # APScheduler 定时任务引擎
+│   ├── routes/               # 17 个路由模块
+│   │   ├── testcase.py       # 测试用例 CRUD + 执行
+│   │   ├── pipeline.py       # 4 阶段深度生成管线
+│   │   ├── api_test_tool.py  # OpenAPI 导入 & 接口/场景执行
+│   │   ├── proxy.py          # HTTP 请求代理 & 变量替换
+│   │   ├── mock_server.py    # Mock 服务器（免认证）
+│   │   ├── mock_config.py    # Mock 配置管理
+│   │   ├── mock_log.py       # Mock 日志
+│   │   ├── scheduled_task.py # 定时任务管理
+│   │   ├── saved_request.py  # 请求配置 CRUD
+│   │   ├── session.py        # 会话管理
+│   │   ├── module.py         # 模块树形管理
+│   │   ├── global_parameter.py # 全局参数管理
+│   │   ├── config.py         # 系统配置
+│   │   ├── mcp.py            # MCP 服务器管理
+│   │   ├── skills.py         # Skills Hub 管理
+│   │   └── history_prompt.py # 历史提示词管理
+│   └── services/             # 业务逻辑层
+│       ├── testcase_service.py  # 用例服务
+│       ├── api_context.py       # API 上下文构建
+│       ├── api_consistency.py   # 一致性检查引擎
+│       ├── api_test_tool.py     # API 测试工具服务
+│       ├── scenario_runner.py   # 场景执行引擎
+│       ├── step_runner.py       # 单步执行器
+│       ├── swagger_parser.py    # OpenAPI 解析器
+│       ├── schema_utils.py      # Schema 工具
+│       ├── assertion_engine.py  # 断言引擎
+│       ├── mcp_loader.py        # MCP 配置加载
+│       └── keycloak_sync.py     # Keycloak 角色同步
+├── utils/
+│   ├── model_utils.py        # LangChain agent + 结构化输出
+│   ├── llm_factory.py        # ChatOpenAI 统一构建工厂
+│   ├── prompts.py            # 提示词模板
+│   ├── file_parser.py        # 文件解析（.docx/.pdf/.txt/.md）
+│   ├── document_prefetch.py  # 飞书/蓝湖文档预取
+│   ├── lanhu_mcp_adapter.py  # 蓝湖 MCP 适配器
+│   ├── js_expression.py      # JS 表达式执行
+│   └── base_response.py      # 统一响应模型
+├── db/
+│   ├── models.py             # 17 个 SQLModel 数据表
+│   └── db.py                 # SQLite 引擎 + 自动迁移
+├── config.py                 # JSON 文件配置管理
+└── skills/                   # Skills Hub 技能文件
+```
+
+**数据表总览**：
+
+| 表 | 用途 |
+|---|---|
+| Session | 测试会话（顶层容器） |
+| Module | 功能模块（树形层级） |
+| TestCase | 测试用例 |
+| RequirementPoint | 需求点（Pipeline 阶段 1） |
+| TestPoint | 测试点（Pipeline 阶段 2） |
+| ApiProject | 导入的 API 项目 |
+| ApiEndpoint | API 接口定义 |
+| ApiScenario | 接口场景 |
+| ApiScenarioResult | 场景执行结果 |
+| SavedRequest | 保存的 HTTP 请求 |
+| GlobalParameter | 环境/全局参数 |
+| ScheduledTask | 定时任务 |
+| MockConfig | Mock 配置 |
+| McpServer | MCP 服务器配置 |
+| SystemConfig | 系统配置 |
+| HistoryPrompt | 历史提示词 |
+| MockLog / TestCaseExecutionLog | 日志 |
+
+### 前端 (React 18 + TypeScript + Ant Design 5)
+
+```
+frontend/src/
+├── App.tsx                    # 主应用（6 个平台视图切换）
+├── AppWithAuth.tsx            # Keycloak PKCE 认证
+├── config.ts                  # 运行时配置
+├── types/index.ts             # TypeScript 类型定义
+├── services/
+│   ├── api.ts                 # Axios 封装（token 注入、自动刷新）
+│   ├── keycloak.ts            # Keycloak 初始化
+│   └── permissions.ts         # 25+ 细粒度权限定义
+├── components/
+│   ├── test-case/             # AI 测试用例平台组件
+│   │   ├── TestCaseGenerator.tsx    # 生成器（需求输入 + 文件上传 + Pipeline）
+│   │   ├── TestCaseManager.tsx      # 用例管理（统计、筛选、导出）
+│   │   ├── TestCaseTable.tsx        # 用例表格
+│   │   └── ...
+│   ├── iot/                   # IoT 平台组件
+│   ├── api/                   # 接口测试组件
+│   ├── modals/                # 12+ 模态框
+│   └── ...                    # Header、Sidebar、HomePage 等
+└── hooks/
+    └── useEnvironments.ts     # 环境管理 Hook
+```
+
+### 基础设施
+
+```
+                  ┌──────────┐
+                  │  Keycloak │  OIDC 认证（端口 8090）
+                  └────┬─────┘
+                       │
+┌──────────┐     ┌─────▼──────┐     ┌──────────┐
+│  Postgres │◄────│   Backend  │◄────│ Frontend │
+│  (5432)   │     │  FastAPI   │     │   React  │
+└──────────┘     │  (8000)    │     │  (8001)  │
+                 └─────┬──────┘     └──────────┘
+                       │
+                 ┌─────▼──────┐
+                 │   SQLite   │   data/testcases.db
+                 └────────────┘
+```
+
+### 关键设计决策
+
+- **认证**：Keycloak PKCE (OIDC)，本地 JWKS 验证 JWT（24h 缓存）
+- **AI 模型**：LangChain agent 封装，支持 DeepSeek API 和 Ollama 本地模型
+- **配置优先级**：运行时 `window.__APP_CONFIG__` > 环境变量 > 默认值
+- **响应格式**：统一 `{code, message, data}`
+- **时区**：上海时区 (UTC+8)
+- **数据库**：SQLite（`backend/data/testcases.db`），SQLModel ORM
+- **JSON 存储**：复杂字段以 JSON 字符串存储于 SQLite 中
+
+---
+
+## 环境变量与部署
+
+### 文件结构
+
+| 配置文件 | 用途 |
+|---|---|
+| `.env`（根目录） | Docker Compose 部署参数 |
+| `backend/.env` | 后端本地开发配置 |
+| `frontend/.env` | 前端本地开发配置 |
+
+### 核心环境变量
 
 ```env
-VITE_KEYCLOAK_URL=https://auth.example.com
-KEYCLOAK_EXTERNAL_URL=https://auth.example.com
-KEYCLOAK_HOSTNAME=auth.example.com
-CORS_ORIGINS=https://app.example.com
+# --- Keycloak 配置 ---
+KEYCLOAK_SERVER_URL=http://keycloak:8080          # 后端访问 Keycloak（Docker 内部）
+KEYCLOAK_EXTERNAL_URL=http://localhost:8090        # 浏览器访问 Keycloak（JWT issuer）
+KEYCLOAK_REALM=ai-testcase
+KEYCLOAK_BACKEND_CLIENT_ID=backend
+KEYCLOAK_ADMIN_USERNAME=admin
+KEYCLOAK_ADMIN_PASSWORD=admin
 
+# --- 前后端地址 ---
+VITE_KEYCLOAK_URL=http://localhost:8090            # 浏览器访问 Keycloak
 FRONTEND_PORT=8001
 BACKEND_PORT=8000
 KEYCLOAK_PORT=8090
-```
 
-改完后重启服务：
-
-```bash
-docker compose --env-file .env up -d
-```
-
-如果同时修改了代码、依赖或 Dockerfile，再重新构建：
-
-```bash
-docker compose --env-file .env up -d --build
-```
-
-前端 Docker 镜像会在容器启动时根据根目录 `.env` 传入的环境变量生成 `/config.js`。因此只改 Keycloak 地址、CORS、端口等部署配置时，不需要重新构建前端镜像，只需要重启容器。
-
-### Docker Compose 部署
-
-Docker Compose 使用根目录 `.env` 或 `--env-file` 提供部署参数。首次部署可以复制模板：
-
-```bash
-copy .env.example .env
-```
-
-Linux/macOS 使用：
-
-```bash
-cp .env.example .env
-```
-
-然后按实际环境修改 `.env`，再启动：
-
-```bash
-docker compose --env-file .env up -d --build
-```
-
-常用变量：
-
-```env
-FRONTEND_PORT=8001
-BACKEND_PORT=8000
-KEYCLOAK_PORT=8090
-
-VITE_KEYCLOAK_URL=http://localhost:8090
-KEYCLOAK_EXTERNAL_URL=http://localhost:8090
-KEYCLOAK_HOSTNAME=localhost
-
+# --- CORS ---
 CORS_ORIGINS=http://localhost:5173,http://localhost:8001
-```
 
-生产环境通常需要把这些值改成实际域名或服务器 IP，例如：
-
-```env
-VITE_KEYCLOAK_URL=https://auth.example.com
-KEYCLOAK_EXTERNAL_URL=https://auth.example.com
-KEYCLOAK_HOSTNAME=auth.example.com
-CORS_ORIGINS=https://app.example.com
-```
-
-### 前端配置生效逻辑
-
-前端运行时会加载 `/config.js`，并优先读取：
-
-```js
-window.__APP_CONFIG__
-```
-
-Docker 镜像启动时会根据容器环境变量自动生成 `/config.js`，因此生产环境修改 Keycloak 地址、realm、client id 等配置后，只需要重启容器，不需要重新构建前端代码。
-
-本地 Vite 开发仍然读取 `frontend/.env`、`frontend/.env.development` 中的 `VITE_*` 变量：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-前端相关变量：
-
-```env
-VITE_KEYCLOAK_URL=http://localhost:8090
+# --- 前端 Keycloak 配置 ---
 VITE_KEYCLOAK_REALM=ai-testcase
 VITE_KEYCLOAK_CLIENT_ID=frontend
 VITE_KEYCLOAK_BACKEND_CLIENT_ID=backend
 VITE_KEYCLOAK_PKCE_METHOD=S256
 ```
 
-### 后端配置生效逻辑
-
-后端本地运行时会通过 `python-dotenv` 加载 `backend/.env`：
+### 部署命令
 
 ```bash
-cd backend
-uvicorn main:app --reload
+# 使用指定 .env 文件部署
+docker compose --env-file .env up -d
+
+# 代码/依赖有变动时重新构建
+docker compose --env-file .env up -d --build
 ```
 
-Docker Compose 运行时，后端环境变量由 `docker-compose.yml` 中的 `${VAR:-default}` 从根目录 `.env` 或 `--env-file` 注入。
+**注意**：前端 Docker 镜像会在容器启动时根据环境变量生成 `/config.js`，因此仅修改 Keycloak 地址、CORS 等部署参数时，只需要重启容器，无需重新构建前端镜像。
 
-后端关键变量：
+### 后端配置管理
+
+后端启动时自动通过 `python-dotenv` 加载 `backend/.env`，关键配置：
 
 ```env
-KEYCLOAK_SERVER_URL=http://keycloak:8080
-KEYCLOAK_EXTERNAL_URL=http://localhost:8090
-KEYCLOAK_REALM=ai-testcase
-KEYCLOAK_BACKEND_CLIENT_ID=backend
-CORS_ORIGINS=http://localhost:5173,http://localhost:8001
+# 模型配置
+MODEL_TYPE=api                                  # api (DeepSeek) 或 ollama
+DEEPSEEK_API_KEY=sk-xxx
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# DEEPSEEK_MODEL=deepseek-chat
+
+# Ollama 配置（本地模型）
+# OLLAMA_BASE_URL=http://localhost:11434
+# OLLAMA_MODEL=qwen2.5:32b
+
+# 飞书文档预取
+# FEISHU_APP_ID=cli_xxx
+# FEISHU_APP_SECRET=xxx
 ```
 
-其中：
+---
 
-- `KEYCLOAK_SERVER_URL` 是后端访问 Keycloak 的内部地址。Docker 内通常为 `http://keycloak:8080`。
-- `KEYCLOAK_EXTERNAL_URL` 必须与浏览器访问 Keycloak 的地址一致，也要与 JWT issuer 匹配。
-- `VITE_KEYCLOAK_URL` 是浏览器访问 Keycloak 的地址，不能写 Docker 内部服务名 `http://keycloak:8080`。
-- `CORS_ORIGINS` 是允许调用后端 API 的前端来源，多个值用英文逗号分隔。
+## 配置文件提交规则
 
-### 配置文件提交规则
+以下文件不应提交到仓库：
 
-不要提交真实环境配置和本地数据文件：
-
-- `.env`
+- `.env`（根目录）
 - `backend/.env`
 - `frontend/.env`
 - `frontend/.env.development`
 - `backend/data/testcases.db`
 - `backend/data/config.json`
 
-需要新增配置项时，同时更新对应的 `.env.example` 文件。
+修改配置模板请对应更新 `.env.example` 文件。

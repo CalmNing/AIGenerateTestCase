@@ -23,6 +23,8 @@ interface TestCaseGeneratorProps {
   onApiProjectChange?: (id: number | null) => void;
   apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
   onApiEndpointOverridesChange?: (overrides: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>) => void;
+  /** 当检测到未配置 API Key 或模型时触发，用于弹出设置窗口 */
+  onRequireConfig?: () => void;
 }
 
 const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
@@ -39,6 +41,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   onApiProjectChange,
   apiEndpointOverrides,
   onApiEndpointOverridesChange,
+  onRequireConfig,
 }) => {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -214,7 +217,46 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     }
   };
 
-  const handleGenerateWithPreview = () => {
+  const handleGenerateWithPreview = async () => {
+    // 检查是否已配置 API Key 和模型
+    try {
+      const { configApi } = await import('../../services/api');
+      const configRes = await configApi.getConfig();
+      if (configRes.code === 200 && configRes.data) {
+        const cfg = configRes.data;
+        const modelType = cfg.model_type || 'api';
+        let configValid = true;
+        if (modelType === 'api') {
+          if (!cfg.api_key || !cfg.api_key.trim()) {
+            configValid = false;
+          }
+          if (!cfg.api_model || !cfg.api_model.trim()) {
+            configValid = false;
+          }
+        } else if (modelType === 'ollama') {
+          if (!cfg.ollama_url || !cfg.ollama_url.trim()) {
+            configValid = false;
+          }
+          if (!cfg.ollama_model || !cfg.ollama_model.trim()) {
+            configValid = false;
+          }
+        }
+        if (!configValid) {
+          antMessage.warning('请先配置 API Key 和模型');
+          onRequireConfig?.();
+          return;
+        }
+      } else {
+        antMessage.warning('请先配置 API Key 和模型');
+        onRequireConfig?.();
+        return;
+      }
+    } catch (e) {
+      console.error('Check config failed:', e);
+      antMessage.warning('请先配置 API Key 和模型');
+      onRequireConfig?.();
+      return;
+    }
     handleDeepGenerate();
   };
 

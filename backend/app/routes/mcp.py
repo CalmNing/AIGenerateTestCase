@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Body
 
 from app.auth import get_current_user
 from utils.lanhu_mcp_adapter import MCPClient
@@ -715,3 +715,208 @@ def delete_mcp_server(session: SessionDep, user: CurrentUser, server_id: int):
     session.delete(db_server)
     session.commit()
     return Response(message="MCP 服务器配置已删除")
+
+
+# ---- MCP JSON 导入/导出 ----
+
+def _parse_mcp_import_data(data: dict | list) -> list[dict]:
+    """解析导入的 JSON 数据，统一返回 [{name, type, command, args, env, url, timeout, enabled, enabled_tools}, ...]"""
+    entries: list[dict] = []
+
+    if isinstance(data, dict):
+        # 对象格式：{ "mcpServers": { "name": { ... } } }
+        servers_dict = data.get("mcpServers")
+        if servers_dict is None:
+            servers_dict = data
+        if isinstance(servers_dict, dict):
+            for name, cfg in servers_dict.items():
+                if not isinstance(cfg, dict):
+                    continue
+                entry = {"name": name, "enabled": True, "timeout": 60}
+                # 自动推断 type
+                if cfg.get("url") and not cfg.get("command"):
+                    entry["type"] = "http"
+                    entry["url"] = cfg.get("url", "")
+                else:
+                    entry["type"] = "stdio"
+                    entry["command"] = cfg.get("command", "")
+                    entry["args"] = cfg.get("args", [])
+                # env 对象格式转数组格式
+                raw_env = cfg.get("env")
+                if isinstance(raw_env, dict):
+                    entry["env"] = [{"key": k, "value": str(v)} for k, v in raw_env.items()]
+                elif isinstance(raw_env, list):
+                    entry["env"] = raw_env
+                else:
+                    entry["env"] = []
+                # 可选字段
+                if "timeout" in cfg:
+                    entry["timeout"] = int(cfg["timeout"]) if cfg["timeout"] else 60
+                if "enabled" in cfg:
+                    entry["enabled"] = bool(cfg["enabled"])
+                if "enabled_tools" in cfg and cfg["enabled_tools"] is not None:
+                    entry["enabled_tools"] = cfg["enabled_tools"]
+                if "url" in cfg and entry["type"] == "http":
+                    entry["url"] = cfg["url"]
+                entries.append(entry)
+        elif isinstance(servers_dict, list):
+            # 可能是 [{name, ...}, ...]
+            for item in servers_dict:
+                if isinstance(item, dict):
+                    entries.append(_normalize_import_entry(item))
+    elif isinstance(data, list):
+        # 数组格式：[{ name: "...", type: "...", ... }]
+        for item in data:
+            if isinstance(item, dict):
+                entries.append(_normalize_import_entry(item))
+
+    return entries
+
+
+def _normalize_import_entry(item: dict) -> dict:
+    """规范化单条导入条目"""
+    entry: dict = {
+        "name": item.get("name", ""),
+        "type": item.get("type", "http"),
+        "enabled": item.get("enabled", True),
+        "timeout": item.get("timeout", 60),
+        "env": [],
+    }
+    if item.get("url") and not item.get("command"):
+        entry["type"] = "http"
+        entry["url"] = item.get("url", "")
+    if item.get("command"):
+        entry["type"] = "stdio"
+        entry["command"] = item.get("command", "")
+        entry["args"] = item.get("args", [])
+    # env 处理
+    raw_env = item.get("env")
+    if isinstance(raw_env, dict):
+        entry["env"] = [{"key": k, "value": str(v)} for k, v in raw_env.items()]
+    elif isinstance(raw_env, list):
+        entry["env"] = raw_env
+    # 可选字段
+    if "url" in item and entry.get("type") == "http":
+        entry["url"] = item["url"]
+    if "enabled_tools" in item and item["enabled_tools"] is not None:
+        entry["enabled_tools"] = item["enabled_tools"]
+    return entry
+
+
+@router.post("/servers/import", response_model=Response[List[McpServer]])
+def import_mcp_servers(session: SessionDep, user: CurrentUser, data = Body(None)):
+    """从 JSON 数据导入 MCP 服务器配置（支持对象格式和数组格式）"""
+    if not isinstance(data, (dict, list)):
+        return Response(code=400, message="请求体需要 JSON 对象或数组格式")
+    entries = _parse_mcp_import_data(data)
+    if not entries:
+        return Response(code=400, message="导入数据为空或格式不正确")
+
+    imported: list[McpServer] = []
+    for entry in entries:
+        if not entry.get("name"):
+            continue
+
+        # 按 name + user_id 查找已有配置
+        existing = session.exec(
+            select(McpServer).where(
+                McpServer.name == entry["name"],
+                McpServer.user_id == user.user_id
+            )
+        ).first()
+
+        server_data = {
+            "name": entry["name"],
+            "type": entry.get("type", "http"),
+            "enabled": entry.get("enabled", True),
+            "timeout": entry.get("timeout", 60),
+            "url": entry.get("url"),
+            "command": entry.get("command"),
+            "args": entry.get("args", []),
+            "env": entry.get("env", []),
+            "enabled_tools": entry.get("enabled_tools"),
+            "user_id": user.user_id,
+        }
+
+        if existing:
+            # 覆盖更新
+            for field, value in server_data.items():
+                if field != "user_id":
+                    setattr(existing, field, value)
+            session.add(existing)
+            imported.append(existing)
+        else:
+            # 创建新配置
+            new_server = McpServer(**server_data)
+            session.add(new_server)
+            imported.append(new_server)
+
+    session.commit()
+    for s in imported:
+        session.refresh(s)
+
+    return Response(
+        data=imported,
+        message=f"成功导入 {len(imported)} 个 MCP 服务器配置"
+    )
+
+
+@router.post("/servers/import/file", response_model=Response[List[McpServer]])
+async def import_mcp_servers_file(
+    session: SessionDep,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    """从 JSON 文件导入 MCP 服务器配置"""
+    # 文件大小限制：1MB
+    MAX_SIZE = 1 * 1024 * 1024
+    contents = await file.read()
+    if len(contents) > MAX_SIZE:
+        raise HTTPException(status_code=413, detail="文件大小超过限制（最大 1MB）")
+
+    try:
+        data = json.loads(contents.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        return Response(code=400, message=f"JSON 解析失败: {str(e)}")
+
+    return import_mcp_servers(session, user, data)
+
+
+@router.get("/servers/export")
+def export_mcp_servers(session: SessionDep, user: CurrentUser):
+    """导出为标准 JSON 格式（mcpServers 格式）"""
+    servers = session.exec(
+        select(McpServer)
+        .where(McpServer.user_id == user.user_id)
+        .order_by(McpServer.created_at.desc())
+    ).all()
+
+    mcp_servers: dict[str, dict] = {}
+    for s in servers:
+        entry: dict = {
+            "type": s.type,
+            "enabled": s.enabled,
+            "timeout": s.timeout,
+        }
+        if s.type == "http" and s.url:
+            entry["url"] = s.url
+        if s.type == "stdio":
+            if s.command:
+                entry["command"] = s.command
+            if s.args:
+                entry["args"] = s.args
+        # env 数组格式转对象格式
+        if s.env:
+            env_dict: dict[str, str] = {}
+            for e in s.env:
+                if isinstance(e, dict) and e.get("key"):
+                    env_dict[e["key"]] = e.get("value", "")
+            if env_dict:
+                entry["env"] = env_dict
+        # enabled_tools
+        if s.enabled_tools is not None:
+            entry["enabled_tools"] = s.enabled_tools
+
+        mcp_servers[s.name] = entry
+
+    return {"mcpServers": mcp_servers}

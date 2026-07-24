@@ -134,7 +134,19 @@ export interface SavedRequest {
   parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
   body?: string;
   post_extractions?: Array<{ variable: string; jsonpath: string }>;
+  folder_id?: number | null;
   user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 保存的请求文件夹类型（后端返回树结构，children 为嵌套子文件夹）
+export interface SavedRequestFolder {
+  id: number;
+  name: string;
+  parent_id?: number | null;
+  user_id?: string;
+  children: SavedRequestFolder[];
   created_at: string;
   updated_at: string;
 }

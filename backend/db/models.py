@@ -160,6 +160,22 @@ class Module(BaseModel, table=True):
     )
 
 
+class SavedRequestFolder(BaseModel, table=True):
+    """保存的请求文件夹数据模型"""
+    name: str = Field(default="", description="文件夹名称")
+    parent_id: Optional[int] = Field(default=None, foreign_key="savedrequestfolder.id", description="父文件夹ID")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+    children: List["SavedRequestFolder"] = Relationship(
+        back_populates="parent",
+        sa_relationship_kwargs={"foreign_keys": "[SavedRequestFolder.parent_id]"}
+    )
+    parent: Optional["SavedRequestFolder"] = Relationship(
+        back_populates="children",
+        sa_relationship_kwargs={"foreign_keys": "[SavedRequestFolder.parent_id]", "remote_side": "SavedRequestFolder.id"}
+    )
+
+
 class SavedRequest(BaseModel, table=True):
     """保存的请求配置数据模型"""
     name: str = Field(default="")
@@ -169,11 +185,8 @@ class SavedRequest(BaseModel, table=True):
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON)
     body: Optional[str] = Field(default=None)
     post_extractions: List[dict] = Field(default_factory=list, sa_type=JSON)  # 后置提取规则
+    folder_id: Optional[int] = Field(default=None, foreign_key="savedrequestfolder.id", index=True, description="所属文件夹ID")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")  # 激活用户关联
-
-    # 定义与会话的多对一关系（可选）
-    # session_id: Optional[int] = Field(default=None, foreign_key="session.id")
-    # session: Optional[Session] = Relationship(back_populates="saved_requests")
 
 
 class GlobalParameter(BaseModel, table=True):

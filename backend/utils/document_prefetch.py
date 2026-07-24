@@ -45,13 +45,16 @@ FEISHU_SHEET_TOKEN_RE = re.compile(
 
 _FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 
+# 飞书画板在 docx blocks 中的 block_type
+_BOARD_BLOCK_TYPE = 43
+
 
 async def _get_feishu_tenant_token(app_id: str, app_secret: str) -> "str | None":
     """用应用身份换取 tenant_access_token（无需用户授权）。"""
     if not app_id or not app_secret:
         return None
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, verify=False) as client:
             resp = await client.post(
                 f"{_FEISHU_API_BASE}/auth/v3/tenant_access_token/internal",
                 json={"app_id": app_id, "app_secret": app_secret},
@@ -121,7 +124,7 @@ async def fetch_feishu_sheet(
     url = (f"{_FEISHU_API_BASE}/sheets/v2/spreadsheets/{spreadsheet_token}"
            f"/values/{rng}")
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
             resp = await client.get(
                 url, headers={"Authorization": f"Bearer {token}"})
             data = resp.json()
@@ -161,6 +164,124 @@ def _resolve_feishu_credentials(mcp_configs) -> "tuple[str, str]":
         if cand_id and cand_sec:
             return cand_id, cand_sec
     return "", ""
+
+
+async def _discover_board_tokens(
+    document_id: str, app_id: str, app_secret: str,
+) -> "list[dict]":
+    """通过飞书 docx blocks REST API 发现文档中嵌入的画板 block。
+
+    画板特征：block_type=43 -> block['board']['token']。
+    返回 [{token, block_id, width, height}, ...]。
+    """
+    token = await _get_feishu_tenant_token(app_id, app_secret)
+    if not token or not document_id:
+        return []
+    url = f"{_FEISHU_API_BASE}/docx/v1/documents/{document_id}/blocks"
+    try:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                params={"page_size": 500},
+            )
+            data = resp.json()
+        if data.get("code") != 0:
+            logger.warning("飞书 blocks 读取失败（画板检测）doc=%s: %s", document_id, data)
+            return []
+        items = (data.get("data", {}) or {}).get("items", []) or []
+        boards = []
+        for b in items:
+            if b.get("block_type") == _BOARD_BLOCK_TYPE and isinstance(b.get("board"), dict):
+                t = b["board"].get("token")
+                if t:
+                    boards.append({
+                        "token": t,
+                        "block_id": b.get("block_id", ""),
+                        "width": b["board"].get("width", 0),
+                        "height": b["board"].get("height", 0),
+                    })
+        if boards:
+            logger.info("发现 %d 个画板 block: doc=%s", len(boards), document_id)
+        return boards
+    except Exception as e:
+        logger.warning("飞书 blocks 读取异常（画板检测）doc=%s: %s", document_id, e)
+        return []
+
+
+async def fetch_feishu_board(board_token: str, mcp_configs) -> "str | None":
+    """通过 MCP 调用 board.v1.whiteboardNode.list 读取画板内容。
+
+    返回解析后的 Markdown 文本，或 None。
+    """
+    try:
+        from utils.lanhu_mcp_adapter import connect_single_server, _MAX_TOOL_RESPONSE
+    except Exception:
+        logger.warning("画板读取不可用: adapter import failed", exc_info=True)
+        return None
+
+    # 画板内容通常较大，临时增加响应限制
+    _BOARD_MAX_RESPONSE = 200 * 1024  # 200KB
+
+    enabled_configs = [c for c in mcp_configs if c.get("enabled", True)]
+    for config in enabled_configs:
+        server_name, client, error = await connect_single_server(config)
+        if error or client is None:
+            continue
+        try:
+            tool_names = {t.get("name") for t in client.tools}
+            if "board_v1_whiteboardNode_list" not in tool_names:
+                continue
+
+            # 临时调整响应限制
+            import utils.lanhu_mcp_adapter as adapter
+            original_limit = adapter._MAX_TOOL_RESPONSE
+            adapter._MAX_TOOL_RESPONSE = _BOARD_MAX_RESPONSE
+            try:
+                raw = await client.call_tool(
+                    "board_v1_whiteboardNode_list",
+                    {"path": {"whiteboard_id": board_token}},
+                )
+            finally:
+                adapter._MAX_TOOL_RESPONSE = original_limit
+
+            data = _load_json_object(raw) or {}
+            nodes = data.get("nodes", [])
+            if not nodes:
+                logger.info("画板无节点: token=%s", board_token)
+                return None
+
+            from utils.board_parser import parse_board_nodes
+            md = parse_board_nodes(nodes)
+            if md.strip():
+                logger.info("已读取画板内容: token=%s nodes=%d size=%d",
+                           board_token, len(nodes), len(md))
+                return md
+            return None
+        except Exception as e:
+            logger.warning("画板读取失败 server=%s token=%s: %s", server_name, board_token, e)
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+    return None
+
+
+async def _collect_board_markdown(
+    boards: list[dict], mcp_configs,
+) -> str:
+    """读取多个画板并拼成 Markdown。"""
+    blocks: list[str] = []
+    for i, board in enumerate(boards):
+        md = await fetch_feishu_board(board["token"], mcp_configs)
+        if md:
+            label = f"画板 {i + 1}"
+            if board.get("width") and board.get("height"):
+                label += f" ({board['width']}x{board['height']})"
+            blocks.append(f"### {label}\n\n{md}")
+    return "\n\n".join(blocks)
 
 
 async def fetch_feishu_document(text: str, mcp_configs) -> "str | None":
@@ -220,6 +341,13 @@ async def fetch_feishu_document(text: str, mcp_configs) -> "str | None":
 
             logger.info("已预取飞书文档正文: server=%s document_id=%s size=%s", server_name, document_id, len(content))
 
+            # 读取画板内容并追加到正文之后。
+            board_tokens = await _discover_board_tokens(document_id, app_id, app_secret)
+            if board_tokens:
+                boards_md = await _collect_board_markdown(board_tokens, enabled_configs)
+                if boards_md:
+                    content = content + "\n\n## 画板内容\n\n" + boards_md
+
             # 读取嵌入的电子表格/多维表格内容并追加到正文之后。
             # 1) 优先从块结构发现 token（rawContent 不携带表格引用）；
             # 2) 兜底再从正文正则抽（个别文档 rawContent 会带引用）。
@@ -275,7 +403,7 @@ async def _discover_embedded_sheet_tokens(
         return []
     url = f"{_FEISHU_API_BASE}/docx/v1/documents/{document_id}/blocks"
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
             resp = await client.get(
                 url,
                 headers={"Authorization": f"Bearer {token}"},

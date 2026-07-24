@@ -12,11 +12,14 @@ from app.routes.mock_server import router as mock_server_router
 from app.routes.module import router as module_router
 from app.routes.proxy import router as proxy_router
 from app.routes.saved_request import router as saved_request_router
+from app.routes.saved_request_folder import router as saved_request_folder_router
 from app.routes.scheduled_task import router as scheduled_task_router
 from app.routes.session import router as session_router
 from app.routes.skills import router as skills_router
 from app.routes.testcase import router as testcase_router
 from app.routes.pipeline import router as pipeline_router
+from app.routes.document import router as document_router
+from app.routes.chat import router as chat_router
 
 api_router = APIRouter()
 
@@ -49,6 +52,19 @@ api_router.include_router(
 )
 api_router.include_router(
     saved_request_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[Permission.IOT_READ],
+                post=[Permission.IOT_CREATE],
+                put=[Permission.IOT_UPDATE],
+                delete=[Permission.IOT_DELETE],
+            )
+        )
+    ],
+)
+api_router.include_router(
+    saved_request_folder_router,
     dependencies=[
         Depends(
             require_http_method_permissions(
@@ -111,6 +127,16 @@ api_router.include_router(
         )
     ],
 )
+api_router.include_router(
+    document_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                post=[Permission.TESTCASE_READ, Permission.TESTCASE_GENERATE],
+            )
+        )
+    ],
+)
 
 # Admin-only management routes.
 api_router.include_router(config_router, dependencies=[Depends(require_permissions(Permission.CONFIG_MANAGE))])
@@ -139,3 +165,6 @@ api_router.include_router(
 
 # Public runtime route: mock callbacks must be callable by external systems.
 api_router.include_router(mock_server_router)
+
+# Chat route: general-purpose AI conversation
+api_router.include_router(chat_router)
