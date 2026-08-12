@@ -34,3 +34,9 @@
 - 前端：按钮在 `frontend/src/components/test-case/TestCaseGenerator.tsx` 需求区，`file` 经 `api.ts` 的 `generateV2({file})` 以 `multipart/form-data` 上传；文件选择 `accept=".docx,.pdf,.txt,.md"`。
 - 依赖：`python-docx`（已在 `backend/.venv` 安装，并在 `requirements.txt` 声明）、`pdfplumber>=0.11.0`（同在 venv 与 requirements.txt）。**注意**：后端实际运行在系统 Python `F:\env\Python313`（非 venv），该环境已自带 `pdfplumber 0.11.9`、`python-docx`、`fastapi`、`uvicorn`；venv 仅作为备选/构建环境。
 - PDF 限制：仅支持「文本型」PDF。扫描件/纯图片型 PDF，以及**用矢量图形/图片绘制的表格（无文字层）**，pdfplumber 抽不到文本，会触发「解析后内容为空」报错；此类需 OCR（未实现，不在范围）。`F:/Download/Demo.pdf` 即为此类（整页仅 17 个文字字形，表格是矢量绘制），纯文本抽取无解，用户已知悉且不要求 OCR。
+
+## 资源导航（共享书签）feature
+
+- 首页「测试工具平台」有「资源导航 / 常用链接」板块：管理员（CONFIG_MANAGE）集中维护接口文档、快捷工具等链接，全员可见。
+- 后端：模型 `NavCategory`/`NavLink`（`backend/db/models.py`，表名 `nav_category`/`nav_link`，FK 级联删）；路由 `backend/app/routes/nav_link.py`（`GET /api/nav-links` 读开放；分类/链接写需 CONFIG_MANAGE）。前端管理弹窗 `frontend/src/components/NavLinkManagerModal.tsx`，入口在 `HomePage.tsx`（prop `canManageNav` 来自 `hasPermission(CONFIG_MANAGE)`）。
+- 坑：SQLModel 不显式设 `__tablename__` 会推断无下划线表名，与 FK 字符串冲突报 `NoReferencedTableError`。

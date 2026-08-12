@@ -16,7 +16,11 @@ from app.pipeline.test_point_generator import TestPointGenerator
 from app.pipeline.test_case_designer import TestCaseDesigner
 from app.pipeline.test_case_optimizer import TestCaseOptimizer
 from app.routes.skills import get_skill_body
-from app.pipeline.schemas import RequirementDedupResult
+from app.pipeline.schemas import (
+    RequirementDedupResult,
+    TestPointDedupResult,
+    TestCaseDedupResult,
+)
 from utils.document_prefetch import (
     FEISHU_URL_RE as _FEISHU_URL_RE,
     LANHU_URL_RE as _LANHU_URL_RE,
@@ -146,6 +150,191 @@ async def _dedup_requirement_points_by_llm(
 
     to_keep = [new_points[i] for i in valid]
     return _assign_requirement_order(to_keep, existing_points, module_id)
+
+
+_TP_DEDUP_SYSTEM = """你是一名资深的测试用例测试点去重专家。给定同一功能模块下、由不同需求点生成的【全部测试点】，请判断哪些测试点在语义上重复、或其验证维度已被其他测试点完全覆盖。
+
+判定标准：
+- 若某测试点的全部验证维度都被另一个更综合的测试点覆盖，则应删除该测试点，只保留每个重复簇中最综合、覆盖最全的一个。
+- 若测试点之间仅侧重点不同、各自拥有独有的验证维度，则全部保留，不要删除。
+- 宁可多保留也不要漏删：只有确认某测试点完全被另一测试点覆盖时才删除。
+- 只依据给定文本判断，不要臆造。
+
+返回需要保留的测试点 id 列表（每个重复簇只保留最综合的一个；若互不重复则返回全部 id）。"""
+
+
+async def _dedup_test_points_by_llm(
+    points: List[Any],
+    requirement_content: str,
+    model: Any,
+    session: Any,
+) -> List[Any]:
+    """跨需求点测试点去重：仅保留语义上未被覆盖的测试点。
+
+    - 范围：本轮同 session+module 新生成的测试点（含各自需求点内容）
+    - 由 LLM 判断语义重复/被完全覆盖的测试点，只保留每个重复簇中最综合的一个
+    - LLM 异常/返回空/全删时保守保留全部，避免覆盖丢失
+    """
+    if len(points) <= 1:
+        return points
+
+    # 收集测试点及其所属需求点内容，帮助 LLM 判断归属与覆盖范围
+    tp_ids = [tp.id for tp in points]
+    rp_map: Dict[int, str] = {}
+    for tp in points:
+        rp_id = getattr(tp, "requirement_point_id", None)
+        if rp_id and rp_id not in rp_map:
+            from db.models import RequirementPoint
+
+            rp = session.get(RequirementPoint, rp_id)
+            rp_map[rp_id] = getattr(rp, "content", "") if rp else ""
+
+    candidates_text = "\n".join(
+        f"[{tp.id}] 所属需求点: {rp_map.get(getattr(tp, 'requirement_point_id', None), '')}\n"
+        f"    测试点: {tp.content} (test_type={tp.test_type}, design_method={tp.design_method})"
+        for tp in points
+    )
+
+    messages = [
+        {"role": "system", "content": _TP_DEDUP_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"## 本次生成的测试点（共 {len(points)} 个，括号内为其 DB id）\n"
+                f"{candidates_text}\n\n"
+                f"## 原始需求文档（参考，帮助判断哪些验证维度属于真实需求）\n"
+                f"{requirement_content[:3000]}\n\n"
+                "请返回需要【保留】的测试点 id 列表。"
+            ),
+        },
+    ]
+
+    try:
+        result = await _structured_output_robust(
+            model, TestPointDedupResult, messages, config={}
+        )
+    except Exception as e:
+        logger.warning("测试点 LLM 去重异常，保守保留全部测试点: %s", e)
+        return points
+
+    if result is None:
+        logger.warning("测试点 LLM 去重返回空，保守保留全部测试点")
+        return points
+
+    keep_ids = getattr(result, "keep_ids", None) or []
+    keep_set: set = set()
+    for i in keep_ids:
+        try:
+            keep_set.add(int(i))
+        except (TypeError, ValueError):
+            continue
+
+    valid_ids = set(tp_ids)
+    keep_set &= valid_ids
+    if not keep_set:
+        logger.info("测试点 LLM 去重：无重复判定，保留全部 %d 个测试点", len(points))
+        return points
+    if len(keep_set) == len(points):
+        logger.info("测试点 LLM 去重：全部保留 %d 个测试点", len(points))
+        return points
+
+    kept = [tp for tp in points if tp.id in keep_set]
+    dropped = [tp for tp in points if tp.id not in keep_set]
+    for tp in dropped:
+        session.delete(tp)
+    session.commit()
+    for tp in kept:
+        session.refresh(tp)
+    logger.info(
+        "测试点跨需求点去重：%d 个 → %d 个（删除 %d 个重复）",
+        len(points), len(kept), len(dropped),
+    )
+    return kept
+
+
+_TC_DEDUP_SYSTEM = """你是一名资深的测试用例冗余审查专家。给定同一功能模块下生成的全部测试用例，请判断哪些用例的验证维度被其他用例完全覆盖、应被删除。
+
+判定标准：
+- 若某用例的全部验证维度都被另一条更综合的用例覆盖，则应删除该用例，只保留每个重复簇中最综合的一个。
+- 若用例之间仅侧重点不同、各自拥有独有的验证维度，则全部保留，不要删除。
+- 宁可不删，不要误删：只有确认某用例完全被另一条用例覆盖时才标记删除。
+- 不要删除全部用例（至少保留一条）。
+
+返回需要删除的用例 id 列表（remove_ids；若互不重复则为空列表）。"""
+
+
+async def _dedup_test_cases_by_llm(
+    cases: List[Any],
+    requirement_content: str,
+    model: Any,
+) -> List[int]:
+    """跨用例冗余审查：返回验证维度完全被其他用例覆盖、应删除的用例 id 列表。
+
+    - 输入为同 session+module 的完整用例集（用标题+验证维度摘要，轻量小输入）
+    - 由 LLM 判定语义重复/被完全覆盖的用例，返回 remove_ids
+    - 异常/返回空/全删时保守返回空列表，避免覆盖丢失
+    """
+    if len(cases) <= 1:
+        return []
+
+    case_ids = [tc.id for tc in cases]
+    lines = []
+    for tc in cases:
+        er = tc.expected_results or []
+        if not isinstance(er, list):
+            er = []
+        lines.append(
+            f"[{tc.id}] {tc.case_name}\n"
+            f"    类型={tc.test_type or ''} 方法={tc.design_method or ''} 等级={tc.case_level or 1}\n"
+            f"    验证要点: {'；'.join(str(x) for x in er[:6])}"
+        )
+    summaries_text = "\n".join(lines)
+
+    messages = [
+        {"role": "system", "content": _TC_DEDUP_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                f"## 本次生成的全部用例（共 {len(cases)} 个，括号内为用例 DB id）\n"
+                f"{summaries_text}\n\n"
+                f"## 原始需求文档（参考，帮助判断哪些验证维度属于真实需求）\n"
+                f"{requirement_content[:2000]}\n\n"
+                "请返回需要【删除】的用例 id 列表（remove_ids）。"
+            ),
+        },
+    ]
+
+    try:
+        result = await _structured_output_robust(
+            model, TestCaseDedupResult, messages, config={}
+        )
+    except Exception as e:
+        logger.warning("用例冗余审查异常，保守不删除任何用例: %s", e)
+        return []
+
+    if result is None:
+        logger.warning("用例冗余审查返回空，保守不删除任何用例")
+        return []
+
+    remove_ids = getattr(result, "remove_ids", None) or []
+    valid = set(case_ids)
+    out: List[int] = []
+    seen: set = set()
+    for i in remove_ids:
+        try:
+            val = int(i)
+        except (TypeError, ValueError):
+            continue
+        if val in valid and val not in seen:
+            seen.add(val)
+            out.append(val)
+    # 防御：不删除全部用例
+    if len(out) >= len(cases):
+        logger.info("用例冗余审查：删除全部被拦截，保守不删除")
+        return []
+    if out:
+        logger.info("用例冗余审查：标记 %d 个冗余用例待移除", len(out))
+    return out
 
 
 _REQ_DEDUP_SYSTEM = """你是一名资深的测试用例需求去重专家。给定【当前模块已有需求点】与【本次新生成的需求点候选】，请判断每个候选需求点是否在语义上与已有需求点重复。
@@ -484,6 +673,7 @@ class PipelineRunner:
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
         api_context: str = "",
         original_requirement: str = "",
+        stop_after_stage: int = 4,
     ) -> str:
         """
         启动 4 阶段 pipeline（异步执行）
@@ -498,6 +688,7 @@ class PipelineRunner:
             api_project_id: API 项目 ID
             endpoint_index_to_id: 接口序号→数据库ID映射
             api_context: API 接口信息文本
+            stop_after_stage: 执行到哪个阶段后停止（2=只跑需求拆分+测试点生成）
 
         Returns:
             task_id: 任务ID，可用于查询进度
@@ -533,6 +724,7 @@ class PipelineRunner:
                 endpoint_index_to_id=endpoint_index_to_id or {},
                 api_context=api_context,
                 original_requirement=original_requirement,
+                stop_after_stage=stop_after_stage,
             )
         )
 
@@ -555,6 +747,7 @@ class PipelineRunner:
         endpoint_index_to_id: Optional[Dict[int, int]] = None,
         api_context: str = "",
         original_requirement: str = "",
+        stop_after_stage: int = 4,
     ):
         """执行完整的 4 阶段 pipeline"""
         from db.models import RequirementPoint, TestPoint, TestCase
@@ -563,12 +756,19 @@ class PipelineRunner:
 
         try:
             # 预取飞书/蓝湖文档内容
-            if _FEISHU_URL_RE.search(requirement_text) or _LANHU_URL_RE.search(requirement_text):
+            has_feishu = bool(_FEISHU_URL_RE.search(requirement_text))
+            has_lanhu = bool(_LANHU_URL_RE.search(requirement_text))
+            if has_feishu or has_lanhu:
                 self._update_progress(task_id, 1, "需求拆分", 2, "正在预取文档内容...")
                 prefetched = await self._prefetch_document(requirement_text)
                 if prefetched != requirement_text:
                     requirement_text = prefetched
                     logger.info(f"Pipeline: 文档预取成功，内容长度 {len(requirement_text)}")
+                elif has_feishu:
+                    raise ValueError(
+                        "飞书文档读取失败：已检测到飞书链接，但未能通过 MCP 获取文档正文。"
+                        "请检查 MCP 服务器配置、飞书应用权限或 access token 是否有效后重试。"
+                    )
 
             # ========== 阶段1: 需求拆分 (0-25%) ==========
             self._update_progress(task_id, 1, "需求拆分", 5, "正在分析需求文档...")
@@ -673,6 +873,33 @@ class PipelineRunner:
                 task_id, 2, "测试点生成", 50,
                 f"测试点生成完成，共 {len(all_test_points)} 个测试点"
             )
+
+            # ========== 阶段2.5: 跨需求点测试点去重 ==========
+            # 阶段2 按需求点独立并发生成，彼此不可见，同一功能区域可能被重复建测试点。
+            # 此处 LLM 语义比对，删除被其他测试点完全覆盖的重复测试点（1:1 约束下
+            # 后续每个测试点只生成 1 条用例，去重从源头消灭用例级重复）。
+            if len(all_test_points) > 1:
+                self._update_progress(
+                    task_id, 2, "测试点生成", 50,
+                    f"正在跨需求点去重测试点（共 {len(all_test_points)} 个）..."
+                )
+                all_test_points = await _dedup_test_points_by_llm(
+                    all_test_points, requirement_text, self.tp_generator.model, self.db
+                )
+
+            # 手动模式：只执行前两阶段，到此结束
+            if stop_after_stage <= 2:
+                self._update_progress(
+                    task_id, 0, "完成", 100,
+                    f"手动模式完成：{len(req_points)} 个需求点，{len(all_test_points)} 个测试点"
+                )
+                self._complete_task(task_id, {
+                    "requirement_points_count": len(req_points),
+                    "test_points_count": len(all_test_points),
+                    "test_cases_count": 0,
+                    "mode": "manual",
+                })
+                return
 
             # ========== 阶段3: 用例设计 (50-85%) ==========
             all_test_cases = []
@@ -918,12 +1145,26 @@ class PipelineRunner:
                             item["assertions"] = tc.assertions or []
                         cases_for_opt.append(item)
 
-                    optimized = await self.optimizer.optimize(
-                        cases_for_opt, is_api_test=is_api_test, api_context=api_context,
-                    )
+                    # 大批量下单次调用输出会被 max_tokens 截断，故按块分批优化
+                    # （用例级冗余审查已独立为轻量调用，质量优化是逐用例的，可安全分片）
+                    OPT_BATCH_SIZE = 10
+                    opt_map = {}
+                    for i in range(0, len(cases_for_opt), OPT_BATCH_SIZE):
+                        chunk = cases_for_opt[i:i + OPT_BATCH_SIZE]
+                        try:
+                            chunk_optimized = await self.optimizer.optimize(
+                                chunk, is_api_test=is_api_test, api_context=api_context,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"优化批次 {i // OPT_BATCH_SIZE + 1} 失败，跳过该批: {e}"
+                            )
+                            continue
+                        for opt in chunk_optimized:
+                            if opt.get("id"):
+                                opt_map[opt["id"]] = opt
 
                     # 应用优化结果
-                    opt_map = {opt.get("id"): opt for opt in optimized if opt.get("id")}
                     optimized_count = 0
                     for tc in all_test_cases:
                         opt = opt_map.get(tc.id)
@@ -988,6 +1229,34 @@ class PipelineRunner:
                 except Exception as e:
                     logger.error(f"用例优化失败: {e}")
 
+                # 用例级冗余审查（独立轻量 LLM 调用，可靠）：删除验证维度完全被其他用例覆盖的用例及其测试点（1:1 级联）
+                if len(all_test_cases) > 1:
+                    try:
+                        remove_ids = await _dedup_test_cases_by_llm(
+                            all_test_cases, requirement_text, self.optimizer.model
+                        )
+                    except Exception as e:
+                        logger.warning("用例冗余审查异常，跳过删除: %s", e)
+                        remove_ids = []
+                    valid_ids = {tc.id for tc in all_test_cases}
+                    to_remove = set(remove_ids) & valid_ids
+                    # 防御：不删除全部用例（至少保留一条）
+                    if to_remove and len(to_remove) < len(all_test_cases):
+                        from db.models import TestPoint as _TP
+                        for tc in all_test_cases:
+                            if tc.id in to_remove and tc.test_point_id:
+                                tp = self.db.get(_TP, tc.test_point_id)
+                                if tp:
+                                    _cascade_delete_test_point(self.db, tp)
+                        self.db.commit()
+                        all_test_cases = [
+                            tc for tc in all_test_cases if tc.id not in to_remove
+                        ]
+                        logger.info(
+                            f"用例级冗余审查：已移除 {len(to_remove)} 个重复用例"
+                            f"（含其测试点），剩余 {len(all_test_cases)} 个用例"
+                        )
+
             # 保存历史提示词（需求描述），仅整体生成成功时记录
             try:
                 self._save_history_prompt(
@@ -1003,6 +1272,7 @@ class PipelineRunner:
                 "test_points_count": len(all_test_points),
                 "test_cases_count": len(all_test_cases),
                 "is_api_test": is_api_test,
+                "mode": "auto",
             })
 
             logger.info(
@@ -1474,4 +1744,73 @@ class PipelineRunner:
                 })
         except Exception as e:
             logger.error(f"重生成需求点测试点失败: {e}", exc_info=True)
+            self._fail_task(task_id, str(e))
+
+    async def batch_generate_cases(
+        self,
+        task_id: str,
+        session_id: int,
+        user_id: Optional[str] = None,
+        *,
+        module_id: Optional[int] = None,
+    ) -> None:
+        """批量为所有测试点生成用例（Stage 3）。"""
+        from db.db import engine
+        from sqlmodel import Session as DBSession
+        from db.models import TestPoint, RequirementPoint
+        try:
+            with DBSession(engine) as session:
+                self.db = session
+                # 查询所有测试点（按需求点排序）
+                stmt = (
+                    select(TestPoint)
+                    .join(RequirementPoint, TestPoint.requirement_point_id == RequirementPoint.id)
+                    .where(RequirementPoint.session_id == session_id)
+                )
+                if module_id is not None:
+                    stmt = stmt.where(RequirementPoint.module_id == module_id)
+                test_points = list(self.db.exec(stmt).all())
+
+                if not test_points:
+                    self._complete_task(task_id, {
+                        "test_points_count": 0,
+                        "cases_count": 0,
+                        "mode": "batch",
+                    })
+                    return
+
+                total = len(test_points)
+                total_cases = 0
+                for i, tp in enumerate(test_points):
+                    self._update_progress(
+                        task_id, 3, "用例设计",
+                        int(50 + (i / total) * 35),
+                        f"正在为测试点生成用例... ({i + 1}/{total})"
+                    )
+                    is_api_test, api_context, endpoint_index_to_id, api_project_id, api_endpoint_ids = \
+                        self._resolve_api_context(tp.api_project_id, tp.api_endpoint_ids)
+                    count = await self._inplace_update_cases(
+                        tp,
+                        tp.content,
+                        is_api_test=is_api_test,
+                        api_context=api_context,
+                        endpoint_index_to_id=endpoint_index_to_id,
+                        api_project_id=api_project_id,
+                        api_endpoint_ids=api_endpoint_ids,
+                        module_id=module_id,
+                        user_id=user_id,
+                    )
+                    total_cases += count
+
+                self._update_progress(
+                    task_id, 3, "用例设计", 85,
+                    f"用例生成完成，共 {total_cases} 个测试用例"
+                )
+                self._complete_task(task_id, {
+                    "test_points_count": total,
+                    "cases_count": total_cases,
+                    "mode": "batch",
+                })
+        except Exception as e:
+            logger.error(f"批量生成用例失败: {e}", exc_info=True)
             self._fail_task(task_id, str(e))

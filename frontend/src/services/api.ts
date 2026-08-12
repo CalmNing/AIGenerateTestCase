@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -240,11 +240,13 @@ export const testcaseApi = {
       apiEndpointOverrides?: Record<number, { body?: string; headers?: any[]; parameters?: any[] }>;
       moduleId?: number | string;
       file?: File | null;
+      pipelineMode?: 'auto' | 'manual';
     }
   ): Promise<ApiResponse<{ task_id: string }>> => {
     const formData = new FormData();
     formData.append("session_id", sessionId.toString());
     formData.append("requirement_text", requirementText);
+    formData.append("pipeline_mode", options?.pipelineMode || "auto");
     if (options?.moduleId !== undefined && options.moduleId !== '' && options.moduleId !== 0) {
       formData.append("module_id", options.moduleId.toString());
     }
@@ -264,6 +266,17 @@ export const testcaseApi = {
       formData.append("file", options.file);
     }
     return api.post('/testcases/generate-v2', formData);
+  },
+
+  /** 批量为会话所有测试点生成用例（异步，返回 task_id） */
+  batchGenerateCases: (
+    sessionId: number,
+    moduleId?: number | null
+  ): Promise<ApiResponse<{ task_id: string }>> => {
+    const params = new URLSearchParams();
+    if (moduleId) params.append('module_id', String(moduleId));
+    const qs = params.toString();
+    return api.post(`/testcases/sessions/${sessionId}/batch-generate-cases${qs ? `?${qs}` : ''}`);
   },
 
   /** 查询 pipeline 进度 */
@@ -642,4 +655,38 @@ export const apiTestApi = {
     api.post(`/api-test/projects/${projectId}/infer-dependencies`),
   inferScenarioDependencies: (scenarioId: number): Promise<ApiResponse<any>> =>
     api.post(`/api-test/scenarios/${scenarioId}/infer-dependencies`),
+};
+
+// 资源导航 API（接口文档 / 快捷工具 等共享书签）
+export const navLinkApi = {
+  // 获取分类 + 链接树（读，全员可用）
+  getTree: (): Promise<ApiResponse<NavTreeNode[]>> => api.get('/nav-links'),
+
+  // 分类管理（写，需 CONFIG_MANAGE）
+  createCategory: (data: { name: string; icon?: string | null; sort_order?: number }): Promise<ApiResponse<NavCategory>> =>
+    api.post('/nav-links/categories', data),
+  updateCategory: (id: number, data: { name: string; icon?: string | null; sort_order?: number }): Promise<ApiResponse<NavCategory>> =>
+    api.put(`/nav-links/categories/${id}`, data),
+  deleteCategory: (id: number): Promise<ApiResponse> => api.delete(`/nav-links/categories/${id}`),
+
+  // 链接管理（写，需 CONFIG_MANAGE）
+  createLink: (data: {
+    category_id: number;
+    title: string;
+    url: string;
+    description?: string | null;
+    icon?: string | null;
+    open_type?: string;
+    sort_order?: number;
+  }): Promise<ApiResponse<NavLink>> => api.post('/nav-links/links', data),
+  updateLink: (id: number, data: {
+    category_id: number;
+    title: string;
+    url: string;
+    description?: string | null;
+    icon?: string | null;
+    open_type?: string;
+    sort_order?: number;
+  }): Promise<ApiResponse<NavLink>> => api.put(`/nav-links/links/${id}`, data),
+  deleteLink: (id: number): Promise<ApiResponse> => api.delete(`/nav-links/links/${id}`),
 };

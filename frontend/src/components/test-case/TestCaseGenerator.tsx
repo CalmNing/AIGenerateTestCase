@@ -65,6 +65,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     error: string | null;
   } | null>(null);
   const [pipelinePolling, setPipelinePolling] = useState(false);
+  // 生成模式：auto=4阶段全跑；manual=只跑需求拆分+测试点，用例在「用例结构」面板手动批量生成
+  const [pipelineMode, setPipelineMode] = useState<'auto' | 'manual'>('auto');
 
   // 更新指定接口的 override 字段
   const updateOverride = useCallback((eid: number, field: string, value: any) => {
@@ -203,6 +205,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
         apiEndpointOverrides: apiEndpointOverrides,
         moduleId: selectedModule,
         file: selectedFile,
+        pipelineMode,
       });
       if (res.code === 200 && res.data?.task_id) {
         setPipelineTaskId(res.data.task_id);
@@ -517,6 +520,43 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 </div>
               </div>
 
+              {/* 生成模式：auto 全跑 / manual 只到测试点 */}
+              <div className="tcg-mode-switch">
+                <span className="tcg-mode-switch-label">
+                  <ExperimentOutlined style={{ color: 'var(--color-primary)' }} />
+                  生成模式
+                </span>
+                <div className="tcg-mode-toggle" role="tablist" aria-label="生成模式">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={pipelineMode === 'auto'}
+                    className={`tcg-mode-btn ${pipelineMode === 'auto' ? 'is-active' : ''}`}
+                    onClick={() => setPipelineMode('auto')}
+                    disabled={pipelinePolling || loading}
+                  >
+                    <ThunderboltOutlined />
+                    完整生成（4阶段）
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={pipelineMode === 'manual'}
+                    className={`tcg-mode-btn ${pipelineMode === 'manual' ? 'is-active' : ''}`}
+                    onClick={() => setPipelineMode('manual')}
+                    disabled={pipelinePolling || loading}
+                  >
+                    <EditOutlined />
+                    手动模式（仅需求+测试点）
+                  </button>
+                </div>
+                {pipelineMode === 'manual' && (
+                  <Tooltip title="手动模式只产出需求点与测试点，用例请在右侧「用例结构」面板点击「批量生成用例」">
+                    <Tag color="blue" style={{ margin: 0 }}>用例稍后生成</Tag>
+                  </Tooltip>
+                )}
+              </div>
+
               {/* Generate Button */}
               <button
                 className={`tcg-generate-btn ${loading || pipelinePolling ? 'is-loading' : ''}`}
@@ -531,7 +571,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 ) : (
                   <>
                     <ExperimentOutlined />
-                    深度生成（4阶段）
+                    {pipelineMode === 'manual' ? '深度生成（手动模式）' : '深度生成（4阶段）'}
                   </>
                 )}
               </button>

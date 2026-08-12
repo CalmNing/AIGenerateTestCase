@@ -348,3 +348,32 @@ class SystemConfig(BaseModel, table=True):
     ollama_model: str = Field(default="llama3", description="Ollama模型名称")
     lanhu_cookie: Optional[str] = Field(default=None, description="蓝湖Cookie")
     bug_link_template: Optional[str] = Field(default=None, description="Bug链接模板")
+
+
+# ===== 资源导航（接口文档 / 快捷工具 等共享书签） =====
+class NavCategory(BaseModel, table=True):
+    """导航分类（如：接口文档、快捷工具、其他），全局共享，仅配置管理员可增删改。"""
+    __tablename__ = "nav_category"
+    name: str = Field(default="", max_length=64, description="分类名称")
+    icon: Optional[str] = Field(default=None, max_length=32, description="分类图标（emoji 或图标名）")
+    sort_order: int = Field(default=0, description="排序权重，越小越靠前")
+    links: List["NavLink"] = Relationship(
+        back_populates="category",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "order_by": "NavLink.sort_order",
+        },
+    )
+
+
+class NavLink(BaseModel, table=True):
+    """导航链接条目，归属某个分类。"""
+    __tablename__ = "nav_link"
+    category_id: int = Field(default=0, foreign_key="nav_category.id", index=True, description="所属分类ID")
+    title: str = Field(default="", max_length=128, description="链接标题")
+    url: str = Field(default="", max_length=1024, description="链接地址")
+    description: Optional[str] = Field(default=None, max_length=512, description="链接描述")
+    icon: Optional[str] = Field(default=None, max_length=32, description="链接图标（emoji 或图标名）")
+    open_type: str = Field(default="blank", max_length=16, description="打开方式：blank=新标签页，self=当前页")
+    sort_order: int = Field(default=0, description="排序权重，越小越靠前")
+    category: Optional["NavCategory"] = Relationship(back_populates="links")

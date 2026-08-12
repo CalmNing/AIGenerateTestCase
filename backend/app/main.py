@@ -10,6 +10,7 @@ from app.routes.mock_config import router as mock_config_router
 from app.routes.mock_log import router as mock_log_router
 from app.routes.mock_server import router as mock_server_router
 from app.routes.module import router as module_router
+from app.routes.nav_link import router as nav_link_router
 from app.routes.proxy import router as proxy_router
 from app.routes.saved_request import router as saved_request_router
 from app.routes.saved_request_folder import router as saved_request_folder_router
@@ -165,6 +166,21 @@ api_router.include_router(
 
 # Public runtime route: mock callbacks must be callable by external systems.
 api_router.include_router(mock_server_router)
+
+# 资源导航（接口文档 / 快捷工具 等共享书签）：读开放，写需 CONFIG_MANAGE。
+api_router.include_router(
+    nav_link_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[],
+                post=[Permission.CONFIG_MANAGE],
+                put=[Permission.CONFIG_MANAGE],
+                delete=[Permission.CONFIG_MANAGE],
+            )
+        )
+    ],
+)
 
 # Chat route: general-purpose AI conversation
 api_router.include_router(chat_router)

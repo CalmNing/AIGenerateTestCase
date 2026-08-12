@@ -380,3 +380,31 @@ export interface ApiSyncResult {
   updated: number;
   marked_removed: number;
 }
+
+// ===== 资源导航（接口文档 / 快捷工具 等共享书签） =====
+export interface NavCategory {
+  id: number;
+  name: string;
+  icon?: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NavLink {
+  id: number;
+  category_id: number;
+  title: string;
+  url: string;
+  description?: string | null;
+  icon?: string | null;
+  open_type: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NavTreeNode {
+  category: NavCategory;
+  links: NavLink[];
+}

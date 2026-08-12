@@ -145,6 +145,7 @@ async def generate_v2(
     api_endpoint_id: Optional[str] = Form(None),
     api_project_id: Optional[str] = Form(None),
     api_endpoint_overrides: Optional[str] = Form(default=None),
+    pipeline_mode: str = Form("auto"),
     file: Optional[UploadFile] = File(None),
     session: SessionDep = None,
     user: CurrentUser = None,
@@ -154,6 +155,8 @@ async def generate_v2(
 
     返回 task_id，前端可通过 /pipeline/{task_id}/status 轮询进度
     支持功能测试（无接口）和接口测试（有关联接口）两种模式
+
+    pipeline_mode: "auto"=4阶段全部执行, "manual"=只执行前两阶段(需求拆分+测试点生成)
 
     文件上传：上传 .docx/.txt/.md 需求文档时，文件内容作为生成依据主体，
     文本框内已输入的文字作为「补充背景」拼接在文件内容之后。
@@ -252,6 +255,7 @@ async def generate_v2(
     )
 
     # 启动 pipeline
+    stop_after_stage = 2 if pipeline_mode == "manual" else 4
     task_id = await runner.run(
         session_id=session_id,
         requirement_text=requirement_text,
@@ -262,6 +266,7 @@ async def generate_v2(
         api_project_id=api_project_id_int,
         endpoint_index_to_id=endpoint_index_to_id,
         api_context=api_context,
+        stop_after_stage=stop_after_stage,
     )
 
     return Response(data={"task_id": task_id}, message="深度生成已启动")
@@ -615,3 +620,43 @@ async def regenerate_requirement_point_points(
         )
     )
     return Response(data={"task_id": task_id}, message="需求点测试点重生成已启动")
+
+
+@router.post("/sessions/{session_id}/batch-generate-cases")
+async def batch_generate_cases(
+    session_id: int,
+    module_id: Optional[int] = Query(None),
+    session: SessionDep = None,
+    user: CurrentUser = None,
+):
+    """批量为本会话所有测试点生成测试用例（Stage 3，异步任务）。
+
+    用于「手动模式」深度生成（pipeline_mode=manual，只产出需求点+测试点）之后，
+    用户审阅/编辑测试点，再一键为全部测试点生成用例。可按 module_id 限定范围。
+    """
+    _check_session_owner(session, session_id, user)
+    user_id = user.user_id if user else None
+    user_config = _get_user_config(session, user_id)
+    model_type = user_config["model_type"]
+    api_key = user_config["api_key"]
+    if model_type == "api" and not api_key:
+        raise HTTPException(status_code=400, detail="API Key未配置，请先在配置页面设置")
+
+    runner = PipelineRunner(
+        db_session=session,
+        api_key=api_key,
+        api_base_url=user_config["api_base_url"],
+        api_model=user_config["api_model"],
+        api_proxy_url=user_config["api_proxy_url"] or None,
+        mcp_configs=[],
+    )
+    task_id = runner._create_task()
+    _schedule_background(
+        runner.batch_generate_cases(
+            task_id,
+            session_id,
+            user_id=user_id,
+            module_id=module_id,
+        )
+    )
+    return Response(data={"task_id": task_id}, message="批量生成用例已启动")

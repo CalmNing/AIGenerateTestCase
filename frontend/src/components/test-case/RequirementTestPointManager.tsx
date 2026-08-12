@@ -6,6 +6,7 @@ import {
 import {
   PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined,
   ApartmentOutlined, NodeIndexOutlined, FileTextOutlined, ApiOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { testcaseApi } from '../../services/api';
 import { TestCase, Module } from '../../types';
@@ -153,6 +154,7 @@ const RequirementTestPointManager: React.FC<{
   const [tpLoading, setTpLoading] = useState(false);
   const [caseLoading, setCaseLoading] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [batchGenerating, setBatchGenerating] = useState(false);
   const [draft, setDraft] = useState<Draft>(null);
   const [saving, setSaving] = useState(false);
 
@@ -424,6 +426,25 @@ const RequirementTestPointManager: React.FC<{
     }
   };
 
+  // 手动模式：为当前会话（可按模块过滤）全部测试点批量生成用例
+  const handleBatchGenerateCases = async () => {
+    if (!sessionId) return;
+    setBatchGenerating(true);
+    try {
+      const res = await testcaseApi.batchGenerateCases(sessionId, filterModule);
+      if (res.code === 200 && res.data?.task_id) {
+        antMessage.info('批量生成用例已启动，请稍候...');
+        startPolling(res.data.task_id, refreshAll);
+      } else {
+        antMessage.error(res.message || '启动失败');
+      }
+    } catch (e: any) {
+      antMessage.error('启动失败：' + (e?.message || '未知错误'));
+    } finally {
+      setBatchGenerating(false);
+    }
+  };
+
   const handleDeleteReq = async (rpId: number) => {
     try {
       const res = await testcaseApi.deleteRequirementPoint(rpId);
@@ -559,6 +580,15 @@ const RequirementTestPointManager: React.FC<{
             <span className="rtp-stats-chip">{caseTotal} 用例</span>
           </div>
           <Space>
+            <Button
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={handleBatchGenerateCases}
+              disabled={polling || batchGenerating || tpTotal === 0}
+              loading={batchGenerating}
+            >
+              批量生成用例
+            </Button>
             <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshAll()} loading={loading || polling}>刷新</Button>
             <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAddReq}>新增需求点</Button>
           </Space>

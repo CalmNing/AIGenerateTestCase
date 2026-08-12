@@ -36,8 +36,9 @@ class TestCaseOptimizer:
         api_model: str = "deepseek-v4-flash",
         api_proxy_url: Optional[str] = None,
     ):
+        # max_tokens 显式设高：DeepSeek 服务器默认 8192，大批量优化输出可能被截断
         self.model = build_chat_model(
-            api_key, api_base_url, api_model, api_proxy_url, max_tokens=None
+            api_key, api_base_url, api_model, api_proxy_url, max_tokens=16384
         )
 
     async def optimize(

@@ -42,6 +42,15 @@ class RequirementDedupResult(BaseModel):
     )
 
 
+class TestPointDedupResult(BaseModel):
+    """测试点去重结果：返回需保留的测试点 id 列表（DB id）。"""
+    keep_ids: List[int] = Field(
+        default_factory=list,
+        description="需要保留的测试点 id 列表。只保留每个重复簇中最综合的一个；"
+        "若候选互不重复则返回全部 id。",
+    )
+
+
 class TestPointOut(BaseModel):
     content: str = Field(description="Test point content")
     test_type: str = Field(default="functional", description="Test type")
@@ -177,3 +186,12 @@ class TestCaseOptimizationResult(BaseModel):
 
 class ApiTestCaseOptimizationResult(BaseModel):
     optimized_cases: List[ApiOptimizedCaseOut] = Field(default_factory=list)
+
+
+class TestCaseDedupResult(BaseModel):
+    """用例级冗余审查结果：返回验证维度完全被其他用例覆盖、应删除的用例 id 列表。"""
+    remove_ids: List[int] = Field(
+        default_factory=list,
+        description="需要删除的用例 id 列表（其独有断言应已并入保留用例）。"
+        "若全部用例互不重复则为空列表。",
+    )

@@ -75,6 +75,12 @@ async def fetch_feishu_content(
 
         # 获取文档正文（含嵌入表格和画板）
         content = await fetch_feishu_document(req.url, mcp_configs)
+        if not content:
+            raise HTTPException(
+                status_code=400,
+                detail="飞书文档读取失败：未能通过 MCP 获取文档正文。"
+                       "请检查 MCP 服务器配置、飞书应用权限或 access token 是否有效后重试。",
+            )
 
         # 如果需要单独获取画板详情
         boards: list[BoardInfo] = []

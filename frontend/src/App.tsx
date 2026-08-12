@@ -1287,6 +1287,7 @@ const App: React.FC = () => {
           onNavigateToMock={navigateToMock}
           canAccessScheduledTask={canAccessScheduledTask}
           canAccessMock={canAccessMock}
+          canManageNav={canManageSettings}
         />
       ) : currentPlatform === 'iot-mock' ? (
         <div>
