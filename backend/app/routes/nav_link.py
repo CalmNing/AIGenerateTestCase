@@ -58,7 +58,10 @@ def delete_category(category_id: int, session: SessionDep, user: CurrentUser):
     db = session.get(NavCategory, category_id)
     if not db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="分类不存在")
-    # 级联删除下属链接（关系上配置了 cascade="all, delete-orphan"）
+    # 仅允许删除空分类，分类下仍有链接时禁止删除
+    link_count = session.exec(select(NavLink).where(NavLink.category_id == category_id)).first()
+    if link_count:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="分类下仍有链接，请先删除或移动链接")
     session.delete(db)
     session.commit()
     return Response()

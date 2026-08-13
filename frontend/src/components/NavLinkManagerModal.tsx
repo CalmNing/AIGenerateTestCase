@@ -254,15 +254,23 @@ const NavLinkManagerModal: React.FC<NavLinkManagerModalProps> = ({ visible, onCa
                     <Tooltip title="编辑分类">
                       <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEditCategory(node)} />
                     </Tooltip>
+                  <Tooltip title={node.links.length > 0 ? '仅空分类可删除' : '删除分类'}>
                     <Popconfirm
                       title="删除该分类？"
-                      description="分类下的所有链接也会被删除"
-                      onConfirm={() => handleDeleteCategory(node.category.id)}
                       okText="删除"
                       cancelText="取消"
+                      onConfirm={() => handleDeleteCategory(node.category.id)}
+                      disabled={node.links.length > 0}
                     >
-                      <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                      <Button
+                        size="small"
+                        type="text"
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={node.links.length > 0}
+                      />
                     </Popconfirm>
+                  </Tooltip>
                   </Space>
                 </div>
 
