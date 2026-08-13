@@ -20,6 +20,7 @@ import {
   DeleteOutlined,
   LinkOutlined,
   AppstoreOutlined,
+  DownOutlined,
 } from '@ant-design/icons';
 import { navLinkApi } from '../services/api';
 import { NavLink, NavTreeNode } from '../types';
@@ -38,6 +39,7 @@ const openTypeOptions = [
 const NavLinkManagerModal: React.FC<NavLinkManagerModalProps> = ({ visible, onCancel, onSaved }) => {
   const [tree, setTree] = useState<NavTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const [catModalVisible, setCatModalVisible] = useState(false);
   const [editingCategory, setEditingCategory] = useState<NavTreeNode['category'] | null>(null);
@@ -178,6 +180,18 @@ const NavLinkManagerModal: React.FC<NavLinkManagerModalProps> = ({ visible, onCa
     }
   };
 
+  const toggleExpand = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   return (
     <Modal
       title={
@@ -207,92 +221,106 @@ const NavLinkManagerModal: React.FC<NavLinkManagerModalProps> = ({ visible, onCa
         {tree.length === 0 ? (
           <Empty description="暂无分类，点击右上角新增" style={{ padding: '32px 0' }} />
         ) : (
-          tree.map((node) => (
-            <div
-              key={node.category.id}
-              style={{
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-lg)',
-                padding: 12,
-                marginBottom: 12,
-                background: 'var(--color-bg)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <Space>
-                  <span style={{ fontSize: 18 }}>{node.category.icon || '📁'}</span>
-                  <strong style={{ fontSize: 15 }}>{node.category.name}</strong>
-                  <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>排序 {node.category.sort_order}</span>
-                </Space>
-                <Space size={4}>
-                  <Tooltip title="新增链接">
-                    <Button size="small" type="text" icon={<LinkOutlined />} onClick={() => openCreateLink(node.category.id)} />
-                  </Tooltip>
-                  <Tooltip title="编辑分类">
-                    <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEditCategory(node)} />
-                  </Tooltip>
-                  <Popconfirm
-                    title="删除该分类？"
-                    description="分类下的所有链接也会被删除"
-                    onConfirm={() => handleDeleteCategory(node.category.id)}
-                    okText="删除"
-                    cancelText="取消"
-                  >
-                    <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
-                </Space>
-              </div>
+          tree.map((node) => {
+            const expanded = expandedIds.has(node.category.id);
+            return (
+              <div
+                key={node.category.id}
+                style={{
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: 12,
+                  marginBottom: 12,
+                  background: 'var(--color-bg)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <Space>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DownOutlined style={{ transform: expanded ? 'none' : 'rotate(-90deg)', transition: 'transform 200ms ease' }} />}
+                      onClick={() => toggleExpand(node.category.id)}
+                      style={{ padding: 0 }}
+                    />
+                    <span style={{ fontSize: 18 }}>{node.category.icon || '📁'}</span>
+                    <strong style={{ fontSize: 15 }}>{node.category.name}</strong>
+                    <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>排序 {node.category.sort_order}</span>
+                  </Space>
+                  <Space size={4}>
+                    <Tooltip title="新增链接">
+                      <Button size="small" type="text" icon={<LinkOutlined />} onClick={() => openCreateLink(node.category.id)} />
+                    </Tooltip>
+                    <Tooltip title="编辑分类">
+                      <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEditCategory(node)} />
+                    </Tooltip>
+                    <Popconfirm
+                      title="删除该分类？"
+                      description="分类下的所有链接也会被删除"
+                      onConfirm={() => handleDeleteCategory(node.category.id)}
+                      okText="删除"
+                      cancelText="取消"
+                    >
+                      <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>
+                  </Space>
+                </div>
 
-              <Divider style={{ margin: '4px 0 8px' }} />
+                {expanded && (
+                  <>
+                    <Divider style={{ margin: '4px 0 8px' }} />
 
-              {node.links.length === 0 ? (
-                <div style={{ color: 'var(--color-text-tertiary)', fontSize: 13, padding: '4px 0' }}>暂无链接</div>
-              ) : (
-                node.links.map((link) => (
-                  <div
-                    key={link.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '6px 8px',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-border-light)',
-                      marginBottom: 6,
-                      background: 'var(--color-bg-elevated)',
-                    }}
-                  >
-                    <Space>
-                      <span>{link.icon || '🔗'}</span>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 500 }}>{link.title}</div>
+                    {node.links.length === 0 ? (
+                      <div style={{ color: 'var(--color-text-tertiary)', fontSize: 13, padding: '4px 0' }}>暂无链接</div>
+                    ) : (
+                      node.links.map((link) => (
                         <div
+                          key={link.id}
                           style={{
-                            fontSize: 12,
-                            color: 'var(--color-text-tertiary)',
-                            maxWidth: 420,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '6px 8px',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--color-border-light)',
+                            marginBottom: 6,
+                            background: 'var(--color-bg-elevated)',
                           }}
                         >
-                          {link.url}
+                          <Space>
+                            <span>{link.icon || '🔗'}</span>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 500 }}>{link.title}</div>
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: 'var(--color-text-tertiary)',
+                                  maxWidth: 420,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {link.url}
+                              </div>
+                            </div>
+                          </Space>
+                          <Space size={4}>
+                            <Tooltip title="编辑链接">
+                              <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEditLink(link)} />
+                            </Tooltip>
+                            <Popconfirm title="删除该链接？" onConfirm={() => handleDeleteLink(link.id)} okText="删除" cancelText="取消">
+                              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                            </Popconfirm>
+                          </Space>
                         </div>
-                      </div>
-                    </Space>
-                    <Space size={4}>
-                      <Tooltip title="编辑链接">
-                        <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEditLink(link)} />
-                      </Tooltip>
-                      <Popconfirm title="删除该链接？" onConfirm={() => handleDeleteLink(link.id)} okText="删除" cancelText="取消">
-                        <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-                      </Popconfirm>
-                    </Space>
-                  </div>
-                ))
-              )}
-            </div>
-          ))
+                      ))
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })
         )}
       </Spin>
 

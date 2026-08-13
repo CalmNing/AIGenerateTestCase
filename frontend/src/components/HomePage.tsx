@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Spin, Empty, message } from 'antd';
+import { Button, Spin, Empty, message, Input } from 'antd';
 import {
   ApiOutlined,
   BranchesOutlined,
@@ -10,6 +10,8 @@ import {
   SettingOutlined,
   LinkOutlined,
   ArrowRightOutlined,
+  DownOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { navLinkApi } from '../services/api';
 import { NavLink, NavTreeNode } from '../types';
@@ -112,6 +114,8 @@ const HomePage: React.FC<HomePageProps> = ({
   const [navTree, setNavTree] = useState<NavTreeNode[]>([]);
   const [navLoading, setNavLoading] = useState(false);
   const [managerVisible, setManagerVisible] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [navKeyword, setNavKeyword] = useState('');
 
   const loadNavTree = async () => {
     setNavLoading(true);
@@ -149,6 +153,33 @@ const HomePage: React.FC<HomePageProps> = ({
       window.open(safeUrl, '_blank', 'noopener,noreferrer');
     }
   };
+
+  const toggleCollapse = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const keyword = navKeyword.trim().toLowerCase();
+  const filteredTree = keyword
+    ? navTree
+        .map((node) => ({
+          ...node,
+          links: node.links.filter(
+            (link) =>
+              link.title.toLowerCase().includes(keyword) ||
+              link.url.toLowerCase().includes(keyword) ||
+              (link.description || '').toLowerCase().includes(keyword)
+          ),
+        }))
+        .filter((node) => node.links.length > 0)
+    : navTree;
 
   return (
     <main className="home-workbench">
@@ -223,6 +254,14 @@ const HomePage: React.FC<HomePageProps> = ({
               <LinkOutlined /> 资源导航
             </h2>
             <div className="home-section-actions">
+              <Input
+                allowClear
+                prefix={<SearchOutlined />}
+                placeholder="搜索链接"
+                value={navKeyword}
+                onChange={(e) => setNavKeyword(e.target.value)}
+                className="home-nav-search"
+              />
               {canManageNav && (
                 <Button size="small" icon={<SettingOutlined />} onClick={() => setManagerVisible(true)}>
                   管理
@@ -232,44 +271,62 @@ const HomePage: React.FC<HomePageProps> = ({
           </div>
 
           <Spin spinning={navLoading}>
-            {navTree.length === 0 ? (
+            {filteredTree.length === 0 ? (
               <div className="home-nav-empty">
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                   description={
-                    canManageNav ? '暂无导航条目，点击右上角「管理」添加' : '暂无导航条目'
+                    navTree.length === 0
+                      ? canManageNav
+                        ? '暂无导航条目，点击右上角「管理」添加'
+                        : '暂无导航条目'
+                      : '未找到匹配的链接'
                   }
                 />
               </div>
             ) : (
               <div className="home-nav-groups">
-                {navTree.map((node) => (
-                  <div className="home-nav-group" key={node.category.id}>
-                    <div className="home-nav-group-head">
-                      <span className="home-nav-group-icon">{node.category.icon || '📁'}</span>
-                      <span className="home-nav-group-name">{node.category.name}</span>
-                      <span className="home-nav-group-count">{node.links.length}</span>
+                {filteredTree.map((node) => {
+                  const expanded = keyword ? true : expandedIds.has(node.category.id);
+                  return (
+                    <div
+                      className={`home-nav-group${expanded ? '' : ' home-nav-group-collapsed'}`}
+                      key={node.category.id}
+                    >
+                      <button
+                        type="button"
+                        className="home-nav-group-head"
+                        onClick={() => toggleCollapse(node.category.id)}
+                        aria-expanded={expanded}
+                      >
+                        <span className="home-nav-group-icon">{node.category.icon || '📁'}</span>
+                        <span className="home-nav-group-name">{node.category.name}</span>
+                        <span className="home-nav-group-count">{node.links.length}</span>
+                        <DownOutlined className={`home-nav-group-arrow${expanded ? '' : ' is-collapsed'}`} />
+                      </button>
+                      {expanded && (
+                        <div className="home-nav-links">
+                          {node.links.map((link) => (
+                            <button
+                              type="button"
+                              className="home-nav-link"
+                              key={link.id}
+                              onClick={() => handleLinkClick(link)}
+                              title={link.description || link.url}
+                            >
+                              <span className="home-nav-link-icon">{link.icon || '🔗'}</span>
+                              <span className="home-nav-link-body">
+                                <span className="home-nav-link-title">{link.title}</span>
+                                <span className="home-nav-link-url">{link.url}</span>
+                              </span>
+                              <ArrowRightOutlined className="home-nav-link-arrow" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <div className="home-nav-links">
-                      {node.links.map((link) => (
-                        <button
-                          type="button"
-                          className="home-nav-link"
-                          key={link.id}
-                          onClick={() => handleLinkClick(link)}
-                          title={link.description || link.url}
-                        >
-                          <span className="home-nav-link-icon">{link.icon || '🔗'}</span>
-                          <span className="home-nav-link-body">
-                            <span className="home-nav-link-title">{link.title}</span>
-                            <span className="home-nav-link-url">{link.url}</span>
-                          </span>
-                          <ArrowRightOutlined className="home-nav-link-arrow" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Spin>
