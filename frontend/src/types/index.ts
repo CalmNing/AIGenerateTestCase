@@ -262,6 +262,44 @@ export interface MockConfig {
   updated_at: string;
 }
 
+// Mock 正向代理转发规则
+export interface MockProxyRule {
+  id: number;
+  name: string;
+  host_pattern: string;
+  path_pattern: string;
+  enabled: boolean;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Mock 正向代理运行状态
+export interface MockProxyStatus {
+  running: boolean;
+  port: number | null;
+  rules_count: number;
+}
+
+// Mock 调用日志（含代理流量）
+export interface MockLogItem {
+  id: number;
+  config_id: number | null;
+  config_name: string;
+  request_method: string;
+  request_path: string;
+  request_headers: Array<{ key: string; value: string }>;
+  request_query_params?: string | null;
+  request_body?: string | null;
+  response_status_code: number;
+  response_headers: Array<{ key: string; value: string }>;
+  response_body?: string | null;
+  matched: boolean;
+  user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ApiProject {
   id: number;
   name: string;
@@ -271,6 +309,8 @@ export interface ApiProject {
   source_type: string;
   source_url?: string | null;
   raw_spec?: string;
+  mock_enabled?: boolean;
+  mock_prefix?: string;
   user_id?: string;
   created_at: string;
   updated_at: string;
@@ -378,7 +418,7 @@ export interface ApiSyncResult {
   endpoints: ApiEndpoint[];
   created: number;
   updated: number;
-  marked_removed: number;
+  removed: number;
 }
 
 // ===== 资源导航（接口文档 / 快捷工具 等共享书签） =====

@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { FloatButton, Popover, Tabs, Button, Space, message, Spin } from 'antd';
+import { FloatButton, Popover, Tabs, Button, message } from 'antd';
 import {
   FunctionOutlined,
   CopyOutlined,

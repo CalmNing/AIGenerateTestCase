@@ -51,7 +51,7 @@ function calculateMd5(file: File): Promise<string> {
     const chunkSize = 2 * 1024 * 1024; // 2MB 分块
     const chunks = Math.ceil(file.size / chunkSize);
     let currentChunk = 0;
-    const spark = new ArrayBuffer ? new SparkMD5.ArrayBuffer() : new SparkMD5();
+    const spark = typeof ArrayBuffer !== 'undefined' ? new SparkMD5.ArrayBuffer() : new SparkMD5();
     const reader = new FileReader();
 
     reader.onload = (e) => {

@@ -20,6 +20,10 @@ from app.services.swagger_parser import (  # noqa: F401
     detect_base_url,
     endpoints_from_spec,
     sync_project_from_spec,
+    swagger_config_docs,
+    merge_specs,
+    load_openapi_from_url,
+    suggest_project_name,
     generate_body_from_schema,
     build_body_from_schema,
 )

@@ -27,6 +27,7 @@ from db.models import (
     GlobalParameter,
     McpServer,
     MockConfig,
+    MockProxyRule,
     NavCategory,
     NavLink,
     RequirementPoint,

@@ -320,7 +320,6 @@ const RequirementTestPointManager: React.FC<{
       return;
     }
     loadReqPoints(1, REQ_PAGE_SIZE, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // 深度生成（generate-v2）完成后自动刷新用例结构，避免“生成完但看不到需求点”
@@ -332,7 +331,6 @@ const RequirementTestPointManager: React.FC<{
     return () => {
       window.removeEventListener('pipeline-completed', onPipelineCompleted as EventListener);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadReqPoints, reqPageSize, filterModule]);
 
   // 父级全局选中的模块变化时，同步到用例结构过滤条件并刷新
@@ -351,7 +349,6 @@ const RequirementTestPointManager: React.FC<{
     setFilterModule(modId);
     // 用最新的 modId 直接触发重新拉取，避免依赖 filterModule 闭包导致的陈旧值
     if (sessionId) loadReqPoints(1, reqPageSize, false, modId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedModule, sessionId, loadReqPoints, reqPageSize]);
 
   // 重生成/增删改后刷新当前视图（回到选中需求点的测试点第 1 页、选中测试点的用例第 1 页）
@@ -767,7 +764,7 @@ const RequirementTestPointManager: React.FC<{
                   <FileTextOutlined className="rtp-case__icon" />
                   <span className="rtp-case__name">{c.case_name}</span>
                   {caseStatusTag(c.status)}
-                  <span className="rtp-case__time" title={c.updated_at && c.updated_at !== c.created_at ? `创建：${formatTime(c.created_at)}　更新：${formatTime(c.updated_at)}` : `创建：${formatTime(c.created_at)}`}>
+                  <span className="rtp-case__time" title={c.updated_at && c.updated_at !== c.created_at ? `创建：${formatTime(c.created_at)} 更新：${formatTime(c.updated_at)}` : `创建：${formatTime(c.created_at)}`}>
                     {c.updated_at && c.updated_at !== c.created_at
                       ? `${formatTime(c.created_at)} / ${formatTime(c.updated_at)}`
                       : formatTime(c.created_at)}

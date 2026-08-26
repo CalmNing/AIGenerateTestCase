@@ -8,6 +8,8 @@ from app.routes.api_test_tool import router as api_test_tool_router
 from app.routes.mcp import router as mcp_router
 from app.routes.mock_config import router as mock_config_router
 from app.routes.mock_log import router as mock_log_router
+from app.routes.mock_proxy import router as mock_proxy_router
+from app.routes.mock_proxy import public_router as mock_proxy_public_router
 from app.routes.mock_server import router as mock_server_router
 from app.routes.module import router as module_router
 from app.routes.nav_link import router as nav_link_router
@@ -152,6 +154,7 @@ api_router.include_router(
     dependencies=[Depends(require_permissions(Permission.SCHEDULED_TASK_MANAGE))],
 )
 api_router.include_router(mock_config_router, dependencies=[Depends(require_permissions(Permission.MOCK_MANAGE))])
+api_router.include_router(mock_proxy_router, dependencies=[Depends(require_permissions(Permission.MOCK_MANAGE))])
 api_router.include_router(
     mock_log_router,
     dependencies=[
@@ -166,6 +169,9 @@ api_router.include_router(
 
 # Public runtime route: mock callbacks must be callable by external systems.
 api_router.include_router(mock_server_router)
+
+# Mock 代理 CA 证书下载：免认证（导入信任区前无法携带业务凭证）。
+api_router.include_router(mock_proxy_public_router)
 
 # 资源导航（接口文档 / 快捷工具 等共享书签）：读开放，写需 CONFIG_MANAGE。
 api_router.include_router(

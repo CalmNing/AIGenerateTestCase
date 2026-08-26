@@ -12,9 +12,11 @@ from app.services.api_test_tool import (
     endpoints_from_spec,
     generate_body_from_schema,
     infer_step_dependencies,
+    load_openapi_from_url,
     parse_spec_text,
     run_endpoint,
     run_scenario,
+    suggest_project_name,
     sync_project_from_spec,
 )
 from db.models import ApiEndpoint, ApiProject, ApiScenario, ApiScenarioResult
@@ -84,6 +86,11 @@ class GenerateBodyRequest(BaseModel):
     ollama_url: str = ""
     ollama_model: str = ""
 
+
+
+class ToggleProjectMockRequest(BaseModel):
+    mock_enabled: Optional[bool] = None
+    mock_prefix: Optional[str] = None
 
 
 class MatchEndpointRequest(BaseModel):
@@ -201,6 +208,73 @@ def update_project(project_id: int, project: ApiProject, session: SessionDep, us
     return Response(data=db_project, message="接口项目已更新")
 
 
+def _normalize_mock_prefix(value: str) -> str:
+    """规范化 Mock 前缀：确保以 / 开头、不以 / 结尾；空值返回空串。"""
+    prefix = (value or "").strip()
+    if not prefix:
+        return ""
+    prefix = prefix.strip("/")
+    if not prefix:
+        return ""
+    return "/" + prefix
+
+
+def _default_mock_prefix(name: str) -> str:
+    """由项目名生成默认前缀，保留中英文数字，其余替换为 -。"""
+    import re as _re
+
+    slug = _re.sub(r"[^0-9A-Za-z一-龥]+", "-", (name or "").strip()).strip("-").lower()
+    return f"/{slug}" if slug else ""
+
+
+@router.post("/projects/{project_id}/mock", response_model=Response[ApiProject])
+def toggle_project_mock(project_id: int, request: ToggleProjectMockRequest, session: SessionDep, user: CurrentUser):
+    """开启/关闭项目级 Mock 服务，并可设置地址前缀。
+
+    开启后该项目的所有接口立即可直接调用：/api/mock{mock_prefix}{接口路径}，
+    响应按接口文档的 response schema 实时生成。
+    """
+    project = session.get(ApiProject, project_id)
+    if not project or project.user_id != user.user_id:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
+
+    if request.mock_prefix is not None:
+        project.mock_prefix = _normalize_mock_prefix(request.mock_prefix)
+    if not project.mock_prefix:
+        project.mock_prefix = _default_mock_prefix(project.name)
+
+    if request.mock_enabled is not None:
+        project.mock_enabled = request.mock_enabled
+
+    if project.mock_enabled:
+        # 前缀不能与其它已开启项目冲突
+        conflict = session.exec(
+            select(ApiProject)
+            .where(ApiProject.user_id == user.user_id)
+            .where(ApiProject.id != project_id)
+            .where(ApiProject.mock_enabled == True)
+            .where(ApiProject.mock_prefix == project.mock_prefix)
+        ).first()
+        if conflict:
+            return Response(
+                code=status.HTTP_400_BAD_REQUEST,
+                message=f"前缀 {project.mock_prefix} 已被项目「{conflict.name}」占用，请更换",
+            )
+
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+
+    if project.mock_enabled:
+        endpoint_count = len(
+            session.exec(select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)).all()
+        )
+        msg = f"Mock 服务已开启，{endpoint_count} 个接口可直接调用：/api/mock{project.mock_prefix}/..."
+    else:
+        msg = "Mock 服务已关闭"
+    return Response(data=project, message=msg)
+
+
 @router.delete("/projects/{project_id}", response_model=Response)
 def delete_project(project_id: int, session: SessionDep, user: CurrentUser):
     db_project = session.get(ApiProject, project_id)
@@ -233,12 +307,16 @@ async def import_openapi(
         source_url = None
         project_name = name.strip() or (file.filename or "导入接口项目")
     elif source_url:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(source_url, timeout=30.0)
-            resp.raise_for_status()
-            raw = resp.text
+        try:
+            async with httpx.AsyncClient() as client:
+                raw, config_docs = await load_openapi_from_url(client, source_url)
+        except Exception as exc:
+            return Response(code=status.HTTP_400_BAD_REQUEST, message=f"获取 OpenAPI 文档失败: {exc}")
         source_type = "url"
-        project_name = name.strip() or url.strip().rstrip("/").split("/")[-1] or "导入接口项目"
+        if name.strip():
+            project_name = name.strip()
+        else:
+            project_name = suggest_project_name(source_url, bool(config_docs)) or "导入接口项目"
     else:
         return Response(code=status.HTTP_400_BAD_REQUEST, message="请上传文件或填写 OpenAPI URL")
 
@@ -283,9 +361,7 @@ async def sync_openapi_project(project_id: int, session: SessionDep, user: Curre
         return Response(code=status.HTTP_400_BAD_REQUEST, message="Only URL imported projects can be synced")
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(project.source_url, timeout=30.0)
-            resp.raise_for_status()
-            raw = resp.text
+            raw, _ = await load_openapi_from_url(client, project.source_url)
         result = sync_project_from_spec(session, project, raw, user.user_id)
     except RecursionError:
         session.rollback()

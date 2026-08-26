@@ -18,6 +18,7 @@ json5==0.14.0
 httpx>=0.28.1
 APScheduler==3.11.0
 python-jose[cryptography]==3.3.0
+cryptography>=42.0
 langchain-openrouter>=0.2.0
 pyyaml>=6.0
 mcp>=1.0.0

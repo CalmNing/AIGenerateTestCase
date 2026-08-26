@@ -30,6 +30,9 @@ default_config = {
     "feishu_app_secret": "",
     # prompt caching: None = 按 base_url 自动判定（DeepSeek 开启）；True/False = 强制开关
     "prompt_cache_enabled": None,
+    # Mock 正向代理：监听端口与重启后是否自动恢复运行
+    "mock_proxy_port": 9000,
+    "mock_proxy_enabled": False,
 }
 
 class ConfigManager:
@@ -121,6 +124,17 @@ class ConfigManager:
     def get_feishu_app_secret(self) -> str:
         """飞书应用 app_secret（同上）。"""
         return self.config.get("feishu_app_secret", "")
+
+    def get_mock_proxy_port(self) -> int:
+        """获取 Mock 正向代理监听端口"""
+        try:
+            return int(self.config.get("mock_proxy_port", 9000))
+        except (TypeError, ValueError):
+            return 9000
+
+    def is_mock_proxy_enabled(self) -> bool:
+        """Mock 正向代理是否应在启动时自动恢复运行"""
+        return bool(self.config.get("mock_proxy_enabled", False))
 
 # 创建全局配置管理器实例
 config_manager = ConfigManager()

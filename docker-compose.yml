@@ -4,6 +4,8 @@
     container_name: backend
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+      # Mock 正向代理监听端口（本地开发/测试用；生产按需暴露）
+      - "${MOCK_PROXY_PORT:-9000}:9000"
     volumes:
       - backend_data:/app/data
       - npm_cache:/root/.npm

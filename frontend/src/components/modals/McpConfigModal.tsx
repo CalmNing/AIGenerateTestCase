@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Modal, Input, Button, Space, Typography, Empty, InputNumber,
+  Modal, Input, Button, Typography, InputNumber,
   Spin, Tag, Switch, message, Tabs, ConfigProvider, Segmented, Tooltip,
   Badge, Alert
 } from 'antd';
@@ -191,7 +191,7 @@ const cardHeaderStyle: React.CSSProperties = {
   minHeight: 52,
 };
 
-const labelStyle: React.CSSProperties = {
+const _labelStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 500,
   color: tokens.textSecondary,

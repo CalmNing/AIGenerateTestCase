@@ -1,12 +1,12 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { Layout, Form, Tabs, Modal, Input, Button, Select, Space, Popconfirm, Tooltip, message, FloatButton } from 'antd';
+import { Layout, Form, Tabs, Modal, Input, Button, Select, Popconfirm, Tooltip, message, FloatButton } from 'antd';
 import { PlusOutlined, MinusOutlined, EditOutlined, GlobalOutlined, InfoCircleOutlined, KeyOutlined, AppstoreOutlined, MessageOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, TestCaseExecutionLog } from './types';
-import { sessionApi, testcaseApi, moduleApi, globalParameterApi, configApi } from './services/api';
-import { useEnvironments, Environment } from './hooks/useEnvironments';
+import { sessionApi, testcaseApi, moduleApi, configApi } from './services/api';
+import { useEnvironments } from './hooks/useEnvironments';
 import HomePage from './components/HomePage';
 import IoTDataPushPlatform from './components/iot/IoTDataPushPlatform';
 import IoTMockPlatform from './components/iot/IoTMockPlatform';
@@ -20,6 +20,7 @@ import ScheduledTaskManager from './components/ScheduledTaskManager';
 import ApiScenarioTestTool from './components/api/ApiScenarioTestTool';
 import VariableAssistant from './components/VariableAssistant';
 import ChatAssistant from './components/chat/ChatAssistant';
+import MockProxyAssistant from './components/mock/MockProxyAssistant';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
 import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
@@ -113,7 +114,7 @@ const App: React.FC = () => {
     setIsAddEnvModalVisible,
     isEditEnvModalVisible,
     setIsEditEnvModalVisible,
-    editingEnvironment,
+    editingEnvironment: _editingEnvironment,
     editEnvironmentName,
     setEditEnvironmentName,
     getCurrentEnvironment,
@@ -1107,7 +1108,7 @@ const App: React.FC = () => {
   };
 
   // 生成测试用例
-  const handleGenerateTestcases = async () => {
+  const _handleGenerateTestcases = async () => {
     if (!selectedSession || (!requirement.trim()) && !imageBase64) return;
 
     try {
@@ -2248,6 +2249,9 @@ const App: React.FC = () => {
         onClick={() => setChatOpen(true)}
       />
       <ChatAssistant open={chatOpen} onClose={() => setChatOpen(false)} />
+
+      {/* Mock 代理助手 - 全局渲染（仅 Mock 管理权限可见） */}
+      {canAccessMock && <MockProxyAssistant />}
     </ConfigProvider>
   );
 };

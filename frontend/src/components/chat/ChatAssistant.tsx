@@ -12,10 +12,8 @@ import {
 } from 'antd';
 import {
   SendOutlined,
-  ClearOutlined,
   SettingOutlined,
   RobotOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { chatApi, skillsApi } from '../../services/api';
 import ChatMessage from './ChatMessage';
@@ -147,7 +145,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ open, onClose }) => {
     }
   };
 
-  const handleClear = () => {
+  const _handleClear = () => {
     setMessages([]);
     setInputValue('');
   };

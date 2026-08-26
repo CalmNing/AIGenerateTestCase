@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request, Response as HttpResponse
 from sqlmodel import Session, select
 
 from db.db import engine
-from db.models import MockConfig, GlobalParameter, MockLog
+from db.models import ApiEndpoint, ApiProject, MockConfig, GlobalParameter, MockLog
 from utils.js_expression import eval_js_expression
 
 logger = logging.getLogger(__name__)
@@ -391,12 +391,115 @@ def _save_mock_log(config_id, config_name, request_method, request_path,
         logger.warning("Failed to save mock log: %s", e)
 
 
-@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-async def mock_handler(request: Request, path: str):
-    """拦截所有请求，匹配已启用的Mock配置并返回预设响应"""
-    request_path = f"/{path}"
-    request_method = request.method
+def _match_endpoint_path(endpoint_path: str, request_path: str) -> tuple[bool, dict]:
+    """将接口文档里的路径（如 /users/{id}）与请求路径匹配，返回 (是否匹配, 路径参数)。"""
+    if not endpoint_path:
+        return False, {}
 
+    parts = []
+    i = 0
+    while i < len(endpoint_path):
+        if endpoint_path[i] == '{':
+            j = endpoint_path.find('}', i)
+            if j != -1:
+                param_name = endpoint_path[i + 1:j]
+                parts.append(r'(?P<' + re.escape(param_name) + r'>[^/]+)')
+                i = j + 1
+                continue
+            parts.append(re.escape(endpoint_path[i]))
+            i += 1
+        else:
+            parts.append(re.escape(endpoint_path[i]))
+            i += 1
+
+    try:
+        match = re.fullmatch(''.join(parts), request_path)
+        if not match:
+            return False, {}
+        return True, dict(match.groupdict())
+    except re.error:
+        return endpoint_path == request_path, {}
+
+
+def _resolve_project_mock(request_path: str, request_method: str):
+    """在已开启 Mock 的接口项目中查找匹配的接口，实时按 response schema 生成响应。
+
+    地址形如 /api/mock{mock_prefix}{endpoint.path}，例如项目前缀 /contract +
+    接口 /users/{id} => /api/mock/contract/users/123。
+
+    返回 (project, endpoint, 剩余路径, 路径参数) 或 None。
+    """
+    path = request_path
+    if path.startswith('/api/mock'):
+        path = path[len('/api/mock'):] or '/'
+    if not path.startswith('/'):
+        path = '/' + path
+
+    with Session(engine) as session:
+        projects = session.exec(
+            select(ApiProject).where(ApiProject.mock_enabled == True)
+        ).all()
+        # 前缀更长的项目优先，避免 /a 抢走 /ab 的请求
+        for project in sorted(projects, key=lambda p: len(p.mock_prefix or ''), reverse=True):
+            prefix = (project.mock_prefix or '').rstrip('/')
+            if prefix and not path.startswith(prefix + '/') and path != prefix:
+                continue
+            remainder = path[len(prefix):] if prefix else path
+            if not remainder.startswith('/'):
+                remainder = '/' + remainder
+
+            endpoints = session.exec(
+                select(ApiEndpoint)
+                .where(ApiEndpoint.project_id == project.id)
+                .order_by(ApiEndpoint.id)
+            ).all()
+            for endpoint in endpoints:
+                if (endpoint.method or '').upper() != request_method.upper():
+                    continue
+                is_match, url_path_params = _match_endpoint_path(endpoint.path or '', remainder)
+                if is_match:
+                    return project, endpoint, remainder, url_path_params
+    return None
+
+
+def _build_schema_mock_body(endpoint: ApiEndpoint, request_values: dict | None = None) -> str:
+    """按接口的 response schema 实时生成真实感响应体，并包裹统一结构。
+
+    请求中出现且响应里也存在的同名字段用请求值回填；pageSize 等分页参数控制数组条数。
+    """
+    from app.services.mock_data import build_mock_response_body
+
+    return build_mock_response_body(endpoint.response_schema or {}, request_values)
+
+
+class MockResolution:
+    """resolve_mock_response 的结果快照。
+
+    attributes:
+        status_code: 响应状态码
+        headers: 响应头列表 [{"key": ..., "value": ...}]
+        body: 响应体字符串（可能为 None）
+        config_id: 命中的 MockConfig ID（项目级 Mock 为 None）
+        config_name: 配置名称快照（用于日志展示）
+    """
+
+    def __init__(self, status_code: int, headers: list, body: Optional[str],
+                 config_id: Optional[int], config_name: str):
+        self.status_code = status_code
+        self.headers = headers
+        self.body = body
+        self.config_id = config_id
+        self.config_name = config_name
+
+
+async def resolve_mock_response(request_path: str, request_method: str,
+                                query_params: dict, body_text: Optional[str],
+                                request_headers: dict) -> Optional[MockResolution]:
+    """两层 Mock 匹配的共享实现：手写 MockConfig → 项目级 Schema Mock。
+
+    供 /api/mock/** 路由与 Mock 正向代理共同调用；均未命中返回 None，
+    由调用方决定兜底行为（路由返回 404，代理改为透传真实服务）。
+    """
     with Session(engine) as session:
         configs = session.exec(
             select(MockConfig).where(MockConfig.enabled == True)
@@ -417,23 +520,92 @@ async def mock_handler(request: Request, path: str):
             break
 
     if not matched_config:
-        req_body_raw = await request.body()
-        req_body_str = req_body_raw.decode() if req_body_raw else None
-        _save_mock_log(
-            config_id=None, config_name="",
-            request_method=request_method, request_path=request_path,
-            request_headers=dict(request.headers),
-            request_query_params=json.dumps(dict(request.query_params), ensure_ascii=False),
-            request_body=req_body_str,
-            response_status_code=404, response_headers=[],
-            response_body=json.dumps({"error": "No matching mock configuration"}),
-            matched=False, user_id=None,
-        )
-        return HttpResponse(
-            content=json.dumps({"error": "No matching mock configuration", "path": request_path, "method": request_method}, ensure_ascii=False),
-            status_code=404,
-            media_type="application/json"
-        )
+        # 手写 MockConfig 未命中时，回退到「已开启 Mock 的接口项目」按 response schema 实时生成
+        project_match = _resolve_project_mock(request_path, request_method)
+        if project_match:
+            project, endpoint, _, url_path_params = project_match
+
+            # 入参校验：请求体 + query 参数按接口文档 schema 校验，不通过返回 400
+            validation_errors: list[str] = []
+            try:
+                from app.services.mock_validator import ValidationFailed, validate_query_params, validate_request_body
+
+                validate_request_body(body_text, endpoint.request_schema)
+                validate_query_params(query_params, endpoint.parameters, endpoint.request_schema)
+            except ValidationFailed as exc:
+                validation_errors = exc.errors
+            except Exception as exc:  # 校验器自身异常不应中断 mock 服务
+                logger.warning("Mock 入参校验异常（忽略）: %s", exc)
+
+            if validation_errors:
+                error_body = {
+                    "code": 400,
+                    "msg": "请求参数校验失败",
+                    "success": False,
+                    "data": "；".join(validation_errors),
+                }
+                logger.info(
+                    "Project mock validation failed: %s %s -> %d errors",
+                    endpoint.method, endpoint.path, len(validation_errors),
+                )
+                _save_mock_log(
+                    config_id=None,
+                    config_name=f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}",
+                    request_method=request_method, request_path=request_path,
+                    request_headers=request_headers,
+                    request_query_params=json.dumps(query_params, ensure_ascii=False),
+                    request_body=body_text,
+                    response_status_code=400,
+                    response_headers=[{"key": "Content-Type", "value": "application/json"}],
+                    response_body=json.dumps(error_body, ensure_ascii=False),
+                    matched=True, user_id=None,
+                )
+                return MockResolution(
+                    status_code=400,
+                    headers=[{"key": "Content-Type", "value": "application/json"}],
+                    body=json.dumps(error_body, ensure_ascii=False),
+                    config_id=None,
+                    config_name=f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}",
+                )
+
+            # 收集请求值（body + query + path 参数 + 文档参数），用于回填响应与分页控制
+            from app.services.mock_data import collect_request_values
+
+            try:
+                request_payload = json.loads(body_text) if body_text and body_text.strip() else None
+            except json.JSONDecodeError:
+                request_payload = None
+            request_values = collect_request_values(
+                request_payload, {**query_params, **url_path_params}, endpoint.parameters
+            )
+
+            body = _build_schema_mock_body(endpoint, request_values)
+            config_name = f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}"
+            logger.info(
+                "Project mock matched: project=%s prefix=%s endpoint=%s %s",
+                project.name, project.mock_prefix, endpoint.method, endpoint.path,
+            )
+            _save_mock_log(
+                config_id=None,
+                config_name=config_name,
+                request_method=request_method, request_path=request_path,
+                request_headers=request_headers,
+                request_query_params=json.dumps(query_params, ensure_ascii=False),
+                request_body=body_text,
+                response_status_code=200,
+                response_headers=[{"key": "Content-Type", "value": "application/json"}],
+                response_body=body,
+                matched=True, user_id=None,
+            )
+            return MockResolution(
+                status_code=200,
+                headers=[{"key": "Content-Type", "value": "application/json"}],
+                body=body,
+                config_id=None,
+                config_name=config_name,
+            )
+
+        return None
 
     resp_headers = {}
     for h in (matched_config.response_headers or []):
@@ -442,11 +614,11 @@ async def mock_handler(request: Request, path: str):
 
     body = None
     if matched_config.response_body:
-        
+
         body = _substitute_variables(matched_config.response_body, matched_config.environment_id, path_params)
         logger.info("Original body: %s", body)
         logger.info("Body type: %s", type(body))
-        
+
         # 处理分页逻辑
         if matched_config.response_count > 1:
             try:
@@ -454,7 +626,7 @@ async def mock_handler(request: Request, path: str):
                 parsed_body = _smart_parse_json(body)
                 logger.info("Parsed response body: %s", parsed_body)
                 logger.info("Parsed body type: %s", type(parsed_body))
-                
+
                 data_array = None
                 # 1. 如果配置了 json_path，优先使用
                 if matched_config.json_path:
@@ -463,7 +635,7 @@ async def mock_handler(request: Request, path: str):
                         data_array = resolved
                     else:
                         logger.warning("json_path=%s 未指向数组，回退自动检测", matched_config.json_path)
-                
+
                 # 2. 未配置 json_path 或路径无效时，自动检测
                 if data_array is None:
                     if isinstance(parsed_body, list):
@@ -480,7 +652,7 @@ async def mock_handler(request: Request, path: str):
                         data_array = parsed_body['data']['items']
                         if not matched_config.json_path:
                             matched_config.json_path = "$.data.items"
-                
+
                 # 只有当找到数组时才进行分页
                 if data_array is not None:
                     target_count = matched_config.response_count
@@ -514,18 +686,17 @@ async def mock_handler(request: Request, path: str):
                         end_time = datetime.now()
                         logger.info("Pagination time: %s, items generated: %d", end_time - start_time, target_count - original_len)
                     logger.info("Extended data_array length: %d", len(data_array))
-                    
+
                     # 获取分页参数
-                    query_params = dict(request.query_params)
                     page = int(query_params.get('page', 1))
                     page_size = matched_config.page_size or int(query_params.get('page_size', 10))
-                    
+
                     # 计算分页
                     total = matched_config.response_count
                     start = (page - 1) * page_size
                     end = start + page_size
                     page_data = data_array[start:end]
-                    
+
                     # 构建分页响应
                     if matched_config.json_path and matched_config.json_path != "$":
                         # 将分页数据放回原位置，保持原响应结构
@@ -545,8 +716,8 @@ async def mock_handler(request: Request, path: str):
                                 "total_pages": (total + page_size - 1) // page_size
                             }
                         }, ensure_ascii=False)
-                    
-                    logger.info("Mock pagination: total=%d, page=%d, page_size=%d, returned=%d", 
+
+                    logger.info("Mock pagination: total=%d, page=%d, page_size=%d, returned=%d",
                                total, page, page_size, len(page_data))
                 else:
                     # 响应体不是数组或嵌套对象格式，不进行分页，保持原样
@@ -565,16 +736,14 @@ async def mock_handler(request: Request, path: str):
     logger.info("Mock matched: %s %s -> %d", request_method, request_path, matched_config.status_code)
 
     # 记录匹配的请求日志
-    req_body_raw = await request.body()
-    req_body_str = req_body_raw.decode() if req_body_raw else None
     _save_mock_log(
         config_id=matched_config.id,
         config_name=matched_config.name,
         request_method=request_method,
         request_path=request_path,
-        request_headers=dict(request.headers),
-        request_query_params=json.dumps(dict(request.query_params), ensure_ascii=False),
-        request_body=req_body_str,
+        request_headers=request_headers,
+        request_query_params=json.dumps(query_params, ensure_ascii=False),
+        request_body=body_text,
         response_status_code=matched_config.status_code,
         response_headers=[{"key": k, "value": v} for k, v in resp_headers.items()],
         response_body=body,
@@ -582,9 +751,49 @@ async def mock_handler(request: Request, path: str):
         user_id=None,
     )
 
-    return HttpResponse(
-        content=body,
+    return MockResolution(
         status_code=matched_config.status_code,
-        headers=resp_headers,
+        headers=[{"key": k, "value": v} for k, v in resp_headers.items()],
+        body=body,
+        config_id=matched_config.id,
+        config_name=matched_config.name,
+    )
+
+
+@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+async def mock_handler(request: Request, path: str):
+    """拦截所有请求，匹配已启用的Mock配置并返回预设响应"""
+    request_path = f"/{path}"
+    request_method = request.method
+    query_params = dict(request.query_params)
+    req_headers = dict(request.headers)
+    req_body_raw = await request.body()
+    req_body_str = req_body_raw.decode() if req_body_raw else None
+
+    resolution = await resolve_mock_response(
+        request_path, request_method, query_params, req_body_str, req_headers
+    )
+
+    if resolution is None:
+        _save_mock_log(
+            config_id=None, config_name="",
+            request_method=request_method, request_path=request_path,
+            request_headers=req_headers,
+            request_query_params=json.dumps(query_params, ensure_ascii=False),
+            request_body=req_body_str,
+            response_status_code=404, response_headers=[],
+            response_body=json.dumps({"error": "No matching mock configuration"}),
+            matched=False, user_id=None,
+        )
+        return HttpResponse(
+            content=json.dumps({"error": "No matching mock configuration", "path": request_path, "method": request_method}, ensure_ascii=False),
+            status_code=404,
+            media_type="application/json"
+        )
+
+    return HttpResponse(
+        content=resolution.body,
+        status_code=resolution.status_code,
+        headers={h["key"]: h["value"] for h in resolution.headers},
         media_type="application/json"
     )

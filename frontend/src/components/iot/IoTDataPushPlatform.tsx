@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Form, Select, Input, Button, Tabs, Space, message, Modal, Tooltip, Radio } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, DownOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined, FolderOutlined, FolderOpenOutlined, DeleteOutlined } from '@ant-design/icons';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, DownOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined, FolderOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { savedRequestApi, savedRequestFolderApi, globalParameterApi, proxyApi } from '../../services/api';
@@ -82,7 +82,7 @@ function formatJsonWithComments(input: string): string {
 
   const placeholders = new Map<string, string>();
   let placeholderIndex = 0;
-  const cleaned = stripJsonComments(input).replace(/([:\[,])\s*(?!"|\d|true|false|null|\[|\{(?!\{))((?:[^\s,}\]]*?(?:\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})[^\s,}\]]*?)+)/g, (_match, prefix, valuePart) => {
+  const cleaned = stripJsonComments(input).replace(/([:,[])\s*(?!"|\d|true|false|null|\[|\{(?!\{))((?:[^\s,}\]]*?(?:\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})[^\s,}\]]*?)+)/g, (_match, prefix, valuePart) => {
     const placeholder = `___PLACEHOLDER_${placeholderIndex}___`;
     placeholders.set(placeholder, valuePart);
     placeholderIndex++;
@@ -242,7 +242,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const [headers, setHeaders] = useState<HeaderItem[]>([{ key: 'Content-Type', value: 'application/json' }]);
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
   const [savedRequests, setSavedRequests] = useState<SavedRequest[]>([]);
-  const [saveRequestName, setSaveRequestName] = useState('');
+  const [_saveRequestName, setSaveRequestName] = useState('');
   const [editingRequest, setEditingRequest] = useState<SavedRequest | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [folders, setFolders] = useState<SavedRequestFolder[]>([]);
@@ -273,7 +273,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     setTabs(prevTabs => prevTabs.map(tab =>
       tab.id === activeTabId ? { ...tab, body: value, hasUnsavedChanges: true } : tab
     ));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId]);
 
   // --- Drag Resize ---

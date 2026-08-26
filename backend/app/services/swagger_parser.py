@@ -6,11 +6,13 @@ import json
 import re
 from copy import deepcopy
 from typing import Any
+from urllib.parse import unquote, urljoin, urlsplit
 
+import httpx
 import yaml
 from sqlmodel import Session, select
 
-from db.models import ApiEndpoint, ApiProject, GlobalParameter
+from db.models import ApiEndpoint, ApiProject, ApiScenario, GlobalParameter
 from app.services.assertion_engine import DEFAULT_SUCCESS_ASSERTIONS
 from app.services.schema_utils import (
     _json_equal, _json_fingerprint, _load_json_text, _resolve_ref,
@@ -21,6 +23,13 @@ from app.services.schema_utils import (
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
 REMOVED_FROM_SPEC_TAG = "__removed_from_spec__"
 
+_SWAGGER_CONFIG_PATH_SUFFIXES = (
+    "/v3/api-docs/swagger-config",
+    "/v3/api-docs/",
+    "/v3/api-docs",
+    "/swagger-config",
+)
+
 
 def parse_spec_text(text: str) -> dict:
     spec = yaml.safe_load(text)
@@ -29,6 +38,114 @@ def parse_spec_text(text: str) -> dict:
     if "openapi" not in spec and "swagger" not in spec:
         raise ValueError("未识别到 OpenAPI 或 Swagger 标识")
     return spec
+
+
+def swagger_config_docs(text: str) -> list[dict]:
+    """识别 springdoc swagger-config 响应，返回其中的文档列表；非 config 返回空列表。"""
+    try:
+        data = json.loads(text)
+    except Exception:
+        return []
+    urls = data.get("urls") if isinstance(data, dict) else None
+    if not isinstance(urls, list):
+        return []
+    docs: list[dict] = []
+    for item in urls:
+        if isinstance(item, dict) and str(item.get("url") or "").strip():
+            docs.append({
+                "name": str(item.get("name") or "").strip(),
+                "url": str(item["url"]).strip(),
+            })
+    return docs
+
+
+def merge_specs(specs: list[dict]) -> dict:
+    """合并多个 OpenAPI 文档（如 springdoc 分组文档），路径/方法重复时保留先出现的。"""
+    if not specs:
+        raise ValueError("没有可合并的接口文档")
+    merged = deepcopy(specs[0])
+    merged["paths"] = dict(merged.get("paths") or {})
+
+    for spec in specs[1:]:
+        for path, path_item in (spec.get("paths") or {}).items():
+            if not isinstance(path_item, dict):
+                continue
+            target = merged["paths"].get(path)
+            if not isinstance(target, dict):
+                merged["paths"][path] = deepcopy(path_item)
+                continue
+            for method, operation in path_item.items():
+                target.setdefault(method, deepcopy(operation))
+
+        existing_tags = {
+            tag.get("name"): tag
+            for tag in merged.get("tags") or []
+            if isinstance(tag, dict) and tag.get("name")
+        }
+        for tag in spec.get("tags") or []:
+            name = tag.get("name") if isinstance(tag, dict) else None
+            if name and name not in existing_tags:
+                merged.setdefault("tags", []).append(deepcopy(tag))
+                existing_tags[name] = tag
+
+        for section_key in ("components", "definitions"):
+            incoming_section = spec.get(section_key)
+            if not isinstance(incoming_section, dict):
+                continue
+            section = merged.setdefault(section_key, {})
+            for subsection_key, subsection in incoming_section.items():
+                if isinstance(subsection, dict) and isinstance(section.get(subsection_key), dict):
+                    for name, value in subsection.items():
+                        section[subsection_key].setdefault(name, deepcopy(value))
+                elif subsection_key not in section:
+                    section[subsection_key] = deepcopy(subsection)
+
+        existing_servers = {
+            server.get("url") for server in merged.get("servers") or [] if isinstance(server, dict)
+        }
+        for server in spec.get("servers") or []:
+            url = server.get("url") if isinstance(server, dict) else None
+            if url and url not in existing_servers:
+                merged.setdefault("servers", []).append(deepcopy(server))
+                existing_servers.add(url)
+
+    return merged
+
+
+async def load_openapi_from_url(client: httpx.AsyncClient, url: str) -> tuple[str, list[dict]]:
+    """拉取 OpenAPI URL；若为 swagger-config，则抓取其下全部分组文档并合并。
+
+    返回 (合并后的 spec 文本, swagger-config 文档列表)；普通 URL 时文档列表为空。
+    """
+    resp = await client.get(url, timeout=30.0, follow_redirects=True)
+    resp.raise_for_status()
+    text = resp.text
+
+    docs = swagger_config_docs(text)
+    if not docs:
+        return text, []
+
+    specs: list[dict] = []
+    for doc in docs:
+        doc_resp = await client.get(urljoin(url, doc["url"]), timeout=30.0, follow_redirects=True)
+        doc_resp.raise_for_status()
+        specs.append(parse_spec_text(doc_resp.text))
+
+    merged = merge_specs(specs)
+    return json.dumps(merged, ensure_ascii=False), docs
+
+
+def suggest_project_name(url: str, from_config: bool) -> str:
+    """根据 URL 推断项目名：swagger-config 地址剥掉已知后缀后取最后一段。"""
+    parts = urlsplit(url)
+    path = parts.path
+    if from_config:
+        for suffix in _SWAGGER_CONFIG_PATH_SUFFIXES:
+            if path.rstrip("/").endswith(suffix):
+                path = path.rstrip("/")[: -len(suffix)]
+                break
+    segment = unquote(path.rstrip("/").rsplit("/", 1)[-1]) if path.strip("/") else ""
+    return segment or (parts.hostname or "导入接口项目")
 
 def detect_base_url(spec: dict) -> str:
     servers = spec.get("servers")
@@ -315,7 +432,7 @@ def sync_project_from_spec(db: Session, project: ApiProject, raw_spec: str, user
 
     created = 0
     updated = 0
-    marked_removed = 0
+    removed = 0
     incoming_keys = set()
 
     for incoming in new_endpoints:
@@ -344,15 +461,20 @@ def sync_project_from_spec(db: Session, project: ApiProject, raw_spec: str, user
         db.add(current)
         updated += 1
 
+    # 文档中已删除的接口：直接从数据库移除（同时清理关联的场景步骤引用）
     for current in existing_endpoints:
         if _endpoint_key(current) in incoming_keys:
             continue
-        tags = list(current.tags or [])
-        if REMOVED_FROM_SPEC_TAG not in tags:
-            tags.append(REMOVED_FROM_SPEC_TAG)
-            current.tags = tags
-            db.add(current)
-            marked_removed += 1
+        session_scenarios = db.exec(
+            select(ApiScenario).where(ApiScenario.project_id == project.id)
+        ).all()
+        for scenario in session_scenarios:
+            steps = [s for s in (scenario.steps or []) if s.get("endpoint_id") != current.id]
+            if len(steps) != len(scenario.steps or []):
+                scenario.steps = steps
+                db.add(scenario)
+        db.delete(current)
+        removed += 1
 
     project.base_url = detect_base_url(new_spec)
     project.raw_spec = raw_spec
@@ -371,7 +493,7 @@ def sync_project_from_spec(db: Session, project: ApiProject, raw_spec: str, user
         "endpoints": all_endpoints,
         "created": created,
         "updated": updated,
-        "marked_removed": marked_removed,
+        "removed": removed,
     }
 
 def build_body_from_schema(schema: dict) -> str:

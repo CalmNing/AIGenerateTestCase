@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Form, Select, Input, Button, Table, Tag, message, Modal, Switch, Tooltip, Popconfirm, InputNumber } from 'antd';
-import { PlusOutlined, DeleteOutlined, ReloadOutlined, CopyOutlined, ExperimentOutlined, QuestionCircleOutlined, FileTextOutlined, ApiOutlined, CodeOutlined } from '@ant-design/icons';
+import { Form, Select, Input, Button, Table, message, Modal, Switch, Tooltip, Popconfirm, InputNumber } from 'antd';
+import { PlusOutlined, DeleteOutlined, ReloadOutlined, CopyOutlined, QuestionCircleOutlined, FileTextOutlined, CodeOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { mockConfigApi, globalParameterApi } from '../../services/api';
@@ -15,7 +15,7 @@ import './IoTMockPlatform.css';
 function formatJsonWithTemplates(input: string): string {
   const placeholders = new Map<string, string>();
   let placeholderIndex = 0;
-  const cleaned = input.replace(/([:\[,])\s*(?!"|\d|true|false|null|\[|\{(?!\{))((?:[^\s,}\]]*?(?:\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})[^\s,}\]]*?)+)/g, (_match, prefix, valuePart) => {
+  const cleaned = input.replace(/([:,[])\s*(?!"|\d|true|false|null|\[|\{(?!\{))((?:[^\s,}\]]*?(?:\{\{(?:[^{}]|\{[^{}]*\})*\}\}|\$\{[^}]*\})[^\s,}\]]*?)+)/g, (_match, prefix, valuePart) => {
     const placeholder = `___PLACEHOLDER_${placeholderIndex}___`;
     placeholders.set(placeholder, valuePart);
     placeholderIndex++;

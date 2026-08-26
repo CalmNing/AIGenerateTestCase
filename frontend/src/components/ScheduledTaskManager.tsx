@@ -5,8 +5,6 @@ import {
   message,
   Modal,
   Card,
-  Tag,
-  Space,
   Typography,
   Popconfirm,
   Form,
@@ -270,7 +268,7 @@ const ScheduledTaskManager: React.FC = () => {
     setLogModalVisible(true);
   };
 
-  const getNextExecutionTime = (task: ScheduledTask): string => {
+  const _getNextExecutionTime = (task: ScheduledTask): string => {
     if (!task.enabled) {
       return '已禁用';
     }

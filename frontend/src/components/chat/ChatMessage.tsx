@@ -1,5 +1,5 @@
 import React from 'react';
-import { Typography, Space } from 'antd';
+import { Typography } from 'antd';
 import { UserOutlined, RobotOutlined } from '@ant-design/icons';
 import './ChatAssistant.css';
 

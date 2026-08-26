@@ -263,6 +263,8 @@ class ApiProject(BaseModel, table=True):
     source_type: str = Field(default="manual", description="来源: upload | url | manual")
     source_url: Optional[str] = Field(default=None, description="OpenAPI/Swagger 来源 URL")
     raw_spec: Optional[str] = Field(default=None, description="原始 OpenAPI/Swagger 文档")
+    mock_enabled: bool = Field(default=False, description="是否开启项目级 Mock 服务（按 response schema 实时生成响应）")
+    mock_prefix: str = Field(default="", description="Mock 地址项目前缀，如 /contract；实际地址为 /api/mock{mock_prefix}{path}")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
 
@@ -334,6 +336,15 @@ class MockLog(BaseModel, table=True):
     response_body: Optional[str] = Field(default=None, description="响应体内容")
     matched: bool = Field(default=True, description="是否匹配到Mock配置")
     user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")
+
+
+class MockProxyRule(BaseModel, table=True):
+    """Mock 代理转发规则：命中 host_pattern 且 path_pattern 匹配的流量走 Mock"""
+    name: str = Field(default="", description="规则名称")
+    host_pattern: str = Field(default="", description="主机匹配模式，如 api.example.com 或 *.example.com")
+    path_pattern: str = Field(default="", description="路径匹配模式，如 /api/user/* 或 /users/{id}；空=全部路径")
+    enabled: bool = Field(default=True, description="是否启用")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
 
 class SystemConfig(BaseModel, table=True):

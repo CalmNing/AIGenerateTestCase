@@ -36,7 +36,9 @@ const SkillsHubModal: React.FC<SkillsHubModalProps> = ({ visible, onCancel, onSa
       if (saved) {
         try {
           setSelected(new Set(JSON.parse(saved)));
-        } catch {}
+        } catch {
+          // 忽略损坏的本地缓存数据
+        }
       }
     }
   }, [visible]);

@@ -47,7 +47,7 @@ const NavLinkManagerModal: React.FC<NavLinkManagerModalProps> = ({ visible, onCa
 
   const [linkModalVisible, setLinkModalVisible] = useState(false);
   const [editingLink, setEditingLink] = useState<NavLink | null>(null);
-  const [linkDefaultCategoryId, setLinkDefaultCategoryId] = useState<number | undefined>(undefined);
+  const [_linkDefaultCategoryId, setLinkDefaultCategoryId] = useState<number | undefined>(undefined);
   const [linkForm] = Form.useForm();
 
   const loadTree = async () => {
@@ -71,7 +71,6 @@ const NavLinkManagerModal: React.FC<NavLinkManagerModalProps> = ({ visible, onCa
     if (visible) {
       loadTree();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   const refresh = () => {

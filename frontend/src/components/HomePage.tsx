@@ -136,7 +136,6 @@ const HomePage: React.FC<HomePageProps> = ({
 
   useEffect(() => {
     loadNavTree();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const totalLinks = navTree.reduce((sum, node) => sum + node.links.length, 0);

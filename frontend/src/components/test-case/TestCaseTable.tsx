@@ -58,7 +58,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onView,
   onEdit,
   onComplete,
-  onDelete,
+  onDelete: _onDelete,
   onBatchDelete,
   onMove,
   onApiExecute,

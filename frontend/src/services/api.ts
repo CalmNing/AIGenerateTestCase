@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -609,6 +609,39 @@ export const mockConfigApi = {
   deleteConfig: (configId: number): Promise<ApiResponse> => api.delete(`/mock-configs/${configId}`)
 };
 
+// Mock 正向代理 API
+export const mockProxyApi = {
+  // 获取代理运行状态
+  getStatus: (): Promise<ApiResponse<MockProxyStatus>> => api.get('/mock-proxy/status'),
+
+  // 启动代理（可指定端口，默认取后端配置）
+  start: (port?: number): Promise<ApiResponse<MockProxyStatus>> => api.post('/mock-proxy/start', { port }),
+
+  // 停止代理
+  stop: (): Promise<ApiResponse<MockProxyStatus>> => api.post('/mock-proxy/stop'),
+
+  // 获取全部转发规则
+  getRules: (): Promise<ApiResponse<MockProxyRule[]>> => api.get('/mock-proxy/rules'),
+
+  // 创建转发规则
+  createRule: (rule: Partial<MockProxyRule>): Promise<ApiResponse<MockProxyRule>> =>
+    api.post('/mock-proxy/rules', rule),
+
+  // 更新转发规则
+  updateRule: (ruleId: number, rule: Partial<MockProxyRule>): Promise<ApiResponse<MockProxyRule>> =>
+    api.put(`/mock-proxy/rules/${ruleId}`, rule),
+
+  // 删除转发规则
+  deleteRule: (ruleId: number): Promise<ApiResponse> => api.delete(`/mock-proxy/rules/${ruleId}`),
+
+  // 获取 Mock 调用/代理流量日志
+  getLogs: (params?: { page?: number; page_size?: number; matched?: boolean }): Promise<ApiResponse<MockLogItem[]>> =>
+    api.get('/mock-logs', { params }),
+};
+
+// CA 证书下载地址（免认证，用原生下载而非 axios）
+export const MOCK_PROXY_CA_CERT_URL = '/api/mock-proxy/ca-cert';
+
 export const apiTestApi = {
   getProjects: (): Promise<ApiResponse<ApiProject[]>> => api.get('/api-test/projects'),
   updateProject: (projectId: number, project: Partial<ApiProject>): Promise<ApiResponse<ApiProject>> =>
@@ -633,6 +666,8 @@ export const apiTestApi = {
     api.post(`/api-test/endpoints/${endpointId}/run`, payload),
   generateEndpointBody: (endpointId: number, payload: Record<string, any>): Promise<ApiResponse<{ body: string; used_ai: boolean; message: string }>> =>
     api.post(`/api-test/endpoints/${endpointId}/generate-body`, payload),
+  toggleProjectMock: (projectId: number, payload: { mock_enabled?: boolean; mock_prefix?: string }): Promise<ApiResponse<ApiProject>> =>
+    api.post(`/api-test/projects/${projectId}/mock`, payload),
   generateEndpointScenarioTests: (endpointId: number): Promise<ApiResponse<ApiScenario>> =>
     api.post(`/api-test/endpoints/${endpointId}/generate-scenario-tests`),
   getScenarios: (projectId: number): Promise<ApiResponse<ApiScenario[]>> =>

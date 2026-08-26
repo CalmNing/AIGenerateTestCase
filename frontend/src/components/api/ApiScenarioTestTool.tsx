@@ -16,10 +16,12 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Tabs,
   Table,
   Tag,
   Tooltip,
+  Typography,
   Upload,
 } from 'antd';
 import {
@@ -137,7 +139,7 @@ const commonJsonPathOptions = [
   { label: '错误信息 message', value: '$.message' },
   { label: '业务编码 code', value: '$.code' },
 ];
-const scenarioStepStatusLabels: Record<string, string> = {
+const _scenarioStepStatusLabels: Record<string, string> = {
   passed: '通过',
   failed: '失败',
   error: '错误',
@@ -244,7 +246,7 @@ function latestScenarioResultLabel(record: ApiScenarioResult | undefined) {
   return record.passed ? '通过' : '不通过';
 }
 
-function latestScenarioResultColor(record: ApiScenarioResult | undefined) {
+function _latestScenarioResultColor(record: ApiScenarioResult | undefined) {
   if (!record) return 'default';
   return record.passed ? 'success' : 'error';
 }
@@ -461,6 +463,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint | null>(null);
   const [selectedScenario, setSelectedScenario] = useState<ApiScenario | null>(null);
   const [activeTab, setActiveTab] = useState('endpoints');
+  const [endpointActiveTab, setEndpointActiveTab] = useState('body');
   const [loading, setLoading] = useState(false);
   const [syncingProjectId, setSyncingProjectId] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
@@ -469,6 +472,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [bodyGenerating, setBodyGenerating] = useState(false);
   const [scenarioStepBodyGenerating, setScenarioStepBodyGenerating] = useState<number | null>(null);
   const [scenarioGenerating, setScenarioGenerating] = useState(false);
+  const [mockTogglingProjectId, setMockTogglingProjectId] = useState<number | null>(null);
   const [copyingScenarioId, setCopyingScenarioId] = useState<number | null>(null);
   const [result, setResult] = useState<any>(null);
   const [scenarioResultHistory, setScenarioResultHistory] = useState<Record<number, ApiScenarioResult[]>>({});
@@ -649,14 +653,12 @@ const ApiScenarioTestTool: React.FC = () => {
   useEffect(() => {
     loadProjects().catch(() => message.error('加载接口项目失败'));
     loadEnvironments().catch(() => message.error('加载环境失败'));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (selectedProjectId) {
       loadProjectData(selectedProjectId).catch(() => message.error('加载接口数据失败'));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -771,7 +773,7 @@ const ApiScenarioTestTool: React.FC = () => {
           setEndpoints(res.data.endpoints || []);
           setSelectedEndpoint((current) => current ? (res.data!.endpoints.find((item) => item.id === current.id) || current) : current);
         }
-        message.success(`同步完成：新增 ${res.data.created}，更新 ${res.data.updated}，标记移除 ${res.data.marked_removed}`);
+        message.success(`同步完成：新增 ${res.data.created}，更新 ${res.data.updated}，移除 ${res.data.removed}`);
       } else {
         message.error(res.message || '同步失败');
       }
@@ -793,10 +795,21 @@ const ApiScenarioTestTool: React.FC = () => {
       source_url: values.source_url || null,
     });
     if (res.code === 200 && res.data) {
-      setProjects(projects.map((project) => project.id === res.data!.id ? res.data! : project));
+      let saved = res.data;
+      // Mock 前缀走 mock 路由，以复用后端的规范化（contract -> /contract）与冲突校验
+      const nextPrefix = (values.mock_prefix || '').trim();
+      if (nextPrefix !== (selectedProject.mock_prefix || '')) {
+        const mockRes = await apiTestApi.toggleProjectMock(selectedProject.id, { mock_prefix: nextPrefix });
+        if (mockRes.code === 200 && mockRes.data) {
+          saved = mockRes.data;
+        } else {
+          message.error(mockRes.message || 'Mock 前缀保存失败');
+        }
+      }
+      setProjects(projects.map((project) => project.id === saved.id ? saved : project));
       projectForm.setFieldsValue({
-        ...res.data,
-        headers: normalizeRows(res.data.headers),
+        ...saved,
+        headers: normalizeRows(saved.headers),
       });
       message.success('项目已保存');
     }
@@ -902,6 +915,7 @@ const ApiScenarioTestTool: React.FC = () => {
     if (!selectedEndpoint) return;
     setEndpointRunning(true);
     setEndpointResult(null);
+    setEndpointActiveTab('debug'); // 自动跳转到调试结果 tab
     try {
       const payload = buildEndpointPayloadFromForm();
       const res = await apiTestApi.runEndpoint(selectedEndpoint.id, payload);
@@ -1011,6 +1025,27 @@ const ApiScenarioTestTool: React.FC = () => {
       }
     } finally {
       setScenarioGenerating(false);
+    }
+  };
+
+  const handleToggleProjectMock = async (project: ApiProject, enabled: boolean) => {
+    setMockTogglingProjectId(project.id);
+    try {
+      const res = await apiTestApi.toggleProjectMock(project.id, { mock_enabled: enabled });
+      if (res.code === 200 && res.data) {
+        const updated = res.data;
+        setProjects((prev) => prev.map((item) => (item.id === project.id ? updated : item)));
+        if (selectedProjectId === project.id) {
+          projectForm.setFieldsValue({ mock_prefix: updated.mock_prefix });
+        }
+        message.success(res.message || (enabled ? 'Mock 服务已开启' : 'Mock 服务已关闭'));
+      } else {
+        message.error(res.message || '切换 Mock 服务失败');
+      }
+    } catch (error: any) {
+      message.error(error.response?.data?.message || error.message || '切换 Mock 服务失败');
+    } finally {
+      setMockTogglingProjectId(null);
     }
   };
 
@@ -2039,7 +2074,7 @@ const ApiScenarioTestTool: React.FC = () => {
       >
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input placeholder="项目名称" value={importName} onChange={(event) => setImportName(event.target.value)} />
-          <Input placeholder="OpenAPI URL" value={importUrl} onChange={(event) => setImportUrl(event.target.value)} />
+          <Input placeholder="OpenAPI URL（支持 swagger-config）" value={importUrl} onChange={(event) => setImportUrl(event.target.value)} />
           <Upload
             maxCount={1}
             beforeUpload={(file) => {
@@ -2095,19 +2130,9 @@ const ApiScenarioTestTool: React.FC = () => {
             >
               <List.Item.Meta
                 style={{ minWidth: 0 }}
-                title={<Space><span>{project.name}</span>{project.source_type === 'url' && <Tag color="cyan">URL</Tag>}</Space>}
-                description={(
-                  <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 0 }}>
-                    <span title={project.base_url || '未设置 Base URL'} style={projectUrlTextStyle}>
-                      {project.base_url || '未设置 Base URL'}
-                    </span>
-                    {project.source_url && (
-                      <span title={project.source_url} style={{ ...projectUrlTextStyle, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                        {project.source_url}
-                      </span>
-                    )}
-                  </Space>
-                )}
+                title={
+                  <span style={{ ...projectUrlTextStyle, fontWeight: 500 }}>{project.name}</span>
+                }
               />
             </List.Item>
           )}
@@ -2435,6 +2460,8 @@ const ApiScenarioTestTool: React.FC = () => {
             </Form.Item>
             <Tabs
               className="api-endpoint-editor-tabs"
+              activeKey={endpointActiveTab}
+              onChange={setEndpointActiveTab}
               items={[
                 {
                   key: 'body',
@@ -2694,6 +2721,49 @@ const ApiScenarioTestTool: React.FC = () => {
             <Form.Item name="source_url" label="OpenAPI URL">
               <Input disabled={selectedProject.source_type !== 'url'} />
             </Form.Item>
+            <div
+              style={{
+                marginBottom: 16,
+                padding: 12,
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--color-fill-quaternary, rgba(0,0,0,0.02))',
+              }}
+            >
+              <Space align="center" style={{ marginBottom: 8, justifyContent: 'space-between', width: '100%' }}>
+                <span style={{ fontWeight: 500 }}>Mock 服务</span>
+                <Switch
+                  checkedChildren="已开启"
+                  unCheckedChildren="已关闭"
+                  checked={!!selectedProject.mock_enabled}
+                  loading={mockTogglingProjectId === selectedProject.id}
+                  onChange={(checked) => handleToggleProjectMock(selectedProject, checked)}
+                />
+              </Space>
+              <Form.Item
+                name="mock_prefix"
+                label="Mock 地址前缀"
+                extra="留空则按项目名自动生成。修改后点击下方「保存项目配置」生效。"
+                style={{ marginBottom: 8 }}
+              >
+                <Input placeholder="/contract" />
+              </Form.Item>
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                Mock 基地址：
+                <Typography.Text
+                  copyable={{ text: `${window.location.origin}/api/mock${selectedProject.mock_prefix || ''}` }}
+                  code
+                  style={{ fontSize: 12 }}
+                >
+                  {`/api/mock${selectedProject.mock_prefix || ''}`}
+                </Typography.Text>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
+                {selectedProject.mock_enabled
+                  ? `开启中：${endpoints.length} 个接口可直接调用，响应按各接口的响应 Schema 实时生成。例如 /api/mock${selectedProject.mock_prefix || ''}${endpoints[0]?.path || '/your/path'}`
+                  : '开启后，本项目所有接口无需逐个配置即可直接调用。'}
+              </div>
+            </div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontWeight: 500, marginBottom: 8 }}>项目 Headers</div>
               {renderHeadersEditor(4)}
