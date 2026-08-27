@@ -25,6 +25,24 @@ class ProxyStartRequest(BaseModel):
     port: Optional[int] = None
 
 
+def _local_ip() -> str:
+    """探测本机局域网 IP（UDP connect 不发包，仅路由表查询），失败回退主机名解析。"""
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+
+
 @router.get("/status", response_model=Response[dict])
 def get_proxy_status(session: SessionDep, user: CurrentUser):
     """获取代理运行状态与规则数量。"""
@@ -36,6 +54,7 @@ def get_proxy_status(session: SessionDep, user: CurrentUser):
         "running": state["running"],
         "port": state["port"],
         "rules_count": rules_count,
+        "local_ip": _local_ip(),
     })
 
 

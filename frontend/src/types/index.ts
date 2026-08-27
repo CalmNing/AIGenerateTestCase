@@ -82,6 +82,7 @@ export interface ApiResponse<T = any> {
   code: number;
   message: string;
   data?: T;
+  pagination?: { total: number; page: number; page_size: number };
 }
 
 // 模块类型
@@ -279,6 +280,7 @@ export interface MockProxyStatus {
   running: boolean;
   port: number | null;
   rules_count: number;
+  local_ip?: string;
 }
 
 // Mock 调用日志（含代理流量）

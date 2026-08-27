@@ -634,9 +634,19 @@ export const mockProxyApi = {
   // 删除转发规则
   deleteRule: (ruleId: number): Promise<ApiResponse> => api.delete(`/mock-proxy/rules/${ruleId}`),
 
-  // 获取 Mock 调用/代理流量日志
-  getLogs: (params?: { page?: number; page_size?: number; matched?: boolean }): Promise<ApiResponse<MockLogItem[]>> =>
+  // 获取 Mock 调用/代理流量日志（支持方法/路径关键字/来源类型过滤）
+  getLogs: (params?: {
+    page?: number;
+    page_size?: number;
+    matched?: boolean;
+    method?: string;
+    search?: string;
+    source?: 'mock' | 'missed' | 'proxy_mock' | 'passthrough' | 'project_mock';
+  }): Promise<ApiResponse<MockLogItem[]>> =>
     api.get('/mock-logs', { params }),
+
+  // 清空全部流量日志
+  clearLogs: (): Promise<ApiResponse> => api.delete('/mock-logs'),
 };
 
 // CA 证书下载地址（免认证，用原生下载而非 axios）

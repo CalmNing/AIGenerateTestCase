@@ -10,6 +10,7 @@ class Response(BaseModel, Generic[T]):
     code: int = 200
     message: str = "Success"
     data: Optional[T] = None
+    pagination: Optional[dict] = None
     model_config = {
         "arbitrary_types_allowed": True,
     }
