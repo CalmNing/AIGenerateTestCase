@@ -189,3 +189,95 @@ class TestRunnerRun:
         runner = ba.UIExecutionRunner(db_session, agent_factory=factory)
         asyncio.run(runner.run(rec.id))
         assert captured["prompt"].startswith("打开 http://192.168.13.178:8182#/home/login")
+
+
+class TestNormalizeAgentResult:
+    """browser-use 真实 API 适配层测试(0.13.x AgentHistoryList 形状 vs legacy,纯 double)。"""
+
+    def test_0138_shape_is_successful_and_final_result(self):
+        """browser-use 0.13.x:AgentHistoryList 无 .success,只有 is_successful()/final_result()。"""
+
+        class AgentHistoryListLike:
+            def __init__(self, ok, text):
+                self._ok = ok
+                self._text = text
+
+            def is_successful(self):
+                return self._ok
+
+            def final_result(self):
+                return self._text
+
+        ok = ba._normalize_agent_result(AgentHistoryListLike(True, "全部预期满足"))
+        assert ok.success is True
+        assert ok.final_result() == "全部预期满足"
+
+        fail = ba._normalize_agent_result(AgentHistoryListLike(False, "预期2未满足"))
+        assert fail.success is False
+        assert fail.final_result() == "预期2未满足"
+
+    def test_legacy_shape_uses_success_attr(self):
+        """旧形状/FakeAgent:存在 .success 属性时直接取用,不调用 is_successful()。"""
+
+        class LegacyResult:
+            def __init__(self, ok, text):
+                self.success = ok
+                self._text = text
+
+            def final_result(self):
+                return self._text
+
+        res = ba._normalize_agent_result(LegacyResult(True, "legacy text"))
+        assert res.success is True
+        assert res.final_result() == "legacy text"
+
+    def test_final_result_none_maps_to_empty_summary(self):
+        """真实 browser-use 末步无提取内容时 final_result() 返回 None → 摘要必须为空串而非 "None"。"""
+
+        class NoneFinalResult:
+            def is_successful(self):
+                return True
+
+            def final_result(self):
+                return None
+
+        res = ba._normalize_agent_result(NoneFinalResult())
+        assert res.success is True
+        assert res.final_result() == ""
+        assert res.final_result() != "None"
+
+    def test_unknown_shape_safe_default(self):
+        """未知形状:当前实现不抛错,success=False + 空摘要。固化该行为。"""
+
+        class Unknown:
+            pass
+
+        res = ba._normalize_agent_result(Unknown())
+        assert res.success is False
+        assert res.final_result() == ""
+
+
+class TestAttachHistoryCallback:
+    """回调挂载分派:register_new_step_callback 属性存在 → 走 0.13.x 包装;否则落到 history_callback。"""
+
+    def test_new_style_register_new_step_callback_dispatch(self):
+        class NewStyleAgent:
+            register_new_step_callback = None
+
+        agent = NewStyleAgent()
+        seen = []
+        ba._attach_history_callback(agent, lambda text: seen.append(text))
+        assert callable(agent.register_new_step_callback)
+        # 0.13.x 回调签名 (BrowserStateSummary, AgentOutput, int),包装后转发渲染出的动作文本
+        output = SimpleNamespace(action=[], next_goal="检查页面标题")
+        agent.register_new_step_callback(None, output, 1)
+        assert seen == ["检查页面标题"]
+
+    def test_fallback_assigns_history_callback(self):
+        class PlainAgent:
+            pass
+
+        agent = PlainAgent()
+        cb = lambda text: None
+        ba._attach_history_callback(agent, cb)
+        assert agent.history_callback is cb

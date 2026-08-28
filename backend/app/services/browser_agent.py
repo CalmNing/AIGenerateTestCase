@@ -182,16 +182,18 @@ class UIExecutionRunner:
 
     def _release_session(self, db: Session) -> None:
         """仅关闭自建会话;复用的构造期会话由调用方/fixture 负责。"""
-        if db is not self._request_db:
-            try:
-                db.close()
-            except Exception:
-                pass
+        if db is None or db is self._request_db:
+            return
+        try:
+            db.close()
+        except Exception:
+            pass
 
     async def run(self, record_id: int) -> None:
         """完整状态机入口。"""
-        db = self._acquire_session()
+        db = None
         try:
+            db = self._acquire_session()
             record = db.get(UIExecutionRecord, record_id)
             if record is None:
                 logger.error(f"[UIExec] record {record_id} 不存在")
@@ -369,12 +371,11 @@ def _normalize_agent_result(result):
         success = is_ok() if callable(is_ok) else False
     fr = getattr(result, "final_result", None)
     final_text = fr() if callable(fr) else (fr or "")
-    return SimpleNamespace(success=bool(success), final_result=lambda: str(final_text))
+    return SimpleNamespace(success=bool(success), final_result=lambda: str(final_text or ""))
 
 
 def launch_ui_execution(db: Session, record_id: int, agent_factory: Optional[Callable] = None) -> str:
     """创建内存任务并后台启动 runner,返回 task_id。"""
-    import asyncio as _asyncio
     task_id = str(uuid.uuid4())
     _ui_tasks[task_id] = {
         "task_id": task_id,
@@ -387,13 +388,15 @@ def launch_ui_execution(db: Session, record_id: int, agent_factory: Optional[Cal
         "error": None,
         "created_at": datetime.now(tz=cn_tz).isoformat(),
     }
-    runner = UIExecutionRunner(db, agent_factory=agent_factory)
+    # 后台任务生命周期长于 HTTP 请求,路由层 session 在请求结束后关闭,
+    # 故生产路径始终自建独立 session(仅测试路径复用构造期传入的 in-memory session)。
+    runner = UIExecutionRunner(None, agent_factory=agent_factory)
 
     async def _guarded():
         async with _EXECUTION_LOCK:
             await runner.run(record_id)
 
-    _asyncio.create_task(_guarded())
+    asyncio.create_task(_guarded())
     return task_id
 
 
