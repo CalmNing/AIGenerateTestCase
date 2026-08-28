@@ -212,7 +212,7 @@ GET /api/ui-execution/records?testcase_id={id}
    - 前置条件只读提醒区
    - 登录凭证配置状态提示(已配/未配 test_username)
    - 「开始执行」→ 轮询 tasks/{id} → 进度条(阶段 + message)→ 终态展示判定结果
-3. **执行历史**:弹窗内 Tab 或用例详情处展示 records 列表(状态/时间/摘要,可展开 steps_trace)
+3. **执行历史**:UIExecutionModal 内 Tab 展示该用例的 records 列表(状态/时间/摘要,可展开 steps_trace)
 4. localStorage 记住每个用例最近一次的 origin/path 作为预填兜底(主数据源仍是 record + 全局参数)
 
 ## 11. 测试策略(遵守项目约定:pytest,不碰真 LLM/浏览器)
