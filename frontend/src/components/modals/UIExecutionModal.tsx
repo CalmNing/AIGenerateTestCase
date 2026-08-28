@@ -151,7 +151,7 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
     }
   }, [testcaseId]);
 
-  // 终态处理:停止轮询、刷新历史、展示终态 Alert
+  // 终态处理:停止轮询、刷新历史(所有终态均执行)、展示终态 Alert
   const handleTerminal = useCallback(
     async (task: UIExecutionTaskStatus) => {
       const result = task.result_status;
@@ -159,20 +159,25 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
       stopPolling();
       setRunning(false);
       setProgress(task);
-      if (result === 'ERROR') {
-        setTerminal({ result_status: 'ERROR', message: task.error || task.message || '执行出错' });
-      } else if (testcaseId !== undefined) {
+      // 刷新执行历史:ERROR 终态也刷新,避免 执行历史 Tab 数据陈旧
+      let refreshed: UIExecutionRecord[] = [];
+      if (testcaseId !== undefined) {
         try {
           const res = await uiExecutionApi.getRecords(testcaseId);
           setRecords(res.data ?? []);
-          const rec = task.record_id != null ? (res.data ?? []).find((r) => r.id === task.record_id) : undefined;
-          setTerminal({
-            result_status: result,
-            message: rec?.agent_summary || task.message || '执行完成',
-          });
+          refreshed = res.data ?? [];
         } catch {
-          setTerminal({ result_status: result, message: task.message || '执行完成' });
+          /* 忽略刷新失败,不影响终态展示 */
         }
+      }
+      if (result === 'ERROR') {
+        setTerminal({ result_status: 'ERROR', message: task.error || task.message || '执行出错' });
+      } else if (testcaseId !== undefined) {
+        const rec = task.record_id != null ? refreshed.find((r) => r.id === task.record_id) : undefined;
+        setTerminal({
+          result_status: result,
+          message: rec?.agent_summary || task.message || '执行完成',
+        });
       } else {
         setTerminal({ result_status: result, message: task.message || '执行完成' });
       }
@@ -182,6 +187,8 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
   );
 
   const startExecution = async () => {
+    // 执行中防抖:防止快速双击重复发起
+    if (running || pollRef.current) return;
     if (testcaseId === undefined) return;
     if (!siteOrigin.trim()) {
       message.warning('请填写站点地址');
