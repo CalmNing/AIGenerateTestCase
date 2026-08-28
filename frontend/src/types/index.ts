@@ -163,6 +163,33 @@ export interface GlobalParameter {
   updated_at: string;
 }
 
+// UI 自动化执行记录(browser-use Agent)
+export interface UIExecutionRecord {
+  id: number;
+  testcase_id: number;
+  user_id?: string;
+  target_url: string;
+  status: 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR';
+  steps_trace: Array<{ step_no: number; action: string; result?: string; url?: string }>;
+  agent_summary: string;
+  error?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UIExecutionTaskStatus {
+  task_id: string;
+  status: 'running' | 'done';
+  phase: 'queued' | 'launching_browser' | 'executing' | 'judging' | 'persisting' | 'done';
+  progress: number;
+  message: string;
+  record_id: number;
+  result_status: 'PASSED' | 'FAILED' | 'ERROR' | null;
+  error: string | null;
+  created_at: string;
+}
+
 // 代理请求类型
 export interface ProxyRequest {
   url: string;

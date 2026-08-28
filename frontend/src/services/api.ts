@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, UIExecutionRecord, UIExecutionTaskStatus } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -475,6 +475,18 @@ export const globalParameterApi = {
 
   // 提取并保存变量
   extractAndSaveVariables: (data: ExtractVariablesRequest): Promise<ApiResponse<Record<string, string>>> => api.post('/global-parameters/extract-and-save', data)
+};
+
+// UI 自动化执行 API
+export const uiExecutionApi = {
+  run: (testcaseId: number, siteOrigin: string, pagePath: string): Promise<ApiResponse<{ task_id: string; record_id: number }>> =>
+    api.post('/ui-execution/run', { testcase_id: testcaseId, site_origin: siteOrigin, page_path: pagePath }),
+
+  getTask: (taskId: string): Promise<ApiResponse<UIExecutionTaskStatus>> =>
+    api.get(`/ui-execution/tasks/${taskId}`),
+
+  getRecords: (testcaseId: number): Promise<ApiResponse<UIExecutionRecord[]>> =>
+    api.get('/ui-execution/records', { params: { testcase_id: testcaseId } })
 };
 
 interface TestVariableRequest {
