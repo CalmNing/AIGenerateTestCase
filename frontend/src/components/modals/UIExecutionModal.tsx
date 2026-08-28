@@ -198,6 +198,7 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
         JSON.stringify({ origin: siteOrigin.trim(), path: pagePath.trim() })
       );
       setTerminal(null);
+      setProgress(null);
       setRunning(true);
       const taskId = res.data.task_id;
       pollRef.current = setInterval(async () => {
