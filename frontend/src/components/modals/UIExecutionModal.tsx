@@ -1,0 +1,373 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Button, Empty, Input, Modal, Progress, Table, TableProps, Tabs, Tag, Tooltip, message } from 'antd';
+import { PlayCircleOutlined } from '@ant-design/icons';
+import { TestCase, UIExecutionRecord, UIExecutionTaskStatus } from '../../types';
+import { globalParameterApi, uiExecutionApi } from '../../services/api';
+
+/** 判断用例是否可执行 UI(无 API 调用步骤) */
+export const isUiExecutable = (testcase: TestCase): boolean => {
+  if (!testcase.steps || testcase.steps.length === 0) return false;
+  return !testcase.steps.some((s) => {
+    if (typeof s !== 'object' || s === null) return false;
+    const dict = s as Record<string, any>;
+    return dict.type === 'api_call' || dict.endpoint_id != null || dict.endpoint_ref != null;
+  });
+};
+
+const LAST_URL_KEY = (id: number) => `ui_exec_last_${id}`;
+
+const statusColorMap: Record<UIExecutionRecord['status'], string> = {
+  PASSED: 'success',
+  FAILED: 'error',
+  ERROR: 'warning',
+  RUNNING: 'processing',
+};
+
+const formatTime = (value?: string | null) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+};
+
+interface UIExecutionModalProps {
+  open: boolean;
+  testcase: TestCase | null;
+  onClose: () => void;
+  onFinished?: () => void; // 终态后通知父级刷新用例列表
+}
+
+interface TerminalState {
+  result_status: 'PASSED' | 'FAILED' | 'ERROR';
+  message: string;
+}
+
+const ExecutionDetail: React.FC<{ record: UIExecutionRecord }> = ({ record }) => {
+  const steps = Array.isArray(record.steps_trace) ? record.steps_trace : [];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 4px' }}>
+      {steps.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {steps.map((s) => (
+            <div key={s.step_no} style={{ display: 'flex', gap: 8, fontSize: 13 }}>
+              <Tag style={{ flexShrink: 0, marginInlineEnd: 0 }}>#{s.step_no}</Tag>
+              <div>
+                <div style={{ fontWeight: 500 }}>{s.action}</div>
+                {s.url ? (
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>{s.url}</div>
+                ) : null}
+                {s.result ? (
+                  <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s.result}</div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无步骤轨迹" />
+      )}
+      {record.agent_summary ? (
+        <Alert type="info" showIcon message="Agent 总结" description={record.agent_summary} />
+      ) : null}
+    </div>
+  );
+};
+
+const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onClose, onFinished }) => {
+  const [siteOrigin, setSiteOrigin] = useState('');
+  const [pagePath, setPagePath] = useState('');
+  const [hasCredentials, setHasCredentials] = useState<boolean | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<UIExecutionTaskStatus | null>(null);
+  const [terminal, setTerminal] = useState<TerminalState | null>(null);
+  const [records, setRecords] = useState<UIExecutionRecord[]>([]);
+  const [activeTab, setActiveTab] = useState('run');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 站点地址是否已被占位(localStorage 或用户手动输入),防止默认环境 web_url 覆盖
+  const originTouchedRef = useRef(false);
+
+  const testcaseId = testcase?.id;
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // 打开弹窗时:预填 localStorage + 默认环境 web_url、拉取登录凭证状态与执行历史
+  useEffect(() => {
+    if (!open || testcaseId === undefined) return;
+    const last = localStorage.getItem(LAST_URL_KEY(testcaseId));
+    let hasLast = false;
+    if (last) {
+      try {
+        const parsed = JSON.parse(last) as { origin?: string; path?: string };
+        setSiteOrigin(parsed.origin ?? '');
+        setPagePath(parsed.path ?? '');
+        hasLast = true;
+      } catch {
+        /* 忽略损坏缓存 */
+      }
+    } else {
+      setSiteOrigin('');
+      setPagePath('');
+    }
+    originTouchedRef.current = hasLast;
+    setProgress(null);
+    setRunning(false);
+    setTerminal(null);
+    setHasCredentials(null);
+    globalParameterApi
+      .getEnvironments()
+      .then((res) => {
+        const env = (res.data ?? []).find((e) => e.is_default) ?? (res.data ?? [])[0];
+        if (!env) return;
+        const webUrl = env.parameters.find((p) => p.key === 'web_url')?.value ?? '';
+        // localStorage 优先;用户已手动输入时不覆盖;仅二者皆无时才用默认环境 web_url 预填
+        setSiteOrigin((prev) => (originTouchedRef.current || prev.trim() ? prev : webUrl));
+        setHasCredentials(!!env.parameters.find((p) => p.key === 'test_username')?.value);
+      })
+      .catch(() => setHasCredentials(null));
+    uiExecutionApi
+      .getRecords(testcaseId)
+      .then((res) => setRecords(res.data ?? []))
+      .catch(() => {});
+  }, [open, testcaseId]);
+
+  // 关闭弹窗或组件卸载时停止轮询
+  useEffect(() => {
+    if (!open) stopPolling();
+    return stopPolling;
+  }, [open, stopPolling]);
+
+  const refreshRecords = useCallback(async () => {
+    if (testcaseId === undefined) return;
+    try {
+      const res = await uiExecutionApi.getRecords(testcaseId);
+      setRecords(res.data ?? []);
+    } catch {
+      /* 忽略 */
+    }
+  }, [testcaseId]);
+
+  // 终态处理:停止轮询、刷新历史、展示终态 Alert
+  const handleTerminal = useCallback(
+    async (task: UIExecutionTaskStatus) => {
+      const result = task.result_status;
+      if (!result) return; // 非终态,忽略
+      stopPolling();
+      setRunning(false);
+      setProgress(task);
+      if (result === 'ERROR') {
+        setTerminal({ result_status: 'ERROR', message: task.error || task.message || '执行出错' });
+      } else if (testcaseId !== undefined) {
+        try {
+          const res = await uiExecutionApi.getRecords(testcaseId);
+          setRecords(res.data ?? []);
+          const rec = task.record_id != null ? (res.data ?? []).find((r) => r.id === task.record_id) : undefined;
+          setTerminal({
+            result_status: result,
+            message: rec?.agent_summary || task.message || '执行完成',
+          });
+        } catch {
+          setTerminal({ result_status: result, message: task.message || '执行完成' });
+        }
+      } else {
+        setTerminal({ result_status: result, message: task.message || '执行完成' });
+      }
+      onFinished?.();
+    },
+    [stopPolling, testcaseId, onFinished]
+  );
+
+  const startExecution = async () => {
+    if (testcaseId === undefined) return;
+    if (!siteOrigin.trim()) {
+      message.warning('请填写站点地址');
+      return;
+    }
+    try {
+      const res = await uiExecutionApi.run(testcaseId, siteOrigin.trim(), pagePath.trim());
+      if (res.code !== 200 || !res.data) {
+        message.error(res.message || '发起执行失败');
+        return;
+      }
+      localStorage.setItem(
+        LAST_URL_KEY(testcaseId),
+        JSON.stringify({ origin: siteOrigin.trim(), path: pagePath.trim() })
+      );
+      setTerminal(null);
+      setRunning(true);
+      const taskId = res.data.task_id;
+      pollRef.current = setInterval(async () => {
+        if (testcaseId === undefined) return;
+        try {
+          const taskRes = await uiExecutionApi.getTask(taskId);
+          if (taskRes.code === 200 && taskRes.data) {
+            setProgress(taskRes.data);
+            if (taskRes.data.result_status) {
+              await handleTerminal(taskRes.data);
+            }
+          }
+        } catch {
+          /* 轮询失败忽略,等待下次轮询 */
+        }
+      }, 2000);
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '发起执行失败');
+    }
+  };
+
+  const handleTabChange = (key: string) => {
+    setActiveTab(key);
+    if (key === 'history') {
+      refreshRecords();
+    }
+  };
+
+  const columns: TableProps<UIExecutionRecord>['columns'] = [
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (status: UIExecutionRecord['status']) => (
+        <Tag color={statusColorMap[status] ?? 'default'}>{status}</Tag>
+      ),
+    },
+    { title: '站点地址', dataIndex: 'target_url', ellipsis: true },
+    {
+      title: '结束时间',
+      dataIndex: 'finished_at',
+      width: 170,
+      render: (value: string | null | undefined) => formatTime(value),
+    },
+    {
+      title: 'Agent 总结',
+      dataIndex: 'agent_summary',
+      ellipsis: { showTitle: false },
+      render: (text: string) =>
+        text ? (
+          <Tooltip title={text}>
+            <span>{text}</span>
+          </Tooltip>
+        ) : (
+          '-'
+        ),
+    },
+  ];
+
+  const presetConditions = testcase?.preset_conditions ?? [];
+
+  const runTab = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div>
+        <div style={{ marginBottom: 6, fontWeight: 500 }}>站点地址</div>
+        <Input
+          value={siteOrigin}
+          onChange={(e) => setSiteOrigin(e.target.value)}
+          placeholder="https://example.com"
+          disabled={running}
+          allowClear
+        />
+      </div>
+      <div>
+        <div style={{ marginBottom: 6, fontWeight: 500 }}>页面路径</div>
+        <Input
+          value={pagePath}
+          onChange={(e) => setPagePath(e.target.value)}
+          placeholder="/path/to/page (可留空)"
+          disabled={running}
+          allowClear
+        />
+      </div>
+      {presetConditions.length > 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          message="前置条件"
+          description={
+            <div style={{ paddingLeft: 4 }}>
+              {presetConditions.map((c, i) => (
+                <div key={i}>· {typeof c === 'string' ? c : JSON.stringify(c)}</div>
+              ))}
+            </div>
+          }
+        />
+      ) : null}
+      {hasCredentials === true ? (
+        <Alert type="success" showIcon message="已配置登录凭证,Agent 将按需自动登录" />
+      ) : null}
+      {hasCredentials === false ? (
+        <Alert message="未配置 test_username/test_password 环境参数,目标系统需登录时请先在全局参数中配置" />
+      ) : null}
+      {running ? (
+        progress ? (
+          <div style={{ textAlign: 'center' }}>
+            <Progress percent={progress.progress} status="active" />
+            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12, whiteSpace: 'pre-wrap' }}>
+              {progress.message}
+            </div>
+          </div>
+        ) : (
+          <Alert type="info" showIcon message="已发起执行,等待 Agent 启动..." />
+        )
+      ) : null}
+      {terminal ? (
+        terminal.result_status === 'PASSED' ? (
+          <Alert type="success" showIcon message="执行成功" description={terminal.message} />
+        ) : terminal.result_status === 'FAILED' ? (
+          <Alert type="error" showIcon message="执行失败" description={terminal.message} />
+        ) : (
+          <Alert type="warning" showIcon message="执行出错" description={terminal.message} />
+        )
+      ) : null}
+      <Button
+        type="primary"
+        icon={<PlayCircleOutlined />}
+        loading={running}
+        disabled={running}
+        block
+        onClick={startExecution}
+      >
+        开始执行
+      </Button>
+    </div>
+  );
+
+  const historyTab = (
+    <Table
+      size="small"
+      rowKey="id"
+      dataSource={records}
+      columns={columns}
+      pagination={{ pageSize: 5, showSizeChanger: false }}
+      locale={{ emptyText: '暂无执行记录' }}
+      expandable={{ expandedRowRender: (record) => <ExecutionDetail record={record} /> }}
+    />
+  );
+
+  return (
+    <Modal
+      title={`UI 执行${testcase?.case_name ? ` - ${testcase.case_name}` : ''}`}
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={720}
+      styles={{ body: { padding: '16px 20px' } }}
+    >
+      {testcase ? (
+        <Tabs
+          activeKey={activeTab}
+          onChange={handleTabChange}
+          items={[
+            { key: 'run', label: '执行', children: runTab },
+            { key: 'history', label: '执行历史', children: historyTab },
+          ]}
+        />
+      ) : null}
+    </Modal>
+  );
+};
+
+export default UIExecutionModal;
