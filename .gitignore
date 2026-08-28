@@ -4,6 +4,8 @@
 /backend/data/config.json
 # Mock 代理自动生成的 CA/域名证书（含私钥，禁止入库）
 /backend/data/certs/
+# UI 执行登录态缓存(storage_state,含 token,禁止入库)
+/backend/data/browser_sessions/
 /*/.idea/
 __pycache__/
 .idea

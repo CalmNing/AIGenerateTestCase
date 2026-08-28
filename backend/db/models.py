@@ -106,6 +106,17 @@ class TestCase(BaseModel, table=True):
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
 
+class UIExecutionRecord(BaseModel, table=True):
+    """UI 自动化执行记录(browser-use Agent 驱动无头浏览器执行功能用例)"""
+    testcase_id: int = Field(foreign_key="testcase.id", index=True, description="关联用例ID")
+    user_id: Optional[str] = Field(default=None, index=True, description="发起人ID（Keycloak sub）")
+    target_url: str = Field(default="", description="拼接后的目标页面完整地址")
+    status: str = Field(default="RUNNING", description="执行状态: RUNNING/PASSED/FAILED/ERROR")
+    steps_trace: List = Field(default_factory=list, sa_type=JSON, description="Agent每步动作轨迹[{step_no,action,url,result}]")
+    agent_summary: str = Field(default="", description="Agent最终判定说明(逐条预期核对)")
+    error: Optional[str] = Field(default=None, description="异常信息(仅ERROR时)")
+    finished_at: Optional[datetime] = Field(default=None, description="执行完成时间(UTC+8)")
+
 class RequirementPoint(BaseModel, table=True):
     """需求点数据模型（4阶段pipeline阶段1产物）"""
     session_id: Optional[int] = Field(default=None, foreign_key="session.id", index=True)
