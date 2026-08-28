@@ -32,6 +32,7 @@ import SkillsHubModal from './components/modals/SkillsHubModal';
 import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
 import AddTestcaseModal from './components/modals/AddTestcaseModal';
 import TestCaseExecutionLogModal from './components/modals/TestCaseExecutionLogModal';
+import UIExecutionModal from './components/modals/UIExecutionModal';
 import ModuleSidebar from './components/ModuleSidebar';
 import { Permission, hasPermission } from './services/permissions';
 import { useRef } from 'react';
@@ -896,6 +897,11 @@ const App: React.FC = () => {
       showMessage('error', '执行失败', error?.response?.data?.message || error.message || '执行失败');
     }
   };
+
+  // UI 执行 - 选中目标用例并打开执行弹窗
+  const [uiExecTarget, setUiExecTarget] = useState<TestCase | null>(null);
+  const handleUiExecuteTestcase = (testcase: TestCase) => setUiExecTarget(testcase);
+
   const handleBatchMoveTestcase = (ids: number[]) => {
     if (ids.length === 0) return;
     setSelectedTestcaseIds(ids);
@@ -1424,6 +1430,7 @@ const App: React.FC = () => {
                                 onApiExecute={handleApiExecuteTestcase}
                                 onViewExecutionLogs={handleViewExecutionLogs}
                                 onInferDependencies={handleInferTestcaseDependencies}
+                                onUiExecute={handleUiExecuteTestcase}
                               />
                             ),
                           },
@@ -1514,6 +1521,7 @@ const App: React.FC = () => {
                                 onApiExecute={handleApiExecuteTestcase}
                                 onViewExecutionLogs={handleViewExecutionLogs}
                                 onInferDependencies={handleInferTestcaseDependencies}
+                                onUiExecute={handleUiExecuteTestcase}
                               />
                             ),
                           },
@@ -2233,6 +2241,16 @@ const App: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      {/* UI 执行模态框 - 全局渲染 */}
+      <UIExecutionModal
+        open={uiExecTarget !== null}
+        testcase={uiExecTarget}
+        onClose={() => setUiExecTarget(null)}
+        onFinished={() => {
+          if (selectedSession) loadTestcases(selectedSession.id, filters ?? undefined);
+        }}
+      />
 
       {/* 变量助手 - 全局渲染 */}
       <VariableAssistant

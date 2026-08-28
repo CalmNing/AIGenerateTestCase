@@ -10,8 +10,10 @@ import {
   HistoryOutlined,
   BranchesOutlined,
   SafetyCertificateOutlined,
+  ChromeOutlined,
 } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
+import { isUiExecutable } from '../modals/UIExecutionModal';
 
 interface TestCaseTableProps {
   testcases: TestCase[];
@@ -26,6 +28,7 @@ interface TestCaseTableProps {
   onViewExecutionLogs?: (testcase: TestCase) => void;
   onInferDependencies?: (testcase: TestCase) => void;
   onValidate?: (testcase: TestCase) => void;
+  onUiExecute?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
   bugLinkTemplate?: string;
 }
@@ -65,6 +68,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onViewExecutionLogs,
   onInferDependencies,
   onValidate,
+  onUiExecute,
   onBatchMove,
   bugLinkTemplate,
 }) => {
@@ -272,7 +276,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
     {
       title: '操作',
       key: 'action',
-      width: 224,
+      width: 264,
       align: 'center' as const,
       render: (_: unknown, record: TestCase) => (
         <div className="tcm-actions">
@@ -316,6 +320,13 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             <Tooltip title="验证（真实执行）" placement="top">
               <button className="tcm-action-btn tcm-action-btn--validate" onClick={(event) => { stopRowClick(event); onValidate!(record); }}>
                 <SafetyCertificateOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onUiExecute && isUiExecutable(record) && (
+            <Tooltip title="UI 执行" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--ui" onClick={(event) => { stopRowClick(event); onUiExecute(record); }}>
+                <ChromeOutlined />
               </button>
             </Tooltip>
           )}

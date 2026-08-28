@@ -29,6 +29,7 @@ interface TestCaseManagerProps {
   onViewExecutionLogs?: (testcase: TestCase) => void;
   onInferDependencies?: (testcase: TestCase) => void;
   onValidate?: (testcase: TestCase) => void;
+  onUiExecute?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
 }
 
@@ -71,6 +72,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onViewExecutionLogs,
   onInferDependencies,
   onValidate,
+  onUiExecute,
   onMove,
   onBatchMove,
 }) => {
@@ -265,6 +267,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onViewExecutionLogs={onViewExecutionLogs}
             onInferDependencies={onInferDependencies}
             onValidate={onValidate ?? handleValidate}
+            onUiExecute={onUiExecute}
             onBatchMove={onBatchMove}
             bugLinkTemplate={bugLinkTemplate}
           />
