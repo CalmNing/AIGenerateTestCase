@@ -32,7 +32,7 @@ def _substitute(text: str, db, user: UserInfo) -> str:
 
 
 @router.post("/run", response_model=Response)
-def run_ui_execution(body: RunRequest, db: SessionDep, user: CurrentUser):
+async def run_ui_execution(body: RunRequest, db: SessionDep, user: CurrentUser):
     testcase = db.get(TestCase, body.testcase_id)
     if testcase is None or (testcase.user_id and testcase.user_id != user.user_id):
         raise HTTPException(status_code=404, detail="测试用例不存在")
@@ -83,6 +83,7 @@ def list_ui_execution_records(
     records = db.exec(
         select(UIExecutionRecord)
         .where(UIExecutionRecord.testcase_id == testcase_id)
+        .where(UIExecutionRecord.user_id == user.user_id)
         .order_by(UIExecutionRecord.id.desc())
     ).all()
     return Response(data=records)

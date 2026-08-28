@@ -74,8 +74,20 @@ class LoginContext:
 
 
 def _cache_path(origin: str) -> Path:
-    """origin → 缓存文件名(http://a.com:80 → http_a.com_80.json)。"""
-    safe = origin.replace("://", "_").replace("/", "_").replace(":", "_")
+    """origin → 缓存文件名,归一化 scheme/host 大小写与默认端口。
+
+    http://a.com:80 与 http://a.com 映射同一文件(http_a.com.json);非默认端口保留。
+    """
+    parsed = urlparse(origin)
+    scheme = (parsed.scheme or "http").lower()
+    host = (parsed.hostname or "unknown").lower()
+    port = parsed.port
+    default_port = {"http": 80, "https": 443}.get(scheme)
+    if port is not None and port == default_port:
+        port = None
+    safe = f"{scheme}_{host}"
+    if port is not None:
+        safe += f"_{port}"
     return _sessions_dir / f"{safe}.json"
 
 
@@ -138,13 +150,17 @@ def _build_llm():
     )
 
 
-def _default_agent_factory(llm, prompt: str):
+def _default_agent_factory(llm, prompt: str, storage_state: Optional[Any] = None):
     """真实现:延迟导入 browser-use,避免测试环境强依赖。
 
-    browser-use 0.13.x: Agent(task=..., llm=...);run() 回调通过构造参数
-    register_new_step_callback 挂载 —— 该参数是普通属性、run 时读取,可在构造后赋值。
+    browser-use 0.13.x: Agent(task=..., llm=..., browser_session=...);登录态通过
+    BrowserSession(storage_state=dict|path) 注入 —— 实测 storage_state 接受 Playwright
+    格式 dict({cookies:[...], origins:[...]},export_storage_state() 的输出)或 json 文件路径。
     """
-    from browser_use import Agent
+    from browser_use import Agent, BrowserSession
+    if storage_state is not None:
+        browser_session = BrowserSession(storage_state=storage_state)
+        return Agent(task=prompt, llm=llm, browser_session=browser_session)
     return Agent(task=prompt, llm=llm)
 
 
@@ -217,7 +233,10 @@ class UIExecutionRunner:
             login_ctx, meta = resolve_login_context(db, param_map, record.target_url)
 
             llm = _build_llm()
-            agent = self.agent_factory(llm, _agent_prompt_for(db, record, testcase, login_ctx))
+            storage_state = self._load_storage_state(meta.get("origin", ""))
+            agent = self.agent_factory(
+                llm, _agent_prompt_for(db, record, testcase, login_ctx), storage_state
+            )
             _update_task(task_id, phase="executing", progress=30, message="Agent 正在执行步骤...")
 
             # 每步回调:追加轨迹 + 更新进度
@@ -250,10 +269,28 @@ class UIExecutionRunner:
         finally:
             # 无条件导出登录态(真实现才有 browser context;stub 无则静默跳过)
             await self._export_storage_state(agent, meta.get("origin", ""))
+            # 超时/异常时浏览器可能未关闭,兜底关闭避免残留 Chromium 进程
+            await self._close_agent(agent)
             if task_id:
                 _update_task(task_id, status="done", progress=100, message="执行结束")
 
     # ---- 真实现/Stub 差异收敛点 ----
+
+    def _load_storage_state(self, origin: str) -> Optional[dict]:
+        """读取该 origin 的登录态缓存 dict(Playwright storage_state);无缓存/读取失败 → None。
+
+        spec §6:同一 origin 的后续执行必须加载缓存登录态注入浏览器会话。
+        """
+        if not origin:
+            return None
+        cache_file = _cache_path(origin)
+        try:
+            if not cache_file.exists():
+                return None
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"[UIExec] 读取登录态缓存失败(忽略,按未登录处理): {e}")
+            return None
 
     async def _export_storage_state(self, agent, origin: str) -> None:
         """执行结束导出并覆盖登录态缓存。stub agent 无 browser 上下文,静默跳过。"""
@@ -264,7 +301,7 @@ class UIExecutionRunner:
             # browser-use >= 0.13: BrowserSession.export_storage_state() → dict
             bs = getattr(agent, "browser_session", None)
             if bs is not None and hasattr(bs, "export_storage_state"):
-                state = await bs.export_storage_state()
+                state = await asyncio.wait_for(bs.export_storage_state(), timeout=10)
             else:
                 # 旧版本: browser_context.storage_state()
                 context = (
@@ -272,13 +309,27 @@ class UIExecutionRunner:
                     or getattr(getattr(agent, "browser", None), "context", None)
                 )
                 if context is not None:
-                    state = await context.storage_state()
+                    state = await asyncio.wait_for(context.storage_state(), timeout=10)
             if not state:
                 return
             _sessions_dir.mkdir(parents=True, exist_ok=True)
             _cache_path(origin).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
             logger.warning(f"[UIExec] 导出登录态失败(不影响判定): {e}")
+
+    async def _close_agent(self, agent) -> None:
+        """关闭浏览器资源;stub agent 无 close() 时静默跳过,异常非致命。"""
+        if agent is None:
+            return
+        close = getattr(agent, "close", None)
+        if not callable(close):
+            return
+        try:
+            result = close()
+            if asyncio.iscoroutine(result):
+                await asyncio.wait_for(result, timeout=10)
+        except Exception as e:
+            logger.warning(f"[UIExec] 关闭浏览器失败(非致命): {e}")
 
 
 def _persist(db, record, testcase, task_id, status, summary):
@@ -298,7 +349,7 @@ def _persist_error(db, record, task_id, error_msg):
     record.finished_at = datetime.now(tz=cn_tz)
     db.add(record)
     db.commit()  # 用例状态不动
-    _update_task(task_id, status="done", error=error_msg[:200])
+    _update_task(task_id, status="done", error=error_msg[:200], result_status="ERROR")
 
 
 def _agent_prompt_for(db, record, testcase, login_ctx) -> str:

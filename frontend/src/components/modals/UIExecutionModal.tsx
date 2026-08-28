@@ -155,7 +155,8 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
   const handleTerminal = useCallback(
     async (task: UIExecutionTaskStatus) => {
       const result = task.result_status;
-      if (!result) return; // 非终态,忽略
+      // status==='done' 即终态;result_status 为空(旧任务 dict)也按 ERROR 终态处理
+      if (!result && task.status !== 'done') return; // 非终态,忽略
       stopPolling();
       setRunning(false);
       setProgress(task);
@@ -170,7 +171,7 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
           /* 忽略刷新失败,不影响终态展示 */
         }
       }
-      if (result === 'ERROR') {
+      if (result === 'ERROR' || !result) {
         setTerminal({ result_status: 'ERROR', message: task.error || task.message || '执行出错' });
       } else if (testcaseId !== undefined) {
         const rec = task.record_id != null ? refreshed.find((r) => r.id === task.record_id) : undefined;
@@ -214,7 +215,8 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
           const taskRes = await uiExecutionApi.getTask(taskId);
           if (taskRes.code === 200 && taskRes.data) {
             setProgress(taskRes.data);
-            if (taskRes.data.result_status) {
+            // status==='done' 即终态;result_status 为空(旧任务 dict)也终止轮询
+            if (taskRes.data.result_status || taskRes.data.status === 'done') {
               await handleTerminal(taskRes.data);
             }
           }

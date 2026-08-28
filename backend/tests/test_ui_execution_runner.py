@@ -1,5 +1,6 @@
 """UIExecutionRunner 编排测试:stub agent_factory,不碰真浏览器/真 LLM(spec §11)。"""
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -77,7 +78,7 @@ class TestBuildUiPrompt:
     def test_prompt_no_credentials_no_login_section(self):
         ctx = ba.LoginContext(logged_in_cache=False, username="", password="")
         prompt = ba.build_ui_prompt("http://a.com", ["步骤1"], ["预期1"], [], ctx)
-        assert "登录" not in prompt.replace("登录页", "").replace("登录", "登录", 0) or "密码" not in prompt
+        assert "账号" not in prompt and "密码" not in prompt
 
 
 class TestResolveLoginContext:
@@ -105,6 +106,27 @@ class TestResolveLoginContext:
         assert ctx.logged_in_cache is False
 
 
+class TestCachePath:
+    """_cache_path 归一化:scheme/host 小写、默认端口剥离(Minor #10)。"""
+
+    def test_default_ports_map_to_same_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        assert ba._cache_path("http://a.com:80") == tmp_path / "http_a.com.json"
+        assert ba._cache_path("http://a.com") == tmp_path / "http_a.com.json"
+        assert ba._cache_path("https://a.com:443") == tmp_path / "https_a.com.json"
+        assert ba._cache_path("https://a.com") == tmp_path / "https_a.com.json"
+
+    def test_normalizes_scheme_and_host_case(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        assert ba._cache_path("HTTPS://A.COM:443") == tmp_path / "https_a.com.json"
+        assert ba._cache_path("HTTP://A.com") == tmp_path / "http_a.com.json"
+
+    def test_keeps_non_default_port(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        assert ba._cache_path("http://a.com:8080") == tmp_path / "http_a.com_8080.json"
+        assert ba._cache_path("http://192.168.13.178:8182") == tmp_path / "http_192.168.13.178_8182.json"
+
+
 class TestRunnerRun:
     def test_success_passes_case(self, db_session, monkeypatch, tmp_path):
         monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
@@ -112,7 +134,7 @@ class TestRunnerRun:
         rec = _make_record(db_session, tc)
         runner = ba.UIExecutionRunner(
             db_session,
-            agent_factory=lambda llm, prompt: FakeAgent(llm, prompt, success=True),
+            agent_factory=lambda llm, prompt, storage_state=None: FakeAgent(llm, prompt, success=True),
         )
         asyncio.run(runner.run(rec.id))
         db_session.refresh(rec)
@@ -129,7 +151,7 @@ class TestRunnerRun:
         rec = _make_record(db_session, tc)
         runner = ba.UIExecutionRunner(
             db_session,
-            agent_factory=lambda llm, prompt: FakeAgent(llm, prompt, success=False),
+            agent_factory=lambda llm, prompt, storage_state=None: FakeAgent(llm, prompt, success=False),
         )
         asyncio.run(runner.run(rec.id))
         db_session.refresh(rec)
@@ -147,7 +169,7 @@ class TestRunnerRun:
         rec = _make_record(db_session, tc)
         runner = ba.UIExecutionRunner(
             db_session,
-            agent_factory=lambda llm, prompt: FakeAgent(llm, prompt, fail_midway=True),
+            agent_factory=lambda llm, prompt, storage_state=None: FakeAgent(llm, prompt, fail_midway=True),
         )
         asyncio.run(runner.run(rec.id))
         db_session.refresh(rec)
@@ -155,6 +177,36 @@ class TestRunnerRun:
         assert rec.status == "ERROR"
         assert "browser crashed" in (rec.error or "")
         assert tc.status == "PASSED"  # 未被污染
+
+    def test_crash_sets_task_result_status_error(self, db_session, monkeypatch, tmp_path):
+        """Finding 2 pin:崩溃路径 _ui_tasks[task_id]["result_status"] 必须是 ERROR。
+
+        否则前端 `if (taskRes.data.result_status)` 永不视为终态,ERROR Alert 分支死代码。
+        """
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        tc = _make_case(db_session)
+        rec = _make_record(db_session, tc)
+        # 清理其它测试遗留的同 record_id 假任务(如 routes 测试的 _ui_tasks["t1"]),避免反查碰撞
+        for _tid in [k for k, v in ba._ui_tasks.items() if v.get("record_id") == rec.id]:
+            ba._ui_tasks.pop(_tid, None)
+        ba._ui_tasks["crash-task"] = {
+            "task_id": "crash-task", "status": "running", "phase": "queued",
+            "progress": 0, "message": "", "record_id": rec.id,
+            "result_status": None, "error": None, "created_at": "2026-01-01",
+        }
+        try:
+            runner = ba.UIExecutionRunner(
+                db_session,
+                agent_factory=lambda llm, prompt, storage_state=None: FakeAgent(llm, prompt, fail_midway=True),
+            )
+            asyncio.run(runner.run(rec.id))
+            tid = ba._find_task_id_by_record(rec.id)
+            assert tid == "crash-task"
+            assert ba._ui_tasks[tid]["status"] == "done"
+            assert ba._ui_tasks[tid]["result_status"] == "ERROR"
+            assert "browser crashed" in (ba._ui_tasks[tid]["error"] or "")
+        finally:
+            ba._ui_tasks.pop("crash-task", None)
 
     def test_timeout_marks_error(self, db_session, monkeypatch, tmp_path):
         monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
@@ -168,7 +220,7 @@ class TestRunnerRun:
 
         runner = ba.UIExecutionRunner(
             db_session,
-            agent_factory=lambda llm, prompt: SlowAgent(llm, prompt),
+            agent_factory=lambda llm, prompt, storage_state=None: SlowAgent(llm, prompt),
             timeout_seconds=0.1,
         )
         asyncio.run(runner.run(rec.id))
@@ -182,13 +234,35 @@ class TestRunnerRun:
         rec = _make_record(db_session, tc)
         captured = {}
 
-        def factory(llm, prompt):
+        def factory(llm, prompt, storage_state=None):
             captured["prompt"] = prompt
+            captured["storage_state"] = storage_state
             return FakeAgent(llm, prompt)
 
         runner = ba.UIExecutionRunner(db_session, agent_factory=factory)
         asyncio.run(runner.run(rec.id))
         assert captured["prompt"].startswith("打开 http://192.168.13.178:8182#/home/login")
+        # 无缓存时 storage_state 必须为 None(不注入假登录态)
+        assert captured["storage_state"] is None
+
+    def test_cached_storage_state_injected_into_factory(self, db_session, monkeypatch, tmp_path):
+        """Finding 3 pin:存在登录态缓存时,读取 JSON dict 并注入 agent_factory(而非仅改措辞)。"""
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        tc = _make_case(db_session)
+        rec = _make_record(db_session, tc)  # origin http://192.168.13.178:8182
+        state = {"cookies": [{"name": "sid", "value": "abc"}], "origins": []}
+        cache_file = tmp_path / "http_192.168.13.178_8182.json"
+        cache_file.write_text(json.dumps(state), encoding="utf-8")
+
+        captured = {}
+
+        def factory(llm, prompt, storage_state=None):
+            captured["storage_state"] = storage_state
+            return FakeAgent(llm, prompt)
+
+        runner = ba.UIExecutionRunner(db_session, agent_factory=factory)
+        asyncio.run(runner.run(rec.id))
+        assert captured.get("storage_state") == state
 
 
 class TestNormalizeAgentResult:
