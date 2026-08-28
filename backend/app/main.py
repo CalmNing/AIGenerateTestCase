@@ -23,6 +23,7 @@ from app.routes.testcase import router as testcase_router
 from app.routes.pipeline import router as pipeline_router
 from app.routes.document import router as document_router
 from app.routes.chat import router as chat_router
+from app.routes.ui_execution import router as ui_execution_router
 
 api_router = APIRouter()
 
@@ -186,6 +187,12 @@ api_router.include_router(
             )
         )
     ],
+)
+
+# UI 自动化执行:启动/状态/记录,需 ui_execute:manage 权限。
+api_router.include_router(
+    ui_execution_router,
+    dependencies=[Depends(require_permissions(Permission.UI_EXECUTE))],
 )
 
 # Chat route: general-purpose AI conversation
