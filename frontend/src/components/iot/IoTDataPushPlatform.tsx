@@ -219,9 +219,35 @@ interface Tab {
   body?: string;
   savedRequestId?: number;
   hasUnsavedChanges?: boolean;
+  baseline?: string;
   response?: any;
   responseTime?: number;
 }
+
+const tabContentKey = (
+  tab: Pick<Tab, 'name' | 'method' | 'url' | 'body' | 'headers' | 'parameters' | 'postExtractions'>
+): string =>
+  JSON.stringify([
+    tab.name,
+    tab.method,
+    tab.url,
+    tab.body || '',
+    tab.headers || [],
+    tab.parameters || [],
+    tab.postExtractions || [],
+  ]);
+
+const markTabClean = (tab: Tab): Tab => ({
+  ...tab,
+  hasUnsavedChanges: false,
+  baseline: tabContentKey(tab),
+});
+
+const applyTabChange = (tab: Tab, updates: Partial<Tab>): Tab => {
+  const merged = { ...tab, ...updates };
+  const baseline = tab.baseline ?? tabContentKey(tab);
+  return { ...merged, hasUnsavedChanges: tabContentKey(merged) !== baseline };
+};
 
 interface IoTDataPushPlatformProps {
   currentEnvironmentId?: string;
@@ -271,7 +297,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const handleBodyChange = useCallback((value: string) => {
     form.setFieldsValue({ body: value });
     setTabs(prevTabs => prevTabs.map(tab =>
-      tab.id === activeTabId ? { ...tab, body: value, hasUnsavedChanges: true } : tab
+      tab.id === activeTabId ? applyTabChange(tab, { body: value }) : tab
     ));
   }, [activeTabId]);
 
@@ -360,7 +386,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       body: '',
       hasUnsavedChanges: false
     };
-    setTabs([defaultTab]);
+    setTabs([markTabClean(defaultTab)]);
     setActiveTabId(defaultTab.id);
   }, []);
 
@@ -370,15 +396,22 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- Environment Management ---
 
-  const handleEnvironmentParameterChange = async (index: number, field: 'key' | 'value', value: string) => {
-    const newEnvironments = [...environments];
-    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
-    if (envIndex !== -1) {
-      const newParameters = [...newEnvironments[envIndex].parameters];
+  const handleEnvironmentParameterChange = (index: number, field: 'key' | 'value', value: string) => {
+    setEnvironments(prev => {
+      const envIndex = prev.findIndex(env => env.id === currentEnvironmentId);
+      if (envIndex === -1) return prev;
+      const newParameters = [...prev[envIndex].parameters];
       newParameters[index] = { ...newParameters[index], [field]: value };
+      const newEnvironments = [...prev];
       newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
-      setEnvironments(newEnvironments);
-      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+      return newEnvironments;
+    });
+  };
+
+  const handleSaveEnvironmentParameter = async () => {
+    const env = environments.find(item => item.id === currentEnvironmentId);
+    if (env) {
+      await saveEnvironmentToBackend(env);
     }
   };
 
@@ -607,10 +640,12 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
 
-  const updateCurrentTab = (updates: Partial<Tab>) => {
-    setTabs(prevTabs => prevTabs.map(tab =>
-      tab.id === activeTabId ? { ...tab, ...updates, hasUnsavedChanges: true } : tab
-    ));
+  const updateCurrentTab = (updates: Partial<Tab>, markClean = false) => {
+    setTabs(prevTabs => prevTabs.map(tab => {
+      if (tab.id !== activeTabId) return tab;
+      if (markClean) return markTabClean({ ...tab, ...updates });
+      return applyTabChange(tab, updates);
+    }));
   };
 
   const handleRemoveHeader = (index: number) => {
@@ -701,7 +736,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       body: '',
       hasUnsavedChanges: false
     };
-    setTabs(prevTabs => [...prevTabs, newTab]);
+    setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
     setActiveTabId(newTab.id);
     setEditingRequest(null);
   };
@@ -754,7 +789,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       savedRequestId: request.id,
       hasUnsavedChanges: false
     };
-    setTabs(prevTabs => [...prevTabs, newTab]);
+    setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
     setActiveTabId(newTab.id);
     setEditingRequest(request);
     setSaveRequestName(request.name);
@@ -808,7 +843,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         data: proxyResponse.data
       };
 
-      updateCurrentTab({ method, url, body, headers, parameters, response: axiosResponse, responseTime: endTime - startTime });
+      updateCurrentTab({ method, url, body, headers, parameters, response: axiosResponse, responseTime: endTime - startTime }, true);
       message.success('请求成功');
 
       if (canManageGlobalParams && postExtractions.length > 0 && axiosResponse.data && envId) {
@@ -884,7 +919,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         if (response.code === 200 && response.data) {
           setSavedRequests(savedRequests.map(r => r.id === editingRequest.id ? response.data! : r));
           setTabs(prevTabs => prevTabs.map(tab =>
-            tab.id === activeTabId ? { ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: response.data!.id, hasUnsavedChanges: false } : tab
+            tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: response.data!.id }) : tab
           ));
           message.success('请求配置已更新');
         }
@@ -893,7 +928,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         if (response.code === 200 && response.data) {
           setSavedRequests([response.data, ...savedRequests]);
           setTabs(prevTabs => prevTabs.map(tab =>
-            tab.id === activeTabId ? { ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: response.data!.id, hasUnsavedChanges: false } : tab
+            tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: response.data!.id }) : tab
           ));
           setEditingRequest(response.data);
           message.success('请求配置已保存');
@@ -1219,7 +1254,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                       onChange={(e) => {
                         const newName = e.target.value;
                         setTabs(prevTabs => prevTabs.map(tab =>
-                          tab.id === activeTabId ? { ...tab, name: newName, hasUnsavedChanges: true } : tab
+                          tab.id === activeTabId ? applyTabChange(tab, { name: newName }) : tab
                         ));
                         setSaveRequestName(newName);
                       }}
@@ -1730,7 +1765,10 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       <Modal
         title="全局参数配置"
         open={isGlobalParamsModalVisible && canManageGlobalParams}
-        onOk={() => setIsGlobalParamsModalVisible(false)}
+        onOk={async () => {
+          await handleSaveEnvironmentParameter();
+          setIsGlobalParamsModalVisible(false);
+        }}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
         width={600}
         className="iot-modal"

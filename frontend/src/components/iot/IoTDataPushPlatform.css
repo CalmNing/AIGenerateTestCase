@@ -336,11 +336,11 @@
 }
 
 .iot-codemirror .cm-editor .cm-activeLine {
-  background: var(--color-primary-bg) !important;
+  background: color-mix(in srgb, var(--color-primary) 7%, transparent) !important;
 }
 
 .iot-codemirror .cm-editor .cm-selectionBackground {
-  background: var(--color-primary-border) !important;
+  background: color-mix(in srgb, var(--color-primary) 22%, transparent) !important;
 }
 
 /* --- Response Viewer --- */

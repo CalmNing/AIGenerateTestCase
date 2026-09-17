@@ -123,6 +123,7 @@ const App: React.FC = () => {
     handleAddEnvironmentParameter,
     handleRemoveEnvironmentParameter,
     handleEnvironmentParameterChange,
+    handleSaveEnvironmentParameter,
     handleAddEnvironment,
     handleConfirmAddEnvironment,
     handleRemoveEnvironment,
@@ -1774,7 +1775,10 @@ const App: React.FC = () => {
           </div>
         }
         open={isGlobalParamsModalVisible && canManageGlobalParams}
-        onOk={() => setIsGlobalParamsModalVisible(false)}
+        onOk={async () => {
+          await handleSaveEnvironmentParameter();
+          setIsGlobalParamsModalVisible(false);
+        }}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
         width={680}
         footer={
@@ -1802,7 +1806,10 @@ const App: React.FC = () => {
               </Button>
               <Button
                 type="primary"
-                onClick={() => setIsGlobalParamsModalVisible(false)}
+                onClick={async () => {
+                  await handleSaveEnvironmentParameter();
+                  setIsGlobalParamsModalVisible(false);
+                }}
                 style={{
                   height: 40,
                   borderRadius: 6,
@@ -2015,6 +2022,7 @@ const App: React.FC = () => {
               }}>
                 <span style={{ width: 180, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数名</span>
                 <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数值</span>
+                <span style={{ width: 200, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数描述</span>
                 <span style={{ width: 32, fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'center' }}>操作</span>
               </div>
               {getCurrentEnvironment().parameters.map((param, index) => (
@@ -2053,6 +2061,18 @@ const App: React.FC = () => {
                       flex: 1,
                       height: 36,
                       fontSize: 13,
+                    }}
+                  />
+                  <Input
+                    placeholder="参数描述"
+                    value={param.description}
+                    onChange={(e) => handleEnvironmentParameterChange(index, 'description', e.target.value)}
+                    variant="borderless"
+                    style={{
+                      width: 200,
+                      height: 36,
+                      fontSize: 13,
+                      color: '#64748b',
                     }}
                   />
                   <Tooltip title="删除此参数">

@@ -490,7 +490,11 @@
 }
 
 .mock-codemirror .cm-editor .cm-activeLine {
-  background: var(--color-primary-bg) !important;
+  background: color-mix(in srgb, var(--color-primary) 7%, transparent) !important;
+}
+
+.mock-codemirror .cm-editor .cm-selectionBackground {
+  background: color-mix(in srgb, var(--color-primary) 22%, transparent) !important;
 }
 
 /* --- Test Modal --- */

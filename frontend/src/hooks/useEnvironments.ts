@@ -5,7 +5,7 @@ import { globalParameterApi } from '../services/api';
 export interface Environment {
   id: string;
   name: string;
-  parameters: Array<{ key: string; value: string }>;
+  parameters: Array<{ key: string; value: string; description?: string }>;
   is_default?: boolean;
 }
 
@@ -105,7 +105,7 @@ export function useEnvironments(canManageGlobalParams: boolean) {
     const newEnvironments = [...environments];
     const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
     if (envIndex !== -1) {
-      const newParameters = [...newEnvironments[envIndex].parameters, { key: '', value: '' }];
+      const newParameters = [...newEnvironments[envIndex].parameters, { key: '', value: '', description: '' }];
       newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
       setEnvironments(newEnvironments);
       // 保存到后端
@@ -126,17 +126,24 @@ export function useEnvironments(canManageGlobalParams: boolean) {
     }
   }, [environments, currentEnvironmentId, saveEnvironmentToBackend]);
 
-  // 处理环境参数变更
-  const handleEnvironmentParameterChange = useCallback(async (index: number, field: 'key' | 'value', value: string) => {
-    const newEnvironments = [...environments];
-    const envIndex = newEnvironments.findIndex(env => env.id === currentEnvironmentId);
-    if (envIndex !== -1) {
-      const newParameters = [...newEnvironments[envIndex].parameters];
+  // 处理环境参数变更（仅更新本地状态，失焦时再保存）
+  const handleEnvironmentParameterChange = useCallback((index: number, field: 'key' | 'value' | 'description', value: string) => {
+    setEnvironments(prev => {
+      const envIndex = prev.findIndex(env => env.id === currentEnvironmentId);
+      if (envIndex === -1) return prev;
+      const newParameters = [...prev[envIndex].parameters];
       newParameters[index] = { ...newParameters[index], [field]: value };
+      const newEnvironments = [...prev];
       newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
-      setEnvironments(newEnvironments);
-      // 保存到后端
-      await saveEnvironmentToBackend(newEnvironments[envIndex]);
+      return newEnvironments;
+    });
+  }, [currentEnvironmentId]);
+
+  // 参数编辑失焦后保存当前环境
+  const handleSaveEnvironmentParameter = useCallback(async () => {
+    const env = environments.find(item => item.id === currentEnvironmentId);
+    if (env) {
+      await saveEnvironmentToBackend(env);
     }
   }, [environments, currentEnvironmentId, saveEnvironmentToBackend]);
 
@@ -230,6 +237,7 @@ export function useEnvironments(canManageGlobalParams: boolean) {
     handleAddEnvironmentParameter,
     handleRemoveEnvironmentParameter,
     handleEnvironmentParameterChange,
+    handleSaveEnvironmentParameter,
     handleAddEnvironment,
     handleConfirmAddEnvironment,
     handleRemoveEnvironment,

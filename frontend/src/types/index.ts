@@ -156,7 +156,7 @@ export interface SavedRequestFolder {
 export interface GlobalParameter {
   id: number;
   name: string;
-  parameters: Array<{ key: string; value: string }>;
+  parameters: Array<{ key: string; value: string; description?: string }>;
   is_default: boolean;
   user_id?: string;
   created_at: string;

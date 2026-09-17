@@ -205,10 +205,12 @@ def _substitute_builtins(text: str) -> str:
             return str(uuid.uuid4())
 
         # $randomInt(min,max) - 指定范围随机整数
-        rand_match = re.match(r"^\$randomInt\((\d+)\s*,\s*(\d+)\)$", expr)
+        rand_match = re.match(r"^\$randomInt\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$", expr)
         if rand_match:
             import random
             lo, hi = int(rand_match.group(1)), int(rand_match.group(2))
+            if lo > hi:
+                lo, hi = hi, lo
             return str(random.randint(lo, hi))
 
         # $randomInt - 0~100随机整数
