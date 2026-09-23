@@ -28,6 +28,8 @@ export const Permission = {
   MOCK_MANAGE: 'mock:manage',
   MOCK_LOG_READ: 'mock_log:read',
   MOCK_LOG_DELETE: 'mock_log:delete',
+  UI_EXECUTE: 'ui_execute:manage',
+  UI_AUTOMATION: 'ui_automation:manage',
 } as const;
 
 export type PermissionCode = (typeof Permission)[keyof typeof Permission];
@@ -55,6 +57,8 @@ const rolePermissions: Record<string, Set<PermissionCode>> = {
     Permission.IOT_UPDATE,
     Permission.IOT_DELETE,
     Permission.IOT_EXECUTE,
+    Permission.UI_EXECUTE,
+    Permission.UI_AUTOMATION,
   ]),
 };
 

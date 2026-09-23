@@ -1,38 +1,63 @@
-# Task 1 Report: infer_endpoint_dependencies() 推断函数
+# Task 1 Report: 依赖与数据模型
 
-## What Was Implemented
+## Status: DONE
 
-Added 4 functions to `backend/app/routes/testcase.py`:
+## What I implemented
 
-1. **`infer_endpoint_dependencies(session, selected_endpoint_ids, api_project_id) -> list[int]`** -- Main function that infers which "create" endpoint IDs are missing when the user selects edit/delete/detail endpoints. Returns a list of endpoint IDs to auto-add.
+All 6 steps from the brief, matching the exact values verbatim:
 
-2. **`_parse_body_fields(body) -> list[dict]`** -- Helper that parses a JSON body string into top-level field dicts.
+1. **requirements.txt** — appended `browser-use>=0.9.0` after `pdfplumber>=0.11.0` (already present in the working tree; verified exact match).
+2. **Dependency + Chromium install** — `pip install browser-use` succeeded (installed browser-use 0.13.8); `playwright install chromium` succeeded (Chromium present in `%LOCALAPPDATA%\ms-playwright`).
+3. **.gitignore** — appended the login-state cache block after the Mock CA/certs block:
+   ```
+   # UI 执行登录态缓存(storage_state,含 token,禁止入库)
+   /backend/data/browser_sessions/
+   ```
+4. **UIExecutionRecord model** — inserted in `backend/db/models.py` between `TestCase` and `RequirementPoint`, fields exactly per the brief (see below).
+5. **Smoke test** — PASS.
+6. **Commit** — `c73cfcf feat(ui-exec): browser-use 依赖与 UIExecutionRecord 模型` (exact brief message).
 
-3. **`_get_response_top_fields(response_schema) -> list[str]`** -- Helper that extracts top-level field names from a response schema dict.
+### UIExecutionRecord fields (verbatim from brief)
 
-4. **`_best_matching_create_endpoint(dependency_path, candidates)`** -- Helper that matches a dependency path to the best candidate create endpoint by path prefix similarity.
+| field | type | default | notes |
+|-------|------|---------|-------|
+| `testcase_id` | int | — | FK `testcase.id`, index |
+| `user_id` | Optional[str] | None | index |
+| `target_url` | str | `""` | |
+| `status` | str | `"RUNNING"` | RUNNING/PASSED/FAILED/ERROR |
+| `steps_trace` | List | `[]` | `sa_type=JSON` |
+| `agent_summary` | str | `""` | |
+| `error` | Optional[str] | None | |
+| `finished_at` | Optional[datetime] | None | |
+| `id`/`created_at`/`updated_at` | | | inherited from BaseModel |
 
-Also added `import json` and `import re` at the top of the file (`json` was previously only imported locally inside the `generate` function).
+No new imports were needed in `db/models.py` — `Field`, `List`, `Optional`, `datetime`, `JSON` were all already imported. Nothing extra added.
 
-## Insertion Point
+## What I tested
 
-After `router = APIRouter(prefix="/testcases", tags=["testcases"])` (line 17), before `class TestCasePage(BaseModel):` (now line 169).
+- `cd backend && .venv/Scripts/python.exe -m pytest tests/test_smoke.py -v` → **1 passed** (imports `db.models`, triggers full table registration).
+- Full suite: `cd backend && .venv/Scripts/python.exe -m pytest` → **320 passed**, 74 warnings (all pre-existing: `json_encoders` deprecation, `datetime.utcnow` deprecation, TestCase collection warning — none related to this change).
+- Direct end-to-end check: created the SQLite table from `SQLModel.metadata`, inserted a `UIExecutionRecord`, verified columns = `[id, created_at, updated_at, testcase_id, user_id, target_url, status, steps_trace, agent_summary, error, finished_at]` and defaults (`status=RUNNING`, `steps_trace=[]`, `agent_summary=''`, `error=None`, `finished_at=None`).
+- Version sanity after install: `pydantic==2.12.5`, `fastapi==0.127.0`, `langchain==1.3.0` (>=1.0.0) — no pinned dep was downgraded or removed. `browser_use.Agent` imports cleanly.
 
-## Verification
+## Files changed
 
-- **Syntax check:** `python -c "import ast; ast.parse(...)"` -- PASSED
-- **Import check:** `python -c "from app.routes.testcase import infer_endpoint_dependencies; print('Import OK')"` -- PASSED
+- `F:\VSCode\ai-generate-testcase\backend\requirements.txt` (+1 line)
+- `F:\VSCode\ai-generate-testcase\.gitignore` (+2 lines)
+- `F:\VSCode\ai-generate-testcase\backend\db\models.py` (+11 lines)
 
-## Files Changed
+## Self-review findings
 
-- `backend/app/routes/testcase.py` -- Added 159 lines (2 top-level imports + 4 functions)
+- Completeness: all 8 fields + BaseModel inheritance match the brief exactly. ✓
+- Quality: follows existing model patterns (Chinese docstrings, `Field(description=...)`, `sa_type=JSON` like `TestCase.preset_conditions`). ✓
+- Discipline: only the 3 specified files changed; nothing extra (untracked `.playwright-mcp/` and `.verify_task_id.txt` left alone). ✓
+- Testing: smoke + full suite pass; output pristine. ✓
 
-## Self-Review Findings
+## Issues / concerns
 
-No issues found. The implementation exactly matches the task brief specification. All regex patterns, data flow, and edge cases (empty inputs, type coercion, missing data) are handled per the spec.
+1. **Playwright is not a hard dependency of browser-use 0.13.8.** The brief's Step 2 assumes `python -m playwright install chromium` works right after `pip install browser-use`, but 0.13.8 resolves via `cdp-use`/`browser-harness` and does not pull in `playwright`. I installed `playwright==1.62.0` into the venv (no version conflict) so the brief's Chromium-install command could run. I did **not** add `playwright` to `requirements.txt` because the brief scopes requirements.txt to `browser-use>=0.9.0` only. **Heads-up for later tasks / fresh deploys:** if the runtime service (later tasks) calls `python -m playwright install chromium` or otherwise needs the `playwright` package, `playwright` should be added to `requirements.txt`; right now only the local venv has it.
+2. `requirements.txt` has no trailing newline (pre-existing state; the diff shows `\ No newline at end of file`). Kept as-is to match the brief's minimal edit.
 
-## Commit
+## Verdict
 
-```
-55ca565 feat: add infer_endpoint_dependencies() function for auto-inferring create endpoint dependencies
-```
+Task complete. All deliverables produced and verified. See concern #1 for the orchestrator's awareness.

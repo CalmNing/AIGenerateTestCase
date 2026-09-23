@@ -37,6 +37,13 @@ This document maps all backend APIs under `/api` to required permission codes.
 
 - `POST /api/proxy/forward` -> `iot:execute`
 
+### Push Logs (`/api/push-logs`)
+
+- `GET /api/push-logs` -> `iot:read`
+- `GET /api/push-logs/{log_id}` -> `iot:read`
+- `DELETE /api/push-logs/{log_id}` -> `iot:delete`
+- `DELETE /api/push-logs` -> `iot:delete`
+
 ### Testcase (`/api/testcases`)
 
 - `GET /api/testcases/{session_id}/testcases` -> `testcase:read`

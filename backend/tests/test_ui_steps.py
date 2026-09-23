@@ -1,5 +1,5 @@
 """UI steps 归一化与 URL 拼接的纯函数测试(spec §4/§5)。"""
-from app.services.ui_steps import normalize_ui_steps, has_api_call_step, build_target_url
+from app.services.ui_steps import normalize_ui_steps, has_api_call_step, build_target_url, normalize_url
 
 
 class TestNormalizeUiSteps:
@@ -68,3 +68,23 @@ class TestBuildTargetUrl:
 
     def test_bare_path_gets_slash(self):
         assert build_target_url("http://a.com", "login") == "http://a.com/login"
+
+
+class TestNormalizeUrl:
+    def test_collapses_double_slash_in_path(self):
+        assert normalize_url("http://host//#/home/x") == "http://host/#/home/x"
+
+    def test_keeps_single_slash(self):
+        assert normalize_url("http://host/#/home") == "http://host/#/home"
+
+    def test_empty_path_ok(self):
+        assert normalize_url("http://host") == "http://host"
+
+    def test_preserves_query_and_hash(self):
+        assert normalize_url("http://host//a?x=1//y#/h//z") == "http://host/a?x=1//y#/h//z"
+
+    def test_no_scheme_still_collapses(self):
+        assert normalize_url("//host/path") == "/host/path"
+
+    def test_empty_passthrough(self):
+        assert normalize_url("") == ""

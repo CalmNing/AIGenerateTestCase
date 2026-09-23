@@ -18,6 +18,14 @@ from db.db import create_db_and_tables
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时建表/迁移、同步 Keycloak 角色、启动定时任务、恢复 Mock 代理；关闭时逐一停止。"""
     create_db_and_tables()
+    # 服务重启会丢失内存任务:把中断的 UI 自动化运行标记为 ERROR,避免前端永久轮询
+    try:
+        from app.services.page_object_runner import fail_orphan_runs
+        failed = fail_orphan_runs()
+        if failed:
+            logger.info("已将 %s 条中断的 UI 自动化运行标记为 ERROR", failed)
+    except Exception as exc:  # noqa: BLE001 - 清理失败不影响启动
+        logger.warning("清理中断的 UI 自动化运行失败(不影响主服务): %s", exc)
     sync_keycloak_roles()
     from app.scheduler import scheduler, load_all_jobs
     scheduler.start()

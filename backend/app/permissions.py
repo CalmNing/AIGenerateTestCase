@@ -33,6 +33,7 @@ class Permission:
     MOCK_LOG_READ = "mock_log:read"
     MOCK_LOG_DELETE = "mock_log:delete"
     UI_EXECUTE = "ui_execute:manage"
+    UI_AUTOMATION = "ui_automation:manage"
 
 
 ADMIN_PERMISSIONS = {
@@ -63,6 +64,7 @@ ADMIN_PERMISSIONS = {
     Permission.MOCK_LOG_READ,
     Permission.MOCK_LOG_DELETE,
     Permission.UI_EXECUTE,
+    Permission.UI_AUTOMATION,
 }
 
 ALL_PERMISSIONS = {
@@ -80,6 +82,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.TESTCASE_DELETE,
         Permission.TESTCASE_GENERATE,
         Permission.UI_EXECUTE,
+        Permission.UI_AUTOMATION,
         Permission.SESSION_READ,
         Permission.SESSION_CREATE,
         Permission.SESSION_UPDATE,

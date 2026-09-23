@@ -1,29 +1,53 @@
-# Task 2 Report: Integrate Dependency Inference into Generation Flow
+# Task 2 Report: steps 归一化与 URL 拼接(纯函数)
 
-## What You Implemented
+## What I implemented
+Created two pure-function modules per the brief (verbatim):
 
-Called `infer_endpoint_dependencies()` (added in Task 1) from the `generate_testcases` endpoint in `backend/app/routes/testcase.py`, with two changes:
+- `backend/app/services/ui_steps.py` — three functions:
+  - `normalize_ui_steps(steps: list) -> tuple[list[str], bool]` — normalizes 3 step formats (plain str pass-through; pipeline dict → `str(step["action"])`; api_call dict flagged & skipped) into UI-executable text actions + api_call flag.
+  - `has_api_call_step(steps: list) -> bool` — any api_call dict → True.
+  - `build_target_url(site_origin, page_path) -> str` — origin strip trailing slash; empty path → origin only; `#`/`/`-prefixed path → `origin + path`; else `origin + "/" + path`.
+  - Private helper `_is_api_call_step` shares口径 with `pipeline_runner._is_pipeline_api_call_step`.
+- `backend/tests/test_ui_steps.py` — 13 tests (6 normalize / 3 has_api_call / 4 build_target_url).
 
-1. **Change 1 — Dependency inference after endpoint parsing**: After `api_endpoint_ids` is parsed from the comma-separated string, `infer_endpoint_dependencies()` is called when both `api_endpoint_ids` and `api_project_id` are present. Any newly discovered IDs are appended to `api_endpoint_ids`, and a `dependency_labels` dict tracks which endpoints were auto-added. A log message records the count and IDs of补全 endpoints.
+## TDD Evidence
 
-2. **Change 2 — Label in API context**: When building the API context text for the LLM prompt, auto-added dependency endpoints are marked with `[依赖补全]` in their section header (e.g. `===== [1] 创建用户 [依赖补全] =====`), so the model can distinguish user-selected endpoints from auto-inferred ones.
+### RED
+Command: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_ui_steps.py -v`
 
-## What You Tested and Test Results
+Output (abridged):
+```
+collected 0 items / 1 error
+tests\test_ui_steps.py:2: in <module>
+    from app.services.ui_steps import normalize_ui_steps, has_api_call_step, build_target_url
+E   ModuleNotFoundError: No module named 'app.services.ui_steps'
+==================== 51 warnings, 1 error in 0.58s ====================
+```
+Why expected: implementation file did not exist yet, so the import at module top fails during collection.
 
-- **Syntax check**: `python -c "import ast; ast.parse(...)"` — passed with `Syntax OK`.
-- No other automated tests exist for this endpoint (per CLAUDE.md: "后端暂无自动化测试").
+### GREEN
+Command: `cd backend && .venv/Scripts/python.exe -m pytest tests/test_ui_steps.py -v`
 
-## Files Changed
+Output:
+```
+collected 13 items
+13 passed, 51 warnings in 0.07s
+```
+All 13 tests pass. (51 warnings are pre-existing pydantic `json_encoders` deprecation warnings, unrelated.)
 
-- `backend/app/routes/testcase.py` — 14 lines added, 1 line modified (commit `b4b359e`)
+## Files changed
+- Created `backend/app/services/ui_steps.py` (58 lines)
+- Created `backend/tests/test_ui_steps.py` (70 lines)
 
-## Self-Review Findings
+Commit: `c1e6417` "feat(ui-exec): steps 归一化与目标 URL 拼接纯函数" — verified via `git show --stat HEAD` that only these 2 files are in the commit (128 insertions).
 
-- The `dependency_labels` dict is declared before the endpoint context-building loop, so it is properly scoped and accessible at both insertion points.
-- `infer_endpoint_dependencies` is imported at the top of the file (added by Task 1) and available at the call site.
-- Appending to `api_endpoint_ids` (a local list) is safe — the loop iterates over it using `enumerate`, so newly added items are included in context generation.
-- No concerns found.
+## Self-review findings
+- Signatures match the brief's Interfaces section exactly (`normalize_ui_steps`, `has_api_call_step`, `build_target_url`) — downstream runner/routes tasks can import them as specified.
+- Behavior cross-checked against spec:
+  - Strings pass through (implementation `.strip()`s, which the tests rely on for `"  "` → skipped); dict without `action` and non-str/non-dict garbage skipped; empty strings skipped; api_call dicts both flagged and excluded from actions.
+  - `build_target_url` handles origin trailing slash, empty path, hash path, slash path, bare path — all 4 test cases pass.
+- No lint concerns (pure Python, type-annotated). No frontend impact.
+- Note: `_is_api_call_step` treats `endpoint_id: 0` as NOT api_call (uses `is not None`). This is verbatim from the plan's implementation and matches the stated口径, so left as-is.
 
-## Issues or Concerns
-
-None.
+## Concerns
+- None. The LF→CRLF git warnings on commit are benign Windows line-ending normalization.

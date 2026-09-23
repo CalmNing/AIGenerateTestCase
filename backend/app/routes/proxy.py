@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -11,7 +12,7 @@ from sqlmodel import Session, select
 import httpx
 
 from app.deps import get_db
-from db.models import GlobalParameter, MockConfig
+from db.models import GlobalParameter, MockConfig, PushLog
 from app.deps import CurrentUser
 from app.permissions import Permission, get_user_permissions
 from utils.base_response import Response
@@ -306,6 +307,63 @@ class TestVariableRequest(BaseModel):
     environment_id: Optional[int] = None
 
 
+def _body_to_text(data) -> Optional[str]:
+    """把请求/响应体统一序列化为文本，便于落库展示"""
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(data)
+
+
+def _save_push_log(
+    db: Session,
+    *,
+    user: CurrentUser,
+    request: ProxyRequest,
+    environment_id: Optional[int],
+    final_url: str,
+    final_headers: Optional[dict],
+    final_params: Optional[dict],
+    final_data,
+    duration_ms: int,
+    response_status: int = 0,
+    response_headers: Optional[dict] = None,
+    response_body=None,
+    mocked: bool = False,
+    error: Optional[str] = None,
+):
+    """持久化一条推送请求记录（原始 + 解析后），失败只告警不阻断转发"""
+    try:
+        log = PushLog(
+            request_method=(request.method or "GET").upper(),
+            source_url=request.url or "",
+            final_url=final_url or "",
+            request_headers=request.headers or {},
+            final_headers=final_headers or {},
+            request_params=request.params or {},
+            final_params=final_params or {},
+            request_body=_body_to_text(request.data),
+            final_body=_body_to_text(final_data),
+            response_status=response_status,
+            response_headers=response_headers or {},
+            response_body=_body_to_text(response_body),
+            mocked=mocked,
+            error=error,
+            duration_ms=duration_ms,
+            environment_id=environment_id,
+            user_id=getattr(user, "user_id", None),
+        )
+        db.add(log)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - 记录失败不影响转发
+        db.rollback()
+        logger.warning("保存推送请求记录失败: %s", exc)
+
+
 @router.post("/forward")
 async def forward_request(
     request: ProxyRequest,
@@ -313,6 +371,7 @@ async def forward_request(
     db: Session = Depends(get_db),
 ):
     """转发请求到目标URL，支持参数变量替换"""
+    start_time = time.perf_counter()
     # 构建参数映射表
     environment_id = request.environment_id
     if environment_id and Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user):
@@ -329,9 +388,18 @@ async def forward_request(
     final_params = substitute_in_params(request.params, param_map, unresolved)
     final_data = substitute_in_data(request.data, param_map, unresolved)
 
+    def _elapsed_ms() -> int:
+        return int((time.perf_counter() - start_time) * 1000)
+
     # 检查是否有未解析的用户变量
     if unresolved:
         unresolved_list = ", ".join(sorted(unresolved))
+        _save_push_log(
+            db, user=user, request=request, environment_id=environment_id,
+            final_url=final_url, final_headers=final_headers, final_params=final_params,
+            final_data=final_data, duration_ms=_elapsed_ms(),
+            error=f"以下变量未在环境参数中定义: {unresolved_list}",
+        )
         raise HTTPException(
             status_code=400,
             detail=f"以下变量未在环境参数中定义: {unresolved_list}",
@@ -340,15 +408,29 @@ async def forward_request(
                      final_url, request.method, final_headers, final_params, final_data)
     logger.info("final_data_type: %s", type(final_data))
     if not is_valid_url(final_url):
+        _save_push_log(
+            db, user=user, request=request, environment_id=environment_id,
+            final_url=final_url, final_headers=final_headers, final_params=final_params,
+            final_data=final_data, duration_ms=_elapsed_ms(), error="Invalid URL",
+        )
         raise HTTPException(status_code=400, detail="Invalid URL")
 
     # 检查是否有匹配的 Mock 配置，优先返回 Mock 响应
     mock_result = try_mock_response(db, request.method, request.url, param_map, unresolved)
     if mock_result:
+        _save_push_log(
+            db, user=user, request=request, environment_id=environment_id,
+            final_url=final_url, final_headers=final_headers, final_params=final_params,
+            final_data=final_data, duration_ms=_elapsed_ms(),
+            response_status=mock_result.get("status_code", 0),
+            response_headers=mock_result.get("headers") or {},
+            response_body=mock_result.get("data"),
+            mocked=True,
+        )
         return mock_result
 
     async with httpx.AsyncClient() as client:
-        
+
         try:
             response = await client.request(
                 method=request.method,
@@ -366,12 +448,26 @@ async def forward_request(
             except Exception:
                 response_data = response.text
 
+            _save_push_log(
+                db, user=user, request=request, environment_id=environment_id,
+                final_url=final_url, final_headers=final_headers, final_params=final_params,
+                final_data=final_data, duration_ms=_elapsed_ms(),
+                response_status=response.status_code,
+                response_headers=dict(response.headers),
+                response_body=response_data,
+            )
             return {
                 "status_code": response.status_code,
                 "headers": dict(response.headers),
                 "data": response_data
             }
         except Exception as e:
+            _save_push_log(
+                db, user=user, request=request, environment_id=environment_id,
+                final_url=final_url, final_headers=final_headers, final_params=final_params,
+                final_data=final_data, duration_ms=_elapsed_ms(),
+                error=f"Proxy error: {str(e)}",
+            )
             raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
 
 

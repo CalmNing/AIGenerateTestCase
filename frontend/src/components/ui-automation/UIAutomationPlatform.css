@@ -1,0 +1,106 @@
+.ui-auto-layout {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  height: calc(100vh - var(--header-height));
+  box-sizing: border-box;
+}
+
+.ui-auto-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+
+/* 侧栏溢出时列表自然增高由外层滚动,头部/搜索框/按钮不允许被 flex 纵向压缩 */
+.ui-auto-sidebar > * {
+  flex-shrink: 0;
+}
+
+.ui-auto-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.ui-auto-list-item {
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  padding: 8px 10px !important;
+  border-left: 3px solid transparent;
+  transition: background 150ms ease, box-shadow 150ms ease;
+}
+
+.ui-auto-list-item:hover {
+  background: var(--color-bg);
+}
+
+.ui-auto-list-item.is-active {
+  background: var(--color-primary-bg);
+  border-left-color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--color-primary-border);
+}
+
+/* 侧栏分页:强制单行不换行(simple 箭头 + 页码指示 + 条数选择器同排) */
+.ui-auto-pageobj-list .ant-list-pagination .ant-pagination {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  column-gap: 4px;
+}
+
+.ui-auto-pageobj-list .ant-list-pagination .ant-pagination-options {
+  flex-shrink: 0;
+  margin-inline-start: 0;
+}
+
+/* 「登录页对象」伪 addon:与 antd Input addonBefore 视觉对齐 */
+.ui-auto-addon {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid var(--color-border);
+  border-right: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: var(--color-bg);
+  font-size: var(--font-size-base);
+  white-space: nowrap;
+}
+
+/* 详情头 URL 单行截断,悬停 Tooltip 看全文 */
+.ui-auto-detail-url {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.ui-auto-detail {
+  flex: 1;
+  min-width: 0;
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.ui-auto-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}

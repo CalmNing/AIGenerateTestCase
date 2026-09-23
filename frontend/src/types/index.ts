@@ -169,7 +169,7 @@ export interface UIExecutionRecord {
   testcase_id: number;
   user_id?: string;
   target_url: string;
-  status: 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR';
+  status: 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR' | 'STOPPED';
   steps_trace: Array<{ step_no: number; action: string; result?: string; url?: string }>;
   agent_summary: string;
   error?: string | null;
@@ -185,9 +185,123 @@ export interface UIExecutionTaskStatus {
   progress: number;
   message: string;
   record_id: number;
-  result_status: 'PASSED' | 'FAILED' | 'ERROR' | null;
+  result_status: 'PASSED' | 'FAILED' | 'ERROR' | 'STOPPED' | null;
   error: string | null;
   created_at: string;
+}
+
+// UI 自动化工具:页面对象与元素
+export interface PageLocator {
+  strategy: 'testid' | 'role' | 'label' | 'aria-label' | 'placeholder' | 'name' | 'id' | 'text' | 'css' | 'xpath';
+  value: string;
+  stability: number;
+}
+
+export interface PageElement {
+  key: string;
+  name: string;
+  type: string;
+  description?: string;
+  enabled?: boolean;
+  fingerprint?: Record<string, string>;
+  locators: PageLocator[];
+  /** 探针来源触发词(新增/编辑/删除等),前端据此分组展示;基线元素为空 */
+  probeTrigger?: string;
+  heal_count?: number;
+  last_healed_at?: string | null;
+}
+
+export interface PageObject {
+  id: number;
+  name: string;
+  site_origin: string;
+  page_path: string;
+  url: string;
+  description: string;
+  elements: PageElement[];
+  /** 执行(自愈)步骤(持久化):登录页对象据此完成登录,执行时无需每次重填 */
+  steps: Array<Record<string, any>>;
+  /** 作为登录页对象:其他页面对象可关联它复用登录态,并调用其步骤完成登录 */
+  is_login_page: boolean;
+  /** 关联的登录页对象ID:抽取/验证/执行前确保其登录态可用(没有就先执行它的步骤登录) */
+  login_page_object_id?: number | null;
+  session_status: 'NONE' | 'READY' | 'FAILED';
+  session_cookie_count: number;
+  session_origin_count: number;
+  session_path?: string;
+  session_updated_at?: string | null;
+  last_login_at?: string | null;
+  last_login_error?: string | null;
+  user_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 页面对象登录态视图(接口返回,不含 cookie/token 明文) */
+export interface PageObjectSession {
+  page_object_id: number;
+  is_login_page: boolean;
+  login_page_object_id?: number | null;
+  session_path: string;
+  session_status: 'NONE' | 'READY' | 'FAILED';
+  session_ready: boolean;
+  session_cookie_count: number;
+  session_origin_count: number;
+  session_updated_at?: string | null;
+  last_login_at?: string | null;
+  last_login_error?: string | null;
+}
+
+export interface UIAutomationRun {
+  id: number;
+  page_object_id?: number | null;
+  user_id?: string;
+  run_type: 'extract' | 'validate' | 'execute';
+  target_url: string;
+  status: 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR' | 'STOPPED';
+  steps: Array<Record<string, any>>;
+  steps_trace: Array<Record<string, any>>;
+  heal_events: Array<Record<string, any>>;
+  result: Record<string, any>;
+  summary: string;
+  error?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UIAutomationTaskStatus {
+  task_id: string;
+  status: 'running' | 'done';
+  phase: 'queued' | 'launching_browser' | 'logging_in' | 'extracting' | 'naming' | 'validating' | 'executing' | 'persisting' | 'done';
+  progress: number;
+  message: string;
+  record_id: number;
+  run_type: 'extract' | 'validate' | 'execute' | 'login';
+  result_status: 'PASSED' | 'FAILED' | 'ERROR' | 'STOPPED' | null;
+  error: string | null;
+  page_object_id: number | null;
+  /** 抽取时发现「界面上可见却没被采集」的元素(诊断提示,最多 20 条) */
+  uncollected?: Array<{
+    tag: string;
+    class?: string;
+    text?: string;
+    name?: string;
+    cssPath?: string;
+    frame?: string;
+  }>;
+  uncollected_count?: number;
+  created_at: string;
+}
+
+export interface UIAutomationLoginConfig {
+  login_url?: string;
+  login_method?: string;
+  login_username?: string;
+  login_password?: string;
+  login_company?: string;
+  /** 关联的登录页对象ID:有登录态直接复用,没有就先执行它的登录步骤再继续 */
+  login_page_object_id?: number | null;
 }
 
 // 代理请求类型
@@ -324,6 +438,30 @@ export interface MockLogItem {
   response_headers: Array<{ key: string; value: string }>;
   response_body?: string | null;
   matched: boolean;
+  user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// IoT 推送请求记录（原始请求 + 变量替换后的解析结果）
+export interface PushLogItem {
+  id: number;
+  request_method: string;
+  source_url: string;
+  final_url: string;
+  request_headers: Record<string, string>;
+  final_headers: Record<string, string>;
+  request_params: Record<string, string>;
+  final_params: Record<string, string>;
+  request_body?: string | null;
+  final_body?: string | null;
+  response_status: number;
+  response_headers: Record<string, string>;
+  response_body?: string | null;
+  mocked: boolean;
+  error?: string | null;
+  duration_ms: number;
+  environment_id?: number | null;
   user_id?: string | null;
   created_at: string;
   updated_at: string;

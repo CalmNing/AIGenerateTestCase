@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Empty, Input, Modal, Progress, Table, TableProps, Tabs, Tag, Tooltip, message } from 'antd';
-import { PlayCircleOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import { TestCase, UIExecutionRecord, UIExecutionTaskStatus } from '../../types';
-import { globalParameterApi, uiExecutionApi } from '../../services/api';
+import { globalParameterApi, uiExecutionApi, UILoginConfig } from '../../services/api';
 
 /** 判断用例是否可执行 UI(无 API 调用步骤) */
 export const isUiExecutable = (testcase: TestCase): boolean => {
@@ -20,6 +20,7 @@ const statusColorMap: Record<UIExecutionRecord['status'], string> = {
   PASSED: 'success',
   FAILED: 'error',
   ERROR: 'warning',
+  STOPPED: 'default',
   RUNNING: 'processing',
 };
 
@@ -38,7 +39,7 @@ interface UIExecutionModalProps {
 }
 
 interface TerminalState {
-  result_status: 'PASSED' | 'FAILED' | 'ERROR';
+  result_status: 'PASSED' | 'FAILED' | 'ERROR' | 'STOPPED';
   message: string;
 }
 
@@ -77,7 +78,14 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
   const [siteOrigin, setSiteOrigin] = useState('');
   const [pagePath, setPagePath] = useState('');
   const [hasCredentials, setHasCredentials] = useState<boolean | null>(null);
+  const [loginUrl, setLoginUrl] = useState('');
+  const [loginMethod, setLoginMethod] = useState('');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginCompany, setLoginCompany] = useState('');
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [progress, setProgress] = useState<UIExecutionTaskStatus | null>(null);
   const [terminal, setTerminal] = useState<TerminalState | null>(null);
   const [records, setRecords] = useState<UIExecutionRecord[]>([]);
@@ -116,17 +124,36 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
     originTouchedRef.current = hasLast;
     setProgress(null);
     setRunning(false);
+    setStopping(false);
+    setCurrentTaskId(null);
     setTerminal(null);
     setHasCredentials(null);
+    setLoginUrl('');
+    setLoginMethod('');
+    setLoginUsername('');
+    setLoginPassword('');
+    setLoginCompany('');
     globalParameterApi
       .getEnvironments()
       .then((res) => {
         const env = (res.data ?? []).find((e) => e.is_default) ?? (res.data ?? [])[0];
         if (!env) return;
-        const webUrl = env.parameters.find((p) => p.key === 'web_url')?.value ?? '';
+        const params = env.parameters;
+        const valueOf = (key: string) => params.find((p) => p.key === key)?.value ?? '';
+        const webUrl = valueOf('web_url');
         // localStorage 优先;用户已手动输入时不覆盖;仅二者皆无时才用默认环境 web_url 预填
         setSiteOrigin((prev) => (originTouchedRef.current || prev.trim() ? prev : webUrl));
-        setHasCredentials(!!env.parameters.find((p) => p.key === 'test_username')?.value);
+        // 登录配置:从全局参数预填,可在本次执行直接修改/覆盖
+        setLoginUrl(valueOf('test_login_url'));
+        setLoginMethod(valueOf('test_login_method'));
+        setLoginUsername(valueOf('test_username'));
+        setLoginPassword(valueOf('test_password'));
+        setLoginCompany(valueOf('test_company'));
+        setHasCredentials(
+          ['test_login_url', 'test_login_method', 'test_username', 'test_password', 'test_company'].some(
+            (k) => !!valueOf(k)
+          )
+        );
       })
       .catch(() => setHasCredentials(null));
     uiExecutionApi
@@ -159,6 +186,7 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
       if (!result && task.status !== 'done') return; // 非终态,忽略
       stopPolling();
       setRunning(false);
+      setStopping(false);
       setProgress(task);
       // 刷新执行历史:ERROR 终态也刷新,避免 执行历史 Tab 数据陈旧
       let refreshed: UIExecutionRecord[] = [];
@@ -173,6 +201,8 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
       }
       if (result === 'ERROR' || !result) {
         setTerminal({ result_status: 'ERROR', message: task.error || task.message || '执行出错' });
+      } else if (result === 'STOPPED') {
+        setTerminal({ result_status: 'STOPPED', message: task.message || '用户已停止执行' });
       } else if (testcaseId !== undefined) {
         const rec = task.record_id != null ? refreshed.find((r) => r.id === task.record_id) : undefined;
         setTerminal({
@@ -196,7 +226,13 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
       return;
     }
     try {
-      const res = await uiExecutionApi.run(testcaseId, siteOrigin.trim(), pagePath.trim());
+      const login: UILoginConfig = {};
+      if (loginUrl.trim()) login.login_url = loginUrl.trim();
+      if (loginMethod.trim()) login.login_method = loginMethod.trim();
+      if (loginUsername.trim()) login.login_username = loginUsername.trim();
+      if (loginPassword) login.login_password = loginPassword;
+      if (loginCompany.trim()) login.login_company = loginCompany.trim();
+      const res = await uiExecutionApi.run(testcaseId, siteOrigin.trim(), pagePath.trim(), login);
       if (res.code !== 200 || !res.data) {
         message.error(res.message || '发起执行失败');
         return;
@@ -208,7 +244,9 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
       setTerminal(null);
       setProgress(null);
       setRunning(true);
+      setStopping(false);
       const taskId = res.data.task_id;
+      setCurrentTaskId(taskId);
       pollRef.current = setInterval(async () => {
         if (testcaseId === undefined) return;
         try {
@@ -226,6 +264,22 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
       }, 2000);
     } catch (e: any) {
       message.error(e?.response?.data?.detail || '发起执行失败');
+    }
+  };
+
+  const handleStop = async () => {
+    if (!currentTaskId || stopping) return;
+    setStopping(true);
+    try {
+      const res = await uiExecutionApi.stop(currentTaskId);
+      if (res.code !== 200 || !res.data?.stopped) {
+        message.info(res.message || '任务已结束');
+        setStopping(false);
+      }
+      // 成功:保持 stopping,等轮询拿到 STOPPED 终态后由 handleTerminal 复位
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '停止失败');
+      setStopping(false);
     }
   };
 
@@ -268,6 +322,8 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
   ];
 
   const presetConditions = testcase?.preset_conditions ?? [];
+  // 登录是否有效:显式登录入口 或 完整账号密码(与后端 LoginContext.hint 分支一致)
+  const loginConfigured = !!loginUrl.trim() || !!(loginUsername && loginPassword);
 
   const runTab = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -276,7 +332,7 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
         <Input
           value={siteOrigin}
           onChange={(e) => setSiteOrigin(e.target.value)}
-          placeholder="https://example.com"
+          placeholder="https://example.com 或 {{web_url}}"
           disabled={running}
           allowClear
         />
@@ -287,6 +343,57 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
           value={pagePath}
           onChange={(e) => setPagePath(e.target.value)}
           placeholder="/path/to/page (可留空)"
+          disabled={running}
+          allowClear
+        />
+      </div>
+      <div
+        style={{
+          border: '1px solid #f0f0f0',
+          borderRadius: 6,
+          padding: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        <div style={{ fontWeight: 500 }}>登录配置(可选,留空回退全局参数)</div>
+        <Input
+          addonBefore="登录入口"
+          value={loginUrl}
+          onChange={(e) => setLoginUrl(e.target.value)}
+          placeholder="SSO/登录页直链,如 http://host/sso/"
+          disabled={running}
+          allowClear
+        />
+        <Input
+          addonBefore="登录方式"
+          value={loginMethod}
+          onChange={(e) => setLoginMethod(e.target.value)}
+          placeholder="如 鲁班通行证登录"
+          disabled={running}
+          allowClear
+        />
+        <Input
+          addonBefore="用户名"
+          value={loginUsername}
+          onChange={(e) => setLoginUsername(e.target.value)}
+          placeholder="登录账号"
+          disabled={running}
+          allowClear
+        />
+        <Input.Password
+          addonBefore="密码"
+          value={loginPassword}
+          onChange={(e) => setLoginPassword(e.target.value)}
+          placeholder="登录密码"
+          disabled={running}
+        />
+        <Input
+          addonBefore="企业"
+          value={loginCompany}
+          onChange={(e) => setLoginCompany(e.target.value)}
+          placeholder="登录后企业选择,如 建设集团公司"
           disabled={running}
           allowClear
         />
@@ -305,12 +412,19 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
           }
         />
       ) : null}
-      {hasCredentials === true ? (
-        <Alert type="success" showIcon message="已配置登录凭证,Agent 将按需自动登录" />
-      ) : null}
-      {hasCredentials === false ? (
-        <Alert message="未配置 test_username/test_password 环境参数,目标系统需登录时请先在全局参数中配置" />
-      ) : null}
+      {hasCredentials === null ? null : loginConfigured ? (
+        <Alert
+          type="success"
+          showIcon
+          message="已配置登录参数,Agent 将按配置登录,不会猜测其他账号密码"
+        />
+      ) : (
+        <Alert
+          type="warning"
+          showIcon
+          message="未配置登录参数:目标系统需登录时请填写登录入口/用户名/密码,或先在全局参数中配置"
+        />
+      )}
       {running ? (
         progress ? (
           <div style={{ textAlign: 'center' }}>
@@ -328,20 +442,29 @@ const UIExecutionModal: React.FC<UIExecutionModalProps> = ({ open, testcase, onC
           <Alert type="success" showIcon message="执行成功" description={terminal.message} />
         ) : terminal.result_status === 'FAILED' ? (
           <Alert type="error" showIcon message="执行失败" description={terminal.message} />
+        ) : terminal.result_status === 'STOPPED' ? (
+          <Alert type="warning" showIcon message="执行已停止" description={terminal.message} />
         ) : (
           <Alert type="warning" showIcon message="执行出错" description={terminal.message} />
         )
       ) : null}
-      <Button
-        type="primary"
-        icon={<PlayCircleOutlined />}
-        loading={running}
-        disabled={running}
-        block
-        onClick={startExecution}
-      >
-        开始执行
-      </Button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button
+          type="primary"
+          icon={<PlayCircleOutlined />}
+          loading={running}
+          disabled={running}
+          block
+          onClick={startExecution}
+        >
+          开始执行
+        </Button>
+        {running ? (
+          <Button danger icon={<StopOutlined />} loading={stopping} disabled={stopping} onClick={handleStop}>
+            停止执行
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 

@@ -1,6 +1,8 @@
 """UIExecutionRunner 编排测试:stub agent_factory,不碰真浏览器/真 LLM(spec §11)。"""
 import asyncio
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -80,6 +82,91 @@ class TestBuildUiPrompt:
         prompt = ba.build_ui_prompt("http://a.com", ["步骤1"], ["预期1"], [], ctx)
         assert "账号" not in prompt and "密码" not in prompt
 
+    def test_explicit_login_entry_with_credentials(self):
+        """显式配置登录入口/方式/凭证:prompt 必须给出确切入口与方式,并禁止猜测。"""
+        ctx = ba.LoginContext(
+            logged_in_cache=False,
+            username="tester",
+            password="secret",
+            login_url="http://192.168.13.178:8182/sso/",
+            login_method="鲁班通行证登录",
+        )
+        prompt = ba.build_ui_prompt("http://a.com", ["步骤1"], ["预期1"], [], ctx)
+        assert "http://192.168.13.178:8182/sso/" in prompt
+        assert "鲁班通行证登录" in prompt
+        assert "tester" in prompt and "secret" in prompt
+        assert "不要猜测" in prompt
+
+    def test_explicit_login_entry_cached_branch(self):
+        ctx = ba.LoginContext(
+            logged_in_cache=True,
+            username="tester",
+            password="secret",
+            login_url="http://sso.example.com/login",
+            login_method="统一身份认证",
+        )
+        prompt = ba.build_ui_prompt("http://a.com", ["步骤1"], ["预期1"], [], ctx)
+        assert "已持有登录态" in prompt
+        assert "重新登录" in prompt
+        assert "http://sso.example.com/login" in prompt
+
+    def test_explicit_login_entry_without_credentials_refuses_guessing(self):
+        """只有登录入口、无凭证时:必须明确禁止猜测,并要求把前置条件不满足写入判定。"""
+        ctx = ba.LoginContext(
+            logged_in_cache=False,
+            login_url="http://sso.example.com/login",
+            login_method="统一身份认证",
+        )
+        prompt = ba.build_ui_prompt("http://a.com", ["步骤1"], ["预期1"], [], ctx)
+        assert "http://sso.example.com/login" in prompt
+        assert "统一身份认证" in prompt
+        assert "不要猜测" in prompt
+        assert "前置条件不满足" in prompt
+
+    def test_url_is_isolated_on_own_line(self):
+        """目标 URL 独立成行:避免 Agent 把 URL 与后续说明连读导致路由被截断。"""
+        ctx = ba.LoginContext()
+        prompt = ba.build_ui_prompt("http://a.com#/x/y", ["步骤1"], ["预期1"], [], ctx)
+        assert "目标页面地址(完整 URL" in prompt
+        assert "http://a.com#/x/y" in prompt
+        # URL 后必须换行,不能紧跟后续文字
+        assert "http://a.com#/x/y\n" in prompt
+
+    def test_post_login_navigation_and_company_selection(self):
+        """登录成功后要选择企业,并重新导航回目标页面(修复登录后跳工作台)。"""
+        ctx = ba.LoginContext(
+            logged_in_cache=False,
+            username="anning",
+            password="pw",
+            login_url="http://a.com/sso/",
+            company="建设集团公司",
+        )
+        prompt = ba.build_ui_prompt(
+            "http://a.com#/home/cmp/contractRegistration", ["步骤1"], ["预期1"], [], ctx
+        )
+        assert "登录成功后的收尾" in prompt
+        assert "建设集团公司" in prompt
+        assert "重新访问目标页面地址 http://a.com#/home/cmp/contractRegistration" in prompt
+        assert "第 1 步开始执行" in prompt
+        # 工作台不是目标页;必须强制重新导航,避免登录后停在工作台
+        assert "不是用例目标页" in prompt
+        assert "必须立即重新访问" in prompt
+
+    def test_no_login_config_no_post_login_hint(self):
+        ctx = ba.LoginContext()
+        prompt = ba.build_ui_prompt("http://a.com", ["步骤1"], ["预期1"], [], ctx)
+        assert "登录成功后的收尾" not in prompt
+        assert "重新访问目标页面地址" not in prompt
+
+    def test_prompt_instructs_new_tab_and_wait(self):
+        """点击后可能开新标签页/弹窗:prompt 必须给出切换与等待指引,避免停在原列表页。"""
+        ctx = ba.LoginContext()
+        prompt = ba.build_ui_prompt("http://a.com", ["点击新增", "上传文件"], ["表单打开"], [], ctx)
+        assert "操作约定" in prompt
+        assert "新标签页" in prompt
+        assert "切换到新标签页" in prompt
+        assert "不要在同一步骤上反复重试" in prompt
+
 
 class TestResolveLoginContext:
     def test_reads_credentials_and_cache_flag(self, db_session, tmp_path, monkeypatch):
@@ -90,7 +177,10 @@ class TestResolveLoginContext:
         ))
         db_session.commit()
         cache_file = tmp_path / "http_192.168.13.178_8182.json"
-        cache_file.write_text("{}", encoding="utf-8")
+        cache_file.write_text(
+            json.dumps({"cookies": [{"name": "sid", "value": "x"}], "origins": []}),
+            encoding="utf-8",
+        )
         monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
 
         param_map = {"test_username": "tester", "test_password": "secret"}
@@ -99,11 +189,82 @@ class TestResolveLoginContext:
         assert ctx.password == "secret"
         assert ctx.logged_in_cache is True
 
+    def test_empty_cache_file_is_not_logged_in(self, db_session, tmp_path, monkeypatch):
+        """空缓存文件(0 cookies/0 origins)不代表持有登录态,不能据此告诉 Agent「已登录」。"""
+        (tmp_path / "http_a.com.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        ctx, _vars = ba.resolve_login_context(db_session, {}, "http://a.com")
+        assert ctx.logged_in_cache is False
+
     def test_no_cache_no_creds(self, db_session, tmp_path, monkeypatch):
         monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
         ctx, _vars = ba.resolve_login_context(db_session, {}, "http://a.com")
         assert ctx.username == ""
         assert ctx.logged_in_cache is False
+        assert ctx.login_url == "" and ctx.login_method == ""
+
+    def test_reads_explicit_login_entry_and_method(self, db_session, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        param_map = {
+            "test_username": "tester",
+            "test_password": "secret",
+            "test_login_url": "http://192.168.13.178:8182/sso/",
+            "test_login_method": "鲁班通行证登录",
+            "test_company": "建设集团公司",
+        }
+        ctx, _vars = ba.resolve_login_context(
+            db_session, param_map, "http://192.168.13.178:8182"
+        )
+        assert ctx.login_url == "http://192.168.13.178:8182/sso/"
+        assert ctx.login_method == "鲁班通行证登录"
+        assert ctx.company == "建设集团公司"
+        assert ctx.has_credentials is True
+
+    def test_login_keys_tolerate_whitespace_and_case(self, db_session, tmp_path, monkeypatch):
+        """实测参数表存在 "test_password " 这类手误,登录键需容忍首尾空白与大小写。"""
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        param_map = {
+            "test_password ": "secret",
+            " test_username": "tester",
+            "Test_Company": "建设集团公司",
+        }
+        ctx, _vars = ba.resolve_login_context(db_session, param_map, "http://a.com")
+        assert ctx.username == "tester"
+        assert ctx.password == "secret"
+        assert ctx.company == "建设集团公司"
+        assert ctx.has_credentials is True
+
+    def test_overrides_take_precedence_over_global_params(self, db_session, tmp_path, monkeypatch):
+        """执行弹窗填写的登录配置优先于全局参数。"""
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        param_map = {
+            "test_username": "global_u",
+            "test_password": "global_p",
+            "test_login_url": "http://global/login",
+            "test_login_method": "全局方式",
+        }
+        overrides = {
+            "login_url": "http://run/login",
+            "login_method": "本次方式",
+            "username": "run_u",
+            "password": "run_p",
+        }
+        ctx, _vars = ba.resolve_login_context(db_session, param_map, "http://a.com", overrides)
+        assert ctx.login_url == "http://run/login"
+        assert ctx.login_method == "本次方式"
+        assert ctx.username == "run_u"
+        assert ctx.password == "run_p"
+
+    def test_partial_overrides_fall_back_to_global_params(self, db_session, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        param_map = {"test_username": "global_u", "test_password": "global_p"}
+        ctx, _vars = ba.resolve_login_context(
+            db_session, param_map, "http://a.com", {"login_url": "http://run/login"}
+        )
+        assert ctx.login_url == "http://run/login"
+        assert ctx.username == "global_u"
+        assert ctx.password == "global_p"
+        assert ctx.login_method == ""
 
 
 class TestCachePath:
@@ -241,12 +402,78 @@ class TestRunnerRun:
 
         runner = ba.UIExecutionRunner(db_session, agent_factory=factory)
         asyncio.run(runner.run(rec.id))
-        assert captured["prompt"].startswith("打开 http://192.168.13.178:8182#/home/login")
-        # 无缓存时 storage_state 必须为 None(不注入假登录态)
-        assert captured["storage_state"] is None
+        assert (
+            "目标页面地址(完整 URL,仅用于导航,不要与后续文字连读):"
+            "http://192.168.13.178:8182#/home/login"
+        ) in captured["prompt"]
+        # 无缓存时也传路径:browser-use 侧加载为空操作,执行结束写回即建立缓存
+        assert captured["storage_state"] == str(tmp_path / "http_192.168.13.178_8182.json")
 
-    def test_cached_storage_state_injected_into_factory(self, db_session, monkeypatch, tmp_path):
-        """Finding 3 pin:存在登录态缓存时,读取 JSON dict 并注入 agent_factory(而非仅改措辞)。"""
+    def test_cancel_marks_record_stopped_and_keeps_case_status(self, db_session, monkeypatch, tmp_path):
+        """用户取消(停止执行):record STOPPED、用例状态不变、任务终态同步。"""
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        tc = _make_case(db_session)
+        tc.status = "NOT_RUN"
+        db_session.add(tc)
+        db_session.commit()
+        rec = _make_record(db_session, tc)
+
+        class SlowAgent(FakeAgent):
+            async def run(self, max_steps=25):
+                await asyncio.sleep(30)
+                return SimpleNamespace(success=True, final_result=lambda: "")
+
+        async def _scenario():
+            runner = ba.UIExecutionRunner(
+                db_session,
+                agent_factory=lambda llm, prompt, storage_state=None: SlowAgent(llm, prompt),
+            )
+            task = asyncio.create_task(runner.run(rec.id))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(_scenario())
+        db_session.refresh(rec)
+        db_session.refresh(tc)
+        assert rec.status == "STOPPED"
+        assert rec.finished_at is not None
+        assert tc.status == "NOT_RUN"  # 停止不回写用例状态
+
+    def test_login_overrides_injected_into_prompt(self, db_session, monkeypatch, tmp_path):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        tc = _make_case(db_session)
+        rec = _make_record(db_session, tc)
+        captured = {}
+
+        def factory(llm, prompt, storage_state=None):
+            captured["prompt"] = prompt
+            return FakeAgent(llm, prompt)
+
+        runner = ba.UIExecutionRunner(
+            db_session,
+            agent_factory=factory,
+            login_overrides={
+                "login_url": "http://sso.example.com/login",
+                "login_method": "统一身份认证",
+                "username": "tester",
+                "password": "secret",
+                "company": "建设集团公司",
+            },
+        )
+        asyncio.run(runner.run(rec.id))
+        prompt = captured["prompt"]
+        assert "http://sso.example.com/login" in prompt
+        assert "统一身份认证" in prompt
+        assert "tester" in prompt and "secret" in prompt
+        assert "不要猜测" in prompt
+        # 登录后企业选择 + 回到目标页面
+        assert "建设集团公司" in prompt
+        assert f"重新访问目标页面地址 {rec.target_url}" in prompt
+
+    def test_cached_storage_state_path_injected_into_factory(self, db_session, monkeypatch, tmp_path):
+        """Finding 3 pin:登录态以**文件路径**注入 agent_factory,由 browser-use 自行加载/写回。"""
         monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
         tc = _make_case(db_session)
         rec = _make_record(db_session, tc)  # origin http://192.168.13.178:8182
@@ -262,7 +489,235 @@ class TestRunnerRun:
 
         runner = ba.UIExecutionRunner(db_session, agent_factory=factory)
         asyncio.run(runner.run(rec.id))
-        assert captured.get("storage_state") == state
+        assert captured.get("storage_state") == str(cache_file)
+        # runner 不直接改写缓存文件(browser-use 负责写回)
+        assert json.loads(cache_file.read_text(encoding="utf-8")) == state
+
+
+class TestJsonObjectClientProxy:
+    """DeepSeek 不支持 json_schema:结构化调用必须补 json_object,普通调用不补。"""
+
+    def test_injects_json_object_only_for_structured_calls(self):
+        calls = []
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                calls.append(kwargs)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="{}"), finish_reason="stop")]
+                )
+
+        class FakeClient:
+            def __init__(self):
+                self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        proxy = ba._JsonObjectClientProxy(FakeClient())
+
+        async def _run():
+            await proxy.create(messages=[{"role": "system", "content": "<json_schema>{}</json_schema>"}])
+            await proxy.create(messages=[{"role": "user", "content": "hello"}])
+
+        asyncio.run(_run())
+        assert calls[0]["response_format"] == {"type": "json_object"}
+        assert "response_format" not in calls[1]
+
+
+class TestNormalizeStateFileEncoding:
+    """browser-use 用 gbk 读 storage_state 文件;含中文的登录态必须先转义为 ASCII。"""
+
+    def test_rewrites_non_ascii_to_escaped_ascii(self, tmp_path):
+        p = tmp_path / "state.json"
+        state = {
+            "cookies": [],
+            "origins": [{
+                "origin": "http://192.168.13.178:8182",
+                "localStorage": [{"name": "LBuilderTitle", "value": "鲁班数字工程管理平台"}],
+            }],
+        }
+        p.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        ba._normalize_state_file_encoding(p)
+        raw = p.read_bytes()
+        assert all(b < 128 for b in raw)  # 纯 ASCII
+        raw.decode("gbk")  # 不再 UnicodeDecodeError
+        assert json.loads(p.read_text(encoding="utf-8")) == state  # 值可还原
+
+    def test_missing_file_is_noop(self, tmp_path):
+        ba._normalize_state_file_encoding(tmp_path / "nope.json")
+
+    def test_runner_normalizes_cache_with_chinese(self, db_session, monkeypatch, tmp_path):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        tc = _make_case(db_session)
+        rec = _make_record(db_session, tc)
+        cache = tmp_path / "http_192.168.13.178_8182.json"
+        cache.write_text(
+            json.dumps(
+                {"cookies": [], "origins": [{
+                    "origin": "http://192.168.13.178:8182",
+                    "localStorage": [{"name": "LBuilderTitle", "value": "平台"}],
+                }]},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        runner = ba.UIExecutionRunner(
+            db_session,
+            agent_factory=lambda llm, prompt, storage_state=None: FakeAgent(llm, prompt),
+        )
+        asyncio.run(runner.run(rec.id))
+        cache.read_text(encoding="ascii")  # 纯 ASCII 才能被 gbk 正常读取
+
+
+class TestStorageStateRestore:
+    def test_restores_from_backup_when_cache_empty(self, db_session, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        runner = ba.UIExecutionRunner(db_session)
+        cache = tmp_path / "http_192.168.13.178_8182.json"
+        backup = tmp_path / "http_192.168.13.178_8182.json.bak"
+        cache.write_text(json.dumps({"cookies": [], "origins": []}), encoding="utf-8")
+        backup.write_text(
+            json.dumps({"cookies": [], "origins": [{"origin": "http://x", "localStorage": []}]}),
+            encoding="utf-8",
+        )
+        runner._restore_storage_state_if_empty("http://192.168.13.178:8182")
+        assert json.loads(cache.read_text(encoding="utf-8"))["origins"]
+
+    def test_keeps_valid_cache_when_nonempty(self, db_session, tmp_path, monkeypatch):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        runner = ba.UIExecutionRunner(db_session)
+        cache = tmp_path / "http_192.168.13.178_8182.json"
+        backup = tmp_path / "http_192.168.13.178_8182.json.bak"
+        state = {"cookies": [{"name": "sid", "value": "1"}], "origins": []}
+        cache.write_text(json.dumps(state), encoding="utf-8")
+        backup.write_text(json.dumps({"cookies": [], "origins": [{"origin": "http://old"}]}), encoding="utf-8")
+        runner._restore_storage_state_if_empty("http://192.168.13.178:8182")
+        assert json.loads(cache.read_text(encoding="utf-8")) == state
+
+
+class TestCancelUIExecution:
+    def test_unknown_and_terminal_return_false(self):
+        assert ba.cancel_ui_execution("nope") is False
+        ba._ui_tasks["done-t1"] = {"task_id": "done-t1", "status": "done", "record_id": 1}
+        try:
+            assert ba.cancel_ui_execution("done-t1") is False
+        finally:
+            ba._ui_tasks.pop("done-t1", None)
+
+    def test_running_sets_stop_requested(self):
+        ba._ui_tasks["run-t1"] = {
+            "task_id": "run-t1", "status": "running", "record_id": 1, "message": "执行中",
+        }
+        try:
+            assert ba.cancel_ui_execution("run-t1") is True
+            assert ba._ui_tasks["run-t1"]["stop_requested"] is True
+            assert ba._ui_tasks["run-t1"]["message"] == "正在停止执行..."
+        finally:
+            ba._ui_tasks.pop("run-t1", None)
+
+    def test_mark_stopped_does_not_overwrite_terminal_record(self, db_session):
+        tc = _make_case(db_session)
+        rec = _make_record(db_session, tc)
+        rec.status = "PASSED"
+        db_session.add(rec)
+        db_session.commit()
+        ba._mark_stopped(db_session, rec, None)
+        db_session.refresh(rec)
+        assert rec.status == "PASSED"
+
+
+class TestBuildLlm:
+    """回归:browser-use 0.13.x Agent 只接受带 `provider` 的原生 LLM。
+
+    langchain 的 ChatOpenAI 无 `provider` 属性,会在 Agent.__init__ 抛 AttributeError。
+    """
+
+    def test_build_llm_returns_browser_use_compatible_model(self):
+        pytest.importorskip("browser_use")
+        llm = ba._build_llm()
+        assert getattr(llm, "provider", None)
+        assert hasattr(llm, "ainvoke")
+        # DeepSeek 等网关不支持 response_format=json_schema,必须走 schema 入 prompt 的兼容路径
+        assert llm.add_schema_to_system_prompt is True
+        assert llm.dont_force_structured_output is True
+
+    def test_build_llm_client_is_json_object_proxy(self):
+        pytest.importorskip("browser_use")
+        llm = ba._build_llm()
+        client = llm.get_client()
+        assert isinstance(client, ba._JsonObjectClientProxy)
+
+    def test_default_factory_wires_storage_state_path(self, tmp_path):
+        """登录态路径必须落到 BrowserProfile.storage_state,交由 browser-use 加载/写回。"""
+        pytest.importorskip("browser_use")
+        cache_file = tmp_path / "http_a.com.json"
+        agent = ba._default_agent_factory(ba._build_llm(), "task", str(cache_file))
+        profile = agent.browser_session.browser_profile
+        assert Path(str(profile.storage_state)) == cache_file
+        assert agent.settings.max_actions_per_step == ba.MAX_ACTIONS_PER_STEP
+
+
+class TestLaunchMaxSteps:
+    def test_launch_passes_max_steps_to_runner(self, db_session, monkeypatch):
+        captured = {}
+
+        class FakeRunner:
+            def __init__(self, db, agent_factory=None, max_steps=25, timeout_seconds=600,
+                         login_overrides=None):
+                captured["max_steps"] = max_steps
+
+            async def run(self, record_id):
+                return None
+
+            def mark_stopped(self, record_id, task_id):
+                return None
+
+        monkeypatch.setattr(ba, "UIExecutionRunner", FakeRunner)
+
+        async def _call():
+            return ba.launch_ui_execution(db_session, 123, max_steps=77)
+
+        asyncio.run(_call())
+        assert captured["max_steps"] == 77
+
+
+class TestSubprocessCapableLoop:
+    """回归:Windows 下 uvicorn --reload 用 SelectorEventLoop,无法 create_subprocess_exec,
+    browser-use 启动 Chromium 会 NotImplementedError;必须在 Proactor loop 上执行浏览器阶段。
+    """
+
+    def test_selector_loop_cannot_spawn_subprocess(self):
+        loop = asyncio.SelectorEventLoop()
+        try:
+            loop.run_until_complete(self._assert_no_subprocess_support())
+        finally:
+            loop.close()
+
+    @staticmethod
+    async def _assert_no_subprocess_support():
+        if os.name != "nt":
+            pytest.skip("仅 Windows 的 SelectorEventLoop 不支持子进程")
+        assert ba._can_spawn_subprocess() is False
+
+    def test_runner_succeeds_under_selector_loop(self, db_session, monkeypatch, tmp_path):
+        monkeypatch.setattr(ba, "_sessions_dir", tmp_path)
+        tc = _make_case(db_session)
+        rec = _make_record(db_session, tc)
+        runner = ba.UIExecutionRunner(
+            db_session,
+            agent_factory=lambda llm, prompt, storage_state=None: FakeAgent(llm, prompt),
+        )
+        if os.name == "nt":
+            loop = asyncio.SelectorEventLoop()
+            try:
+                loop.run_until_complete(runner.run(rec.id))
+            finally:
+                loop.close()
+        else:
+            asyncio.run(runner.run(rec.id))
+        db_session.refresh(rec)
+        db_session.refresh(tc)
+        assert rec.status == "PASSED"
+        assert len(rec.steps_trace) == 2
+        assert tc.status == "PASSED"
 
 
 class TestNormalizeAgentResult:

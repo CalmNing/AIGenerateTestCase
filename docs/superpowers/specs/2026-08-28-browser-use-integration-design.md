@@ -58,7 +58,7 @@
 | testcase_id | int FK→testcase.id, index | 关联用例 |
 | user_id | str, index | 发起人(Keycloak sub) |
 | target_url | str | 拼接后的完整页面地址 |
-| status | str | `RUNNING / PASSED / FAILED / ERROR` |
+| status | str | `RUNNING / PASSED / FAILED / ERROR / STOPPED` |
 | steps_trace | JSON | Agent 每步 {step_no, action, url, result} |
 | agent_summary | str | done 动作的 text(逐条预期核对说明) |
 | error | str \| None | 仅 ERROR 时有值 |
@@ -68,7 +68,7 @@
 
 ### 3.2 用例状态回写规则
 
-只有 Agent 给出明确判定才写 `TestCase.status`(PASSED/FAILED);ERROR(环境故障)不回写,避免污染用例统计。
+只有 Agent 给出明确判定才写 `TestCase.status`(PASSED/FAILED);ERROR(环境故障)与 STOPPED(用户停止)均不回写,避免污染用例统计。
 
 ## 4. 用例兼容性(已核对现有数据格式)
 
@@ -119,13 +119,34 @@ URL 是**执行时上下文**,不存于用例,落在 `UIExecutionRecord.target_u
 ```
 
 - 缓存 key = origin;每次执行结束**无条件导出覆盖**(有效时等值无害,失效时刷新,一个动作两种情况)
+- browser-use 写回时保留 `.json.bak`;若主缓存被一次失败执行(页面停在 about:blank)写为空,
+  启动前会从 `.bak` 恢复上次有效登录态,避免反复重新登录
 - 文件存储不入库(敏感 JSON),目录加入 `.gitignore`
 - 无 TTL、无手动清除接口(自愈机制使其多余)
 - 并发安全:Semaphore(1) 保证同一时刻仅一个浏览器读写缓存
 - prompt 登录段按缓存命中与否切换措辞(见 §7)
 - `agent_summary` 记录是否发生登录,用户可从日志辨别
 
-登录凭证:复用全局参数,约定 `test_username` / `test_password`。
+登录键查找容忍大小写与首尾空白(如 `"test_password "` 手误仍可读到)。
+
+### LLM 结构化输出兼容(DeepSeek 网关)
+
+browser-use 需要模型返回可解析的 `AgentOutput` JSON。实测 DeepSeek 网关
+`response_format=json_schema` 返回 400「This response_format type is unavailable now」,
+故关闭强制结构化输出、把 schema 注入 system prompt;同时对结构化调用
+(system prompt 含 `<json_schema>`)补 `response_format={"type":"json_object"}`,
+强制模型返回合法 JSON,避免「无法以正确格式输出操作指令」导致浏览器停在 about:blank。
+
+登录参数:复用全局参数,约定 `test_username` / `test_password`(凭证),以及
+`test_login_url`(登录入口,SSO 或登录页直链)/ `test_login_method`(登录方式名称,
+如「鲁班通行证登录」)/ `test_company`(登录后企业/身份选择弹窗中要选择的企业)。
+显式配置登录入口后,prompt 按「登录入口 → 登录方式 → 账号/密码」给出的确切配置执行,
+并**禁止 Agent 猜测或尝试未配置的账号密码**;无凭证时要求将「前置条件不满足(未登录)」
+写入判定说明而非绕过登录。未配置 `test_login_url` 时退回原有「账号/密码 + 缓存命中措辞」分支。
+
+登录成功后的收尾(有登录配置时注入):① 若弹出企业/身份选择窗口,选择 `test_company`
+及对应身份并确定;② 若登录后被跳转到工作台/首页,必须**重新访问目标页面地址**再执行
+用例步骤——修复「登录后停留工作台、回不到用例目标页」的问题。
 
 ## 7. 执行流程
 
@@ -142,15 +163,24 @@ queued → launching_browser → executing → judging → persisting → done
 ### 7.2 Prompt 模板
 
 ```
-打开 {target_url},依次完成以下测试步骤。这是软件测试执行,严格按步骤顺序操作:
+目标页面地址(完整 URL,仅用于导航,不要与后续文字连读):{target_url}
+
+依次完成以下测试步骤。这是软件测试执行,严格按步骤顺序操作:
 1. {step 1 action}
 ...
 [前置条件提示(若有)]
-[登录段:
-  有缓存:「当前会话应已持有登录态,若打开页面仍被重定向到登录页,
-          使用账号 {test_username} 密码 {test_password} 重新登录后继续」
-  无缓存:「若用例步骤依赖已登录状态而当前未登录,先用账号 {test_username}
-          密码 {test_password} 登录,再开始用例步骤」]
+[登录段(优先级从高到低):
+  配置了 test_login_url:「…请按以下配置登录: 登录入口 {test_login_url} /
+          登录方式 {test_login_method} / 账号 {test_username} 密码 {test_password};
+          凭证以此为准,不要猜测其他账号密码」(无凭证时禁止猜测并要求写明前置条件不满足)
+  未配置 test_login_url 但有凭证:
+    有缓存:「当前会话应已持有登录态,若打开页面仍被重定向到登录页,
+           使用账号 {test_username} 密码 {test_password} 重新登录后继续」
+    无缓存:「若用例步骤依赖已登录状态而当前未登录,先用账号 {test_username}
+           密码 {test_password} 登录,再开始用例步骤」]
+[登录成功后的收尾(仅当有登录配置时):
+  - 若弹出企业/身份选择窗口,选择企业 {test_company}(未配置时选对应企业)及身份,确定
+  - 若登录后跳转到工作台/首页,重新访问目标页面地址 {target_url},再从第 1 步开始]
 
 全部步骤完成后,对照以下预期结果逐条核对:
 1. {expected 1}
@@ -174,6 +204,7 @@ text 中逐条说明每条预期的实际表现。
 | Agent 判定 success=false | FAILED | None | FAILED |
 | 崩溃/超时/LLM 用尽 | ERROR | 异常摘要 | 不变 |
 | target_url 不可达 | ERROR | 「无法访问目标站点」 | 不变 |
+| 用户停止 | STOPPED | None(摘要「用户已停止执行」) | 不变 |
 | 成功 | PASSED | None | PASSED |
 
 入口校验(POST /run,均 400):用例不存在/不属于用户;steps 含 api_call;归一化后为空;origin 缺失。
@@ -188,13 +219,22 @@ text 中逐条说明每条预期的实际表现。
 
 ```
 POST /api/ui-execution/run
-  body: { testcase_id: int, site_origin: str, page_path: str }
+  body: { testcase_id: int, site_origin: str, page_path: str,
+          login_url?: str, login_method?: str,
+          login_username?: str, login_password?: str, login_company?: str }
+  # 登录字段可选,本次执行覆盖全局参数
   → Response[{ task_id: str, record_id: int }]   # 立即返回,后台执行
-  site_origin/page_path 均经变量替换;后端拼接为 target_url
+  site_origin/page_path/login_url 均经变量替换;后端拼接为 target_url
+  凭据仅经内存传给 runner,不落库、不写入 /tasks 状态(避免泄露)
 
 GET /api/ui-execution/tasks/{task_id}
   → Response[{ status, phase, progress, message }]
   # 内存态,同构 pipeline_tasks;任务完成后仍可查(persisting 结果含 record_id)
+
+POST /api/ui-execution/tasks/{task_id}/stop
+  → Response[{ stopped: bool, message: str }]
+  # 停止执行:标记 stop_requested + cancel 后台 asyncio.Task;
+  # record 落 STOPPED、不回写用例状态;仅发起人本人可停止(否则 404)
 
 GET /api/ui-execution/records?testcase_id={id}
   → Response[List[UIExecutionRecord]]   # 倒序,含 steps_trace/summary
@@ -210,8 +250,11 @@ GET /api/ui-execution/records?testcase_id={id}
 2. **UIExecutionModal**(新组件,模式同现有 modals/):
    - 两段式地址输入(预填链见 §5)
    - 前置条件只读提醒区
-   - 登录凭证配置状态提示(已配/未配 test_username)
+   - 登录配置区(登录入口 / 登录方式 / 用户名 / 密码 / 企业):从默认环境全局参数预填,
+     可直接修改覆盖本次执行;留空字段回退全局参数。下方按「显式入口 或 完整账号密码」
+     展示已配置/未配置提示。「企业」用于登录后企业/身份选择弹窗
    - 「开始执行」→ 轮询 tasks/{id} → 进度条(阶段 + message)→ 终态展示判定结果
+   - 运行中显示「停止执行」按钮 → POST tasks/{id}/stop,轮询拿到 STOPPED 终态后提示「执行已停止」
 3. **执行历史**:UIExecutionModal 内 Tab 展示该用例的 records 列表(状态/时间/摘要,可展开 steps_trace)
 4. localStorage 记住每个用例最近一次的 origin/path 作为预填兜底(主数据源仍是 record + 全局参数)
 

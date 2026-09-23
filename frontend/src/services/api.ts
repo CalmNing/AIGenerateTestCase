@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, UIExecutionRecord, UIExecutionTaskStatus } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -478,15 +478,160 @@ export const globalParameterApi = {
 };
 
 // UI 自动化执行 API
+export interface UILoginConfig {
+  login_url?: string;
+  login_method?: string;
+  login_username?: string;
+  login_password?: string;
+  login_company?: string;
+}
+
 export const uiExecutionApi = {
-  run: (testcaseId: number, siteOrigin: string, pagePath: string): Promise<ApiResponse<{ task_id: string; record_id: number }>> =>
-    api.post('/ui-execution/run', { testcase_id: testcaseId, site_origin: siteOrigin, page_path: pagePath }),
+  run: (
+    testcaseId: number,
+    siteOrigin: string,
+    pagePath: string,
+    login?: UILoginConfig
+  ): Promise<ApiResponse<{ task_id: string; record_id: number }>> =>
+    api.post('/ui-execution/run', {
+      testcase_id: testcaseId,
+      site_origin: siteOrigin,
+      page_path: pagePath,
+      ...(login ?? {}),
+    }),
 
   getTask: (taskId: string): Promise<ApiResponse<UIExecutionTaskStatus>> =>
     api.get(`/ui-execution/tasks/${taskId}`),
 
+  stop: (taskId: string): Promise<ApiResponse<{ stopped: boolean; message?: string }>> =>
+    api.post(`/ui-execution/tasks/${taskId}/stop`),
+
   getRecords: (testcaseId: number): Promise<ApiResponse<UIExecutionRecord[]>> =>
     api.get('/ui-execution/records', { params: { testcase_id: testcaseId } })
+};
+
+// UI 自动化工具:页面元素抽取 / PageObject 管理 / 定位器验证 / 自愈执行
+interface ExtractPageObjectRequest extends UIAutomationLoginConfig {
+  name?: string;
+  site_origin?: string;
+  page_path?: string;
+  url?: string;
+  description?: string;
+  use_llm_naming?: boolean;
+  /** 本次抽取的页面是否直接作为登录页对象 */
+  is_login_page?: boolean;
+  /** 本次不使用登录态(没选登录页对象):不读站点缓存、不登录,直接匿名访问 */
+  skip_login?: boolean;
+}
+
+interface PageObjectPayload {
+  name?: string;
+  site_origin?: string;
+  page_path?: string;
+  url?: string;
+  description?: string;
+  elements?: any[];
+  /** 执行(自愈)步骤(持久化) */
+  steps?: Array<Record<string, any>>;
+  /** 作为登录页对象(其他页面对象可关联它复用登录态) */
+  is_login_page?: boolean;
+  /** null=不改动关联;0=解除关联;正数=关联指定登录页对象 */
+  login_page_object_id?: number | null;
+}
+
+// 鲁班平台 ACL 菜单代理(按菜单生成抽取目标 URL)
+export interface LubanModule {
+  id: string;
+  name: string;
+  url: string;
+  code: string;
+  isLink?: number;
+}
+
+export interface LubanMenuNode {
+  id: string;
+  parentId: string;
+  name: string;
+  type: 'dir' | 'menu';
+  url?: string | null;
+  isLink?: number;
+  sysModuleCode?: string | null;
+  orderNum?: number;
+}
+
+export interface LubanProxyPayload {
+  base_url: string;
+  access_token: string;
+  res_id?: string;
+}
+
+export const uiAutomationApi = {
+  lubanModules: (payload: LubanProxyPayload): Promise<ApiResponse<LubanModule[]>> =>
+    api.post('/ui-automation/luban/modules', payload),
+
+  lubanMenus: (payload: LubanProxyPayload & { sys_module_code: string }): Promise<ApiResponse<LubanMenuNode[]>> =>
+    api.post('/ui-automation/luban/menus', payload),
+
+  extract: (payload: ExtractPageObjectRequest): Promise<ApiResponse<{ task_id: string; run_id: number }>> =>
+    api.post('/ui-automation/page-objects/extract', payload),
+
+  getTask: (taskId: string): Promise<ApiResponse<UIAutomationTaskStatus>> =>
+    api.get(`/ui-automation/tasks/${taskId}`),
+
+  stopTask: (taskId: string): Promise<ApiResponse<{ stopped: boolean; message?: string }>> =>
+    api.post(`/ui-automation/tasks/${taskId}/stop`),
+
+  listPageObjects: (): Promise<ApiResponse<PageObject[]>> => api.get('/ui-automation/page-objects'),
+
+  createPageObject: (payload: PageObjectPayload): Promise<ApiResponse<PageObject>> =>
+    api.post('/ui-automation/page-objects', payload),
+
+  getPageObject: (id: number): Promise<ApiResponse<PageObject>> => api.get(`/ui-automation/page-objects/${id}`),
+
+  updatePageObject: (id: number, payload: PageObjectPayload): Promise<ApiResponse<PageObject>> =>
+    api.put(`/ui-automation/page-objects/${id}`, payload),
+
+  deletePageObject: (id: number): Promise<ApiResponse> => api.delete(`/ui-automation/page-objects/${id}`),
+
+  regenerate: (
+    id: number,
+    payload: {
+      use_llm_naming?: boolean;
+      merge?: boolean;
+      /** 本次不使用登录态(没选登录页对象):不读站点缓存、不登录,直接匿名访问 */
+      skip_login?: boolean;
+    } & UIAutomationLoginConfig
+  ): Promise<ApiResponse<{ task_id: string; run_id: number }>> =>
+    api.post(`/ui-automation/page-objects/${id}/regenerate`, payload),
+
+  validate: (id: number, login?: UIAutomationLoginConfig): Promise<ApiResponse<{ task_id: string; run_id: number }>> =>
+    api.post(`/ui-automation/page-objects/${id}/validate`, login ?? {}),
+
+  login: (
+    payload: UIAutomationLoginConfig & { url?: string; site_origin?: string; page_path?: string }
+  ): Promise<ApiResponse<{ task_id: string; run_id: number }>> =>
+    api.post('/ui-automation/login', payload),
+
+  run: (
+    id: number,
+    steps: Array<Record<string, any>>,
+    login?: UIAutomationLoginConfig
+  ): Promise<ApiResponse<{ task_id: string; run_id: number }>> =>
+    api.post(`/ui-automation/page-objects/${id}/run`, { steps, ...(login ?? {}) }),
+
+  exportCode: (id: number): Promise<string> => api.get(`/ui-automation/page-objects/${id}/export`),
+
+  listRuns: (pageObjectId: number): Promise<ApiResponse<UIAutomationRun[]>> =>
+    api.get('/ui-automation/runs', { params: { page_object_id: pageObjectId } }),
+
+  getRun: (runId: number): Promise<ApiResponse<UIAutomationRun>> => api.get(`/ui-automation/runs/${runId}`),
+
+  // ---- 页面对象登录态:登录 = 一个配了执行步骤的页面对象,其他页面对象关联它复用 ----
+  getPageObjectSession: (id: number): Promise<ApiResponse<PageObjectSession>> =>
+    api.get(`/ui-automation/page-objects/${id}/session`),
+
+  clearPageObjectSession: (id: number): Promise<ApiResponse<PageObjectSession>> =>
+    api.post(`/ui-automation/page-objects/${id}/session/clear`),
 };
 
 interface TestVariableRequest {
@@ -506,6 +651,28 @@ export const proxyApi = {
   forwardRequest: (request: ProxyRequest): Promise<ProxyResponse<ApiResponse<any>>> => api.post('/proxy/forward', request),
   // 测试变量
   testVariable: (request: TestVariableRequest): Promise<ApiResponse<TestVariableResponse>> => api.post('/proxy/test-variable', request)
+};
+
+// IoT 推送请求记录 API
+export const pushLogApi = {
+  // 获取推送记录列表（分页 + 过滤）
+  getLogs: (params?: {
+    page?: number;
+    page_size?: number;
+    method?: string;
+    search?: string;
+    mocked?: boolean;
+    failed?: boolean;
+  }): Promise<ApiResponse<PushLogItem[]>> => api.get('/push-logs', { params }),
+
+  // 获取单条记录详情（原始 + 解析后）
+  getLog: (logId: number): Promise<ApiResponse<PushLogItem>> => api.get(`/push-logs/${logId}`),
+
+  // 删除单条记录
+  deleteLog: (logId: number): Promise<ApiResponse> => api.delete(`/push-logs/${logId}`),
+
+  // 清空全部记录
+  clearLogs: (): Promise<ApiResponse> => api.delete('/push-logs')
 };
 
 // 定时任务API

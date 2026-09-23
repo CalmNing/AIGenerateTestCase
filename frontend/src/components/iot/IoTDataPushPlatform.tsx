@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Form, Select, Input, Button, Tabs, Space, message, Modal, Tooltip, Radio } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, DownOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined, FolderOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, DownOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined, FolderOutlined, FolderOpenOutlined, HistoryOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { savedRequestApi, savedRequestFolderApi, globalParameterApi, proxyApi } from '../../services/api';
 import { SavedRequest as SavedRequestType, SavedRequestFolder } from '../../types';
 import FileUpload, { UploadedFileResult } from '../FileUpload';
+import PushLogDrawer from './PushLogDrawer';
 import './IoTDataPushPlatform.css';
 
 interface HeaderItem {
@@ -285,6 +286,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     return localStorage.getItem('currentEnvironmentId') || 'env-1';
   });
   const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false);
+  const [showPushLog, setShowPushLog] = useState(false);
   const [postExtractions, setPostExtractions] = useState<ExtractionRule[]>([]);
   const [searchRequests, setSearchRequests] = useState('');
 
@@ -1208,6 +1210,12 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         </span>
         <Space>
           <Button
+            icon={<HistoryOutlined />}
+            onClick={() => setShowPushLog(true)}
+          >
+            请求记录
+          </Button>
+          <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={addNewTab}
@@ -1873,6 +1881,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           环境名称用于区分不同的参数配置集
         </div>
       </Modal>
+
+      {/* Push request log drawer */}
+      <PushLogDrawer open={showPushLog} onClose={() => setShowPushLog(false)} />
     </div>
   );
 };

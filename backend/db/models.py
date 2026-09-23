@@ -111,11 +111,55 @@ class UIExecutionRecord(BaseModel, table=True):
     testcase_id: int = Field(foreign_key="testcase.id", index=True, description="关联用例ID")
     user_id: Optional[str] = Field(default=None, index=True, description="发起人ID（Keycloak sub）")
     target_url: str = Field(default="", description="拼接后的目标页面完整地址")
-    status: str = Field(default="RUNNING", description="执行状态: RUNNING/PASSED/FAILED/ERROR")
+    status: str = Field(default="RUNNING", description="执行状态: RUNNING/PASSED/FAILED/ERROR/STOPPED")
     steps_trace: List = Field(default_factory=list, sa_type=JSON, description="Agent每步动作轨迹[{step_no,action,url,result}]")
     agent_summary: str = Field(default="", description="Agent最终判定说明(逐条预期核对)")
     error: Optional[str] = Field(default=None, description="异常信息(仅ERROR时)")
     finished_at: Optional[datetime] = Field(default=None, description="执行完成时间(UTC+8)")
+
+class PageObject(BaseModel, table=True):
+    """UI 自动化页面对象(抽取页面元素 + 多候选定位器,支持执行期自愈)。
+
+    登录态也挂在页面对象上:把一个页面对象的 `is_login_page` 打开(通常是登录页),
+    它「执行(自愈)」里配置的步骤就承担登录动作,执行产生的登录态被保存到该对象的
+    专属文件;其他页面对象只需 `login_page_object_id` 关联它,即可直接复用登录态
+    (有就直接用,没有就先执行它的步骤完成登录并保持),无需重复配置账号密码。
+    """
+    name: str = Field(default="", description="页面对象名称,如 LoginPage/登录页")
+    site_origin: str = Field(default="", description="站点 origin,如 http://192.168.13.178:8182")
+    page_path: str = Field(default="", description="页面路径(hash 路由或普通路径)")
+    url: str = Field(default="", description="拼接后的完整页面地址")
+    description: str = Field(default="", description="页面说明")
+    elements: List = Field(default_factory=list, sa_type=JSON, description="抽取的元素列表[{name,type,description,fingerprint,locators,heal_count,...}]")
+    steps: List = Field(default_factory=list, sa_type=JSON, description="执行(自愈)步骤(持久化):[{element,action,value}],登录页对象据此完成登录")
+    is_login_page: bool = Field(default=False, description="是否作为登录页对象:其他页面对象可关联它复用登录态,并调用其步骤完成登录")
+    login_page_object_id: Optional[int] = Field(default=None, index=True, description="关联的登录页对象ID:抽取/验证/执行前确保其登录态可用(没有则先执行它的步骤登录)")
+    session_path: str = Field(default="", description="该页面对象的登录态(storage_state)文件路径,按页面对象隔离")
+    session_status: str = Field(default="NONE", description="登录态状态: NONE(未建立)/READY(可用)/EXPIRED(已过期)/FAILED(登录失败)")
+    session_updated_at: Optional[datetime] = Field(default=None, description="登录态最近写入时间(UTC+8)")
+    session_cookie_count: int = Field(default=0, description="登录态内 cookie 条数(状态展示用)")
+    session_origin_count: int = Field(default=0, description="登录态内 localStorage origin 数(状态展示用)")
+    last_login_at: Optional[datetime] = Field(default=None, description="最近一次成功建立登录态的时间(UTC+8)")
+    last_login_error: Optional[str] = Field(default=None, description="最近一次登录失败原因")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class UIAutomationRun(BaseModel, table=True):
+    """UI 自动化运行记录(元素抽取 / 定位器验证 / PageObject 执行)"""
+    page_object_id: Optional[int] = Field(default=None, foreign_key="pageobject.id", index=True, description="关联页面对象ID(抽取时可为空)")
+    task_id: Optional[str] = Field(default=None, index=True, description="后台任务ID(用于服务重启后按任务ID回查)")
+    user_id: Optional[str] = Field(default=None, index=True, description="发起人ID（Keycloak sub）")
+    run_type: str = Field(default="extract", description="运行类型: extract/validate/execute/login")
+    target_url: str = Field(default="", description="本次运行的目标页面地址")
+    status: str = Field(default="RUNNING", description="状态: RUNNING/PASSED/FAILED/ERROR/STOPPED")
+    steps: List = Field(default_factory=list, sa_type=JSON, description="执行步骤输入快照")
+    steps_trace: List = Field(default_factory=list, sa_type=JSON, description="每步执行轨迹")
+    heal_events: List = Field(default_factory=list, sa_type=JSON, description="定位器自愈事件[{step,element,type,from,to,similarity}]")
+    result: dict = Field(default_factory=dict, sa_type=JSON, description="结构化结果(抽取的元素/验证结果等)")
+    summary: str = Field(default="", description="结果摘要")
+    error: Optional[str] = Field(default=None, description="异常信息(仅 ERROR 时)")
+    finished_at: Optional[datetime] = Field(default=None, description="完成时间(UTC+8)")
+
 
 class RequirementPoint(BaseModel, table=True):
     """需求点数据模型（4阶段pipeline阶段1产物）"""
@@ -346,6 +390,27 @@ class MockLog(BaseModel, table=True):
     response_headers: List[dict] = Field(default_factory=list, sa_type=JSON, description="响应头列表")
     response_body: Optional[str] = Field(default=None, description="响应体内容")
     matched: bool = Field(default=True, description="是否匹配到Mock配置")
+    user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")
+
+
+class PushLog(BaseModel, table=True):
+    """IoT 推送请求日志：记录每次 /api/proxy/forward 的原始请求与变量替换后的解析结果"""
+    request_method: str = Field(default="", index=True, description="HTTP请求方法")
+    source_url: str = Field(default="", description="原始请求URL（替换变量前）")
+    final_url: str = Field(default="", description="变量替换后的实际请求URL")
+    request_headers: dict = Field(default_factory=dict, sa_type=JSON, description="原始请求头")
+    final_headers: dict = Field(default_factory=dict, sa_type=JSON, description="变量替换后的请求头")
+    request_params: dict = Field(default_factory=dict, sa_type=JSON, description="原始查询参数")
+    final_params: dict = Field(default_factory=dict, sa_type=JSON, description="变量替换后的查询参数")
+    request_body: Optional[str] = Field(default=None, description="原始请求体")
+    final_body: Optional[str] = Field(default=None, description="变量替换后的请求体")
+    response_status: int = Field(default=0, description="响应状态码（0=未收到响应/转发失败）")
+    response_headers: dict = Field(default_factory=dict, sa_type=JSON, description="响应头")
+    response_body: Optional[str] = Field(default=None, description="响应体")
+    mocked: bool = Field(default=False, description="是否命中Mock配置")
+    error: Optional[str] = Field(default=None, description="转发失败时的错误信息")
+    duration_ms: int = Field(default=0, description="请求耗时（毫秒）")
+    environment_id: Optional[int] = Field(default=None, description="使用的环境参数ID")
     user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")
 
 

@@ -21,6 +21,8 @@ import ApiScenarioTestTool from './components/api/ApiScenarioTestTool';
 import VariableAssistant from './components/VariableAssistant';
 import ChatAssistant from './components/chat/ChatAssistant';
 import MockProxyAssistant from './components/mock/MockProxyAssistant';
+import UIAutomationPlatform from './components/ui-automation/UIAutomationPlatform';
+import './components/ui-automation/UIAutomationPlatform.css';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
 import CompleteTestcaseModal from './components/modals/CompleteTestcaseModal';
@@ -72,10 +74,10 @@ const showMessage = (
 const App: React.FC = () => {
 
   // 导航状态管理
-  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api'>(() => {
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation'>(() => {
     // 从localStorage加载上次的平台状态
     const savedPlatform = localStorage.getItem('currentPlatform');
-    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api') || 'home';
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation') || 'home';
   });
   const canManageSettings = hasPermission(Permission.CONFIG_MANAGE);
   const canManageMcp = hasPermission(Permission.MCP_MANAGE);
@@ -83,6 +85,7 @@ const App: React.FC = () => {
   const canManageGlobalParams = hasPermission(Permission.GLOBAL_PARAMETER_MANAGE);
   const canAccessScheduledTask = hasPermission(Permission.SCHEDULED_TASK_MANAGE);
   const canAccessMock = hasPermission(Permission.MOCK_MANAGE);
+  const canAccessUiAutomation = hasPermission(Permission.UI_AUTOMATION);
 
   // AI 助手抽屉状态
   const [chatOpen, setChatOpen] = useState(false);
@@ -214,13 +217,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const blocked =
       (currentPlatform === 'scheduled-task' && !canAccessScheduledTask) ||
-      (currentPlatform === 'mock-api' && !canAccessMock);
+      (currentPlatform === 'mock-api' && !canAccessMock) ||
+      (currentPlatform === 'ui-automation' && !canAccessUiAutomation);
 
     if (blocked) {
       setCurrentPlatform('home');
       localStorage.setItem('currentPlatform', 'home');
     }
-  }, [currentPlatform, canAccessScheduledTask, canAccessMock]);
+  }, [currentPlatform, canAccessScheduledTask, canAccessMock, canAccessUiAutomation]);
 
   // 当选择"全部"节点时，如果当前在"生成测试用例"页签，自动切换到"管理测试用例"
   useEffect(() => {
@@ -1255,6 +1259,12 @@ const App: React.FC = () => {
     setCurrentPlatform('mock-api');
     localStorage.setItem('currentPlatform', 'mock-api');
   };
+
+  const navigateToUiAutomation = () => {
+    if (!canAccessUiAutomation) return;
+    setCurrentPlatform('ui-automation');
+    localStorage.setItem('currentPlatform', 'ui-automation');
+  };
   
 
   return (
@@ -1293,6 +1303,7 @@ const App: React.FC = () => {
           onNavigateToApiTest={navigateToApiTest}
           onNavigateToScheduledTask={navigateToScheduledTask}
           onNavigateToMock={navigateToMock}
+          onNavigateToUiAutomation={navigateToUiAutomation}
           canAccessScheduledTask={canAccessScheduledTask}
           canAccessMock={canAccessMock}
           canManageNav={canManageSettings}
@@ -1344,6 +1355,17 @@ const App: React.FC = () => {
             canManageGlobalParams={canManageGlobalParams}
           />
           <IoTMockPlatform />
+        </div>
+      ) : currentPlatform === 'ui-automation' ? (
+        <div>
+          <SubPlatformHeader
+            title="UI 自动化测试工具"
+            onBackToHome={navigateToHome}
+            environmentName={getCurrentEnvironment()?.name}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
+            canManageGlobalParams={canManageGlobalParams}
+          />
+          <UIAutomationPlatform />
         </div>
       ) : (
         <Layout style={{ height: '100vh', overflow: 'hidden' }}>

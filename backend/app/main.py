@@ -14,6 +14,7 @@ from app.routes.mock_server import router as mock_server_router
 from app.routes.module import router as module_router
 from app.routes.nav_link import router as nav_link_router
 from app.routes.proxy import router as proxy_router
+from app.routes.push_log import router as push_log_router
 from app.routes.saved_request import router as saved_request_router
 from app.routes.saved_request_folder import router as saved_request_folder_router
 from app.routes.scheduled_task import router as scheduled_task_router
@@ -24,6 +25,7 @@ from app.routes.pipeline import router as pipeline_router
 from app.routes.document import router as document_router
 from app.routes.chat import router as chat_router
 from app.routes.ui_execution import router as ui_execution_router
+from app.routes.ui_automation import router as ui_automation_router
 
 api_router = APIRouter()
 
@@ -81,6 +83,17 @@ api_router.include_router(
     ],
 )
 api_router.include_router(proxy_router, dependencies=[Depends(require_permissions(Permission.IOT_EXECUTE))])
+api_router.include_router(
+    push_log_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[Permission.IOT_READ],
+                delete=[Permission.IOT_DELETE],
+            )
+        )
+    ],
+)
 api_router.include_router(
     api_test_tool_router,
     dependencies=[
@@ -148,7 +161,17 @@ api_router.include_router(mcp_router, dependencies=[Depends(require_permissions(
 api_router.include_router(skills_router, dependencies=[Depends(require_permissions(Permission.SKILLS_MANAGE))])
 api_router.include_router(
     global_parameter_router,
-    dependencies=[Depends(require_permissions(Permission.GLOBAL_PARAMETER_MANAGE))],
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                # 读环境参数:任何登录用户(展示时解析 {{web_url}} 等占位符需要)
+                get=[],
+                post=[Permission.GLOBAL_PARAMETER_MANAGE],
+                put=[Permission.GLOBAL_PARAMETER_MANAGE],
+                delete=[Permission.GLOBAL_PARAMETER_MANAGE],
+            )
+        )
+    ],
 )
 api_router.include_router(
     scheduled_task_router,
@@ -193,6 +216,12 @@ api_router.include_router(
 api_router.include_router(
     ui_execution_router,
     dependencies=[Depends(require_permissions(Permission.UI_EXECUTE))],
+)
+
+# UI 自动化工具:页面元素抽取 / PageObject 管理 / 定位器验证 / 自愈执行。
+api_router.include_router(
+    ui_automation_router,
+    dependencies=[Depends(require_permissions(Permission.UI_AUTOMATION))],
 )
 
 # Chat route: general-purpose AI conversation

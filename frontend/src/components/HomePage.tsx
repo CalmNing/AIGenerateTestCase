@@ -7,6 +7,7 @@ import {
   ExperimentOutlined,
   RocketOutlined,
   AppstoreOutlined,
+  DesktopOutlined,
   SettingOutlined,
   LinkOutlined,
   ArrowRightOutlined,
@@ -23,6 +24,7 @@ interface HomePageProps {
   onNavigateToApiTest: () => void;
   onNavigateToScheduledTask: () => void;
   onNavigateToMock: () => void;
+  onNavigateToUiAutomation?: () => void;
   canAccessScheduledTask?: boolean;
   canAccessMock?: boolean;
   canManageNav?: boolean;
@@ -45,6 +47,7 @@ const HomePage: React.FC<HomePageProps> = ({
   onNavigateToApiTest,
   onNavigateToScheduledTask,
   onNavigateToMock,
+  onNavigateToUiAutomation,
   canAccessScheduledTask = false,
   canAccessMock = false,
   canManageNav = false,
@@ -69,6 +72,16 @@ const HomePage: React.FC<HomePageProps> = ({
       tint: '#ecfeff',
       icon: <BranchesOutlined />,
       onClick: onNavigateToApiTest,
+    },
+    {
+      key: 'ui-automation',
+      title: 'UI 自动化测试工具',
+      label: '页面对象',
+      summary: '抽取页面元素生成 PageObject,定位器验证与执行期自愈。',
+      accent: '#db2777',
+      tint: '#fdf2f8',
+      icon: <DesktopOutlined />,
+      onClick: onNavigateToUiAutomation ?? (() => {}),
     },
     {
       key: 'iot-push',
@@ -108,7 +121,14 @@ const HomePage: React.FC<HomePageProps> = ({
     });
   }
 
-  const [primaryTool, ...secondaryTools] = tools;
+  // 工具卡片统一网格：列数按数量对齐，避免出现只占半行的孤零零卡片
+  const toolColumns = (() => {
+    const n = tools.length;
+    if (n <= 3) return Math.max(n, 1);
+    if (n % 3 === 0) return 3;
+    if (n % 4 === 0) return 4;
+    return 3;
+  })();
 
   // ===== 资源导航树 =====
   const [navTree, setNavTree] = useState<NavTreeNode[]>([]);
@@ -206,43 +226,34 @@ const HomePage: React.FC<HomePageProps> = ({
             <span className="home-section-hint">点击进入对应工具</span>
           </div>
 
-          <div className={`home-tool-grid ${secondaryTools.length < 3 ? 'home-tool-grid-compact' : ''}`}>
-            {primaryTool && (
+          <div
+            className="home-tool-grid"
+            style={{ '--tool-cols': toolColumns } as React.CSSProperties}
+          >
+            {tools.map((tool, index) => (
               <button
+                key={tool.key}
                 type="button"
-                className="home-tool-card home-tool-card-primary"
-                style={{ '--tool-accent': primaryTool.accent, '--tool-tint': primaryTool.tint } as React.CSSProperties}
-                onClick={primaryTool.onClick}
+                className="home-tool-card"
+                style={
+                  {
+                    '--tool-accent': tool.accent,
+                    '--tool-tint': tool.tint,
+                    animationDelay: `${100 + index * 80}ms`,
+                  } as React.CSSProperties
+                }
+                onClick={tool.onClick}
               >
-                <span className="home-tool-tag">{primaryTool.label}</span>
-                <span className="home-tool-icon">{primaryTool.icon}</span>
+                <span className="home-tool-topline">
+                  <span className="home-tool-icon">{tool.icon}</span>
+                  <span className="home-tool-tag">{tool.label}</span>
+                </span>
                 <span className="home-tool-content">
-                  <strong>{primaryTool.title}</strong>
-                  <span>{primaryTool.summary}</span>
+                  <strong>{tool.title}</strong>
+                  <span>{tool.summary}</span>
                 </span>
               </button>
-            )}
-
-            <div className="home-secondary-grid">
-              {secondaryTools.map((tool) => (
-                <button
-                  key={tool.key}
-                  type="button"
-                  className="home-tool-card"
-                  style={{ '--tool-accent': tool.accent, '--tool-tint': tool.tint } as React.CSSProperties}
-                  onClick={tool.onClick}
-                >
-                  <span className="home-tool-topline">
-                    <span className="home-tool-icon">{tool.icon}</span>
-                    <span className="home-tool-tag">{tool.label}</span>
-                  </span>
-                  <span className="home-tool-content">
-                    <strong>{tool.title}</strong>
-                    <span>{tool.summary}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
+            ))}
           </div>
         </section>
 

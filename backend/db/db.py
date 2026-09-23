@@ -42,11 +42,60 @@ from db.models import (
 
 # 创建所有表
 def create_db_and_tables():
+    # 先修复历史遗留的错误表结构（早于当前模型建出的表），再建缺失的表
+    _drop_stale_pushlog_schema(engine)
     SQLModel.metadata.create_all(engine)
     # 自动补齐已存在表中缺失的字段（SQLite 兼容）
     _migrate_missing_columns(engine)
     # 一次性迁移：把旧 requirementpoint.module 文本按模块名回填到 module_id
     _backfill_requirement_point_module_id(engine)
+    # 一次性清理：登录态改为挂在页面对象上，旧的独立「登录配置」结构作废
+    _drop_obsolete_login_profile_schema(engine)
+
+
+def _drop_stale_pushlog_schema(engine):
+    """pushlog 表若仍是早期错误结构（original_* / response_status_code），整表重建。
+
+    早期版本的列名与当前 PushLog 模型不一致，且旧列为 NOT NULL 无默认值；
+    _migrate_missing_columns 只会补新列、无法删除旧列，导致 INSERT 永远失败
+    （NOT NULL constraint failed: pushlog.original_url）。表为空时直接丢弃重建。
+    """
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if "pushlog" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("pushlog")}
+        # 结构一致（已用当前列名）则不动
+        if "source_url" in cols and "original_url" not in cols:
+            return
+        if "original_url" not in cols and "source_url" not in cols:
+            return
+        with engine.begin() as conn:
+            count = conn.execute(text("SELECT COUNT(*) FROM pushlog")).scalar() or 0
+            if count:
+                logger.warning("自动迁移: pushlog 旧结构仍有 %s 条数据，跳过重建", count)
+                return
+            conn.execute(text("DROP TABLE IF EXISTS pushlog"))
+            logger.info("自动迁移: 已丢弃旧结构 pushlog 表（original_* 列），将按当前模型重建")
+    except Exception as e:  # noqa: BLE001 - 修复失败不阻断启动
+        logger.warning(f"自动迁移: 检查/重建 pushlog 失败(忽略): {e}")
+
+
+def _drop_obsolete_login_profile_schema(engine):
+    """清理作废的登录配置结构（pageobject.login_profile_id 列 + login_profile 表）。
+
+    登录态已改为挂在页面对象自身（is_login_page / login_page_object_id / session_*），
+    独立的 LoginProfile 实体不再使用。幂等且失败忽略，不影响启动。
+    """
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            _try_drop_column(conn, "pageobject", "login_profile_id")
+            conn.execute(text("DROP TABLE IF EXISTS login_profile"))
+    except Exception as e:  # noqa: BLE001 - 清理失败不该阻断启动
+        logger.warning(f"自动迁移: 清理登录配置遗留结构失败(忽略): {e}")
 
 
 def _try_drop_column(conn, table: str, column: str):
