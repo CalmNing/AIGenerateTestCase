@@ -24,3 +24,16 @@ frontend/.env.*
 
 # Superpowers session artifacts
 .superpowers/
+/.poc_fiber/
+/.tmp_probe/
+/.playwright-mcp/
+/.workbuddy/
+/.claude/
+/.codebuddy/
+/.superpowers/
+/docs/
+/.agents/
+/backend/docs/
+/backend/data/
+/backend/.venv/
+/backend/.claude/
