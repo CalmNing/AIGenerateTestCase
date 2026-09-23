@@ -12,7 +12,7 @@ typing_extensions==4.15.0
 uvicorn==0.40.0
 tzdata==2025.3
 alembic==1.17.2
-python-multipart==0.0.6
+python-multipart>=0.0.9
 jsonpath-ng==1.6.1
 json5==0.14.0
 httpx>=0.28.1
