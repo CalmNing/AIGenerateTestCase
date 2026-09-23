@@ -170,8 +170,11 @@ const AppWithAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     initialized: false,
     authenticated: false,
   });
+  const initStartedRef = React.useRef(false);
 
   const initKeycloak = useCallback(async () => {
+    if (initStartedRef.current) return;
+    initStartedRef.current = true;
     try {
       ensureKeycloakCryptoCompatibility();
       const authenticated = await keycloak.init({
@@ -198,6 +201,7 @@ const AppWithAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       };
     } catch (error) {
       console.error('Keycloak initialization failed:', error);
+      initStartedRef.current = false;
       setAuthState({ initialized: true, authenticated: false });
     }
   }, []);

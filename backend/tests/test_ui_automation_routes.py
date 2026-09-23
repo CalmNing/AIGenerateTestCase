@@ -109,16 +109,15 @@ class TestExtract:
 
 
 class TestCrud:
-    def test_list_scoped_to_user(self, db_session, fake_user, other_user, page_object):
+    def test_list_shared_across_users(self, db_session, fake_user, other_user, page_object):
         db_session.add(PageObject(name="Other", user_id="u2"))
         db_session.commit()
         rows = route.list_page_objects(db_session, fake_user).data
-        assert [r.name for r in rows] == ["Login"]
+        assert {r.name for r in rows} == {"Login", "Other"}
 
-    def test_get_other_user_404(self, db_session, other_user, page_object):
-        with pytest.raises(HTTPException) as exc:
-            route.get_page_object(page_object.id, db_session, other_user)
-        assert exc.value.status_code == 404
+    def test_get_other_user_ok(self, db_session, other_user, page_object):
+        result = route.get_page_object(page_object.id, db_session, other_user)
+        assert result.data.id == page_object.id
 
     def test_create_and_update(self, db_session, fake_user):
         created = route.create_page_object(
@@ -337,12 +336,13 @@ class TestExport:
         assert result.data["result_status"] == "PASSED"
         assert result.data["record_id"] == run.id
 
-    def test_task_fallback_scoped_to_owner(self, db_session, other_user, page_object):
-        db_session.add(UIAutomationRun(user_id="u1", run_type="extract", task_id="stale-task", status="ERROR"))
+    def test_task_fallback_shared(self, db_session, other_user, page_object):
+        run = UIAutomationRun(user_id="u1", run_type="extract", task_id="stale-task", status="ERROR")
+        db_session.add(run)
         db_session.commit()
-        with pytest.raises(HTTPException) as exc:
-            route.get_automation_task("stale-task", db_session, other_user)
-        assert exc.value.status_code == 404
+        db_session.refresh(run)
+        result = route.get_automation_task("stale-task", db_session, other_user)
+        assert result.data["record_id"] == run.id
 
     def test_fail_orphan_runs_marks_interrupted(self, db_session, page_object):
         from app.services.page_object_runner import fail_orphan_runs
@@ -357,14 +357,13 @@ class TestExport:
         assert running.status == "ERROR"
         assert done.status == "PASSED"
 
-    def test_get_run_404_for_other_user(self, db_session, other_user, page_object):
+    def test_get_run_shared(self, db_session, other_user, page_object):
         run = UIAutomationRun(page_object_id=page_object.id, user_id="u1", run_type="validate")
         db_session.add(run)
         db_session.commit()
         db_session.refresh(run)
-        with pytest.raises(HTTPException) as exc:
-            route.get_run(run.id, db_session, other_user)
-        assert exc.value.status_code == 404
+        result = route.get_run(run.id, db_session, other_user)
+        assert result.data.id == run.id
 
 
 class _FakeResponse:
@@ -409,10 +408,10 @@ class TestCreatePageObject:
         rows = db_session.exec(select(PageObject).where(PageObject.url == "http://a.com#/login")).all()
         assert len(rows) == 1
 
-    def test_create_different_user_not_deduped(self, db_session, fake_user, other_user, page_object):
+    def test_create_different_user_deduped(self, db_session, fake_user, other_user, page_object):
         body = route.PageObjectPayload(name="Other", url="http://a.com#/login")
         result = route.create_page_object(body, db_session, other_user)
-        assert result.data.id != page_object.id
+        assert result.data.id == page_object.id
 
 
 class TestLubanProxy:
@@ -495,12 +494,10 @@ class TestClearElements:
         assert page_object.name == "Login"
         assert page_object.url == "http://a.com#/login"
 
-    def test_other_users_cannot_clear(self, db_session, other_user, page_object):
-        with pytest.raises(HTTPException) as exc:
-            route.update_page_object(page_object.id, self._payload(page_object, []), db_session, other_user)
-        assert exc.value.status_code == 404
+    def test_other_users_can_clear(self, db_session, other_user, page_object):
+        route.update_page_object(page_object.id, self._payload(page_object, []), db_session, other_user)
         db_session.refresh(page_object)
-        assert len(page_object.elements) == 1
+        assert page_object.elements == []
 
 
 class TestSiteOriginVariables:

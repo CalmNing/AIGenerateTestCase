@@ -178,7 +178,7 @@ def _login_overrides(body, db=None, user: UserInfo = None) -> dict:
 
 def _get_owned_page_object(db, page_object_id: int, user: UserInfo) -> PageObject:
     page_object = db.get(PageObject, page_object_id)
-    if page_object is None or (page_object.user_id and page_object.user_id != user.user_id):
+    if page_object is None:
         raise HTTPException(status_code=404, detail="页面对象不存在")
     return page_object
 
@@ -258,11 +258,11 @@ async def luban_menus(body: LubanMenusRequest, db: SessionDep, user: CurrentUser
 # ---------------------------------------------------------------------------
 
 def _validated_login_page_object_id(db, user: UserInfo, raw: Optional[int]) -> Optional[int]:
-    """关联校验:0/None 表示不关联;正数必须是本人的页面对象。"""
+    """关联校验:0/None 表示不关联;正数必须是存在的页面对象。"""
     if not raw:
         return None
     row = db.get(PageObject, raw)
-    if row is None or (row.user_id and row.user_id != user.user_id):
+    if row is None:
         raise HTTPException(status_code=404, detail="登录页对象不存在")
     return int(raw)
 
@@ -277,7 +277,7 @@ def _resolve_login_page_object_id(
     if not candidate:
         return None
     row = db.get(PageObject, candidate)
-    if row is None or (row.user_id and row.user_id != user.user_id):
+    if row is None:
         raise HTTPException(status_code=404, detail="登录页对象不存在")
     return int(candidate)
 
@@ -435,7 +435,7 @@ def get_automation_task(task_id: str, db: SessionDep, user: CurrentUser):
         run = db.exec(
             select(UIAutomationRun).where(UIAutomationRun.task_id == task_id)
         ).first()
-        if run is None or (run.user_id and run.user_id != user.user_id):
+        if run is None:
             raise HTTPException(status_code=404, detail="任务不存在或已过期")
         task = _task_from_run(run)
     return Response(data=task)
@@ -447,7 +447,7 @@ def stop_automation_task(task_id: str, db: SessionDep, user: CurrentUser):
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     run = db.get(UIAutomationRun, task.get("record_id"))
-    if run is None or (run.user_id and run.user_id != user.user_id):
+    if run is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     if not cancel_po_task(task_id):
         return Response(data={"stopped": False, "message": "任务已结束"})
@@ -461,9 +461,7 @@ def stop_automation_task(task_id: str, db: SessionDep, user: CurrentUser):
 @router.get("/page-objects", response_model=Response)
 def list_page_objects(db: SessionDep, user: CurrentUser):
     rows = db.exec(
-        select(PageObject)
-        .where(PageObject.user_id == user.user_id)
-        .order_by(PageObject.id.desc())
+        select(PageObject).order_by(PageObject.id.desc())
     ).all()
     return Response(data=rows)
 
@@ -471,11 +469,9 @@ def list_page_objects(db: SessionDep, user: CurrentUser):
 @router.post("/page-objects", response_model=Response)
 def create_page_object(body: PageObjectPayload, db: SessionDep, user: CurrentUser):
     url = body.url.strip() or build_target_url(body.site_origin, body.page_path)
-    # 幂等去重:同用户同 URL 已存在时直接返回已有记录,避免重复扫描产生重复页面对象
+    # 幂等去重:同 URL 已存在时直接返回已有记录,避免重复扫描产生重复页面对象
     existing = db.exec(
-        select(PageObject)
-        .where(PageObject.user_id == user.user_id)
-        .where(PageObject.url == url)
+        select(PageObject).where(PageObject.url == url)
     ).first()
     if existing is not None:
         return Response(data=existing)
@@ -635,7 +631,6 @@ def list_runs(
     rows = db.exec(
         select(UIAutomationRun)
         .where(UIAutomationRun.page_object_id == page_object_id)
-        .where(UIAutomationRun.user_id == user.user_id)
         .order_by(UIAutomationRun.id.desc())
     ).all()
     return Response(data=rows)
@@ -644,6 +639,6 @@ def list_runs(
 @router.get("/runs/{run_id}", response_model=Response)
 def get_run(run_id: int, db: SessionDep, user: CurrentUser):
     run = db.get(UIAutomationRun, run_id)
-    if run is None or (run.user_id and run.user_id != user.user_id):
+    if run is None:
         raise HTTPException(status_code=404, detail="运行记录不存在")
     return Response(data=run)

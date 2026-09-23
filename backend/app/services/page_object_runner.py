@@ -416,7 +416,7 @@ class PageObjectRunner:
         """解析本次要复用的「登录页对象」。
 
         优先级:请求显式指定 > 页面对象自身已关联 > 页面对象自己就是登录页对象。
-        对方已删除或属于其他用户时视为未关联(关联失效不该阻断抽取/执行本身)。
+        对方已删除时视为未关联(关联失效不该阻断抽取/执行本身)。有权限即可跨用户复用。
         """
         login_page_id = self.login_page_object_id or (
             page_object.login_page_object_id if page_object else None
@@ -429,8 +429,6 @@ class PageObjectRunner:
             return page_object
         row = db.get(PageObject, login_page_id)
         if row is None:
-            return None
-        if user_id and row.user_id and row.user_id != user_id:
             return None
         return row
 

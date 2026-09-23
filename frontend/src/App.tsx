@@ -1261,7 +1261,10 @@ const App: React.FC = () => {
   };
 
   const navigateToUiAutomation = () => {
-    if (!canAccessUiAutomation) return;
+    if (!canAccessUiAutomation) {
+      showMessage('warning', '无权限', '当前账号没有 UI 自动化测试工具的访问权限');
+      return;
+    }
     setCurrentPlatform('ui-automation');
     localStorage.setItem('currentPlatform', 'ui-automation');
   };
@@ -1306,6 +1309,7 @@ const App: React.FC = () => {
           onNavigateToUiAutomation={navigateToUiAutomation}
           canAccessScheduledTask={canAccessScheduledTask}
           canAccessMock={canAccessMock}
+          canAccessUiAutomation={canAccessUiAutomation}
           canManageNav={canManageSettings}
         />
       ) : currentPlatform === 'iot-mock' ? (

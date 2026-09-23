@@ -27,6 +27,7 @@ interface HomePageProps {
   onNavigateToUiAutomation?: () => void;
   canAccessScheduledTask?: boolean;
   canAccessMock?: boolean;
+  canAccessUiAutomation?: boolean;
   canManageNav?: boolean;
 }
 
@@ -50,6 +51,7 @@ const HomePage: React.FC<HomePageProps> = ({
   onNavigateToUiAutomation,
   canAccessScheduledTask = false,
   canAccessMock = false,
+  canAccessUiAutomation = false,
   canManageNav = false,
 }) => {
   const tools: ToolEntry[] = [
@@ -74,16 +76,6 @@ const HomePage: React.FC<HomePageProps> = ({
       onClick: onNavigateToApiTest,
     },
     {
-      key: 'ui-automation',
-      title: 'UI 自动化测试工具',
-      label: '页面对象',
-      summary: '抽取页面元素生成 PageObject,定位器验证与执行期自愈。',
-      accent: '#db2777',
-      tint: '#fdf2f8',
-      icon: <DesktopOutlined />,
-      onClick: onNavigateToUiAutomation ?? (() => {}),
-    },
-    {
       key: 'iot-push',
       title: 'IoT 数据推送平台',
       label: '请求调试',
@@ -94,6 +86,19 @@ const HomePage: React.FC<HomePageProps> = ({
       onClick: onNavigateToIoT,
     },
   ];
+
+  if (canAccessUiAutomation) {
+    tools.push({
+      key: 'ui-automation',
+      title: 'UI 自动化测试工具',
+      label: '页面对象',
+      summary: '抽取页面元素生成 PageObject,定位器验证与执行期自愈。',
+      accent: '#db2777',
+      tint: '#fdf2f8',
+      icon: <DesktopOutlined />,
+      onClick: onNavigateToUiAutomation ?? (() => {}),
+    });
+  }
 
   if (canAccessScheduledTask) {
     tools.push({

@@ -75,17 +75,17 @@ def _resolve_or_400(text: str, db: Session, field: str) -> str:
 
 
 def _require_owned_testcase(db: Session, user: UserInfo, testcase_id: int) -> TestCase:
-    """取用例并校验归属;不存在或非本人一律 404(不泄露资源是否存在)。"""
+    """取用例;不存在一律 404(不泄露资源是否存在)。有权限即可访问,不校验归属。"""
     testcase = db.get(TestCase, testcase_id)
-    if testcase is None or (testcase.user_id and testcase.user_id != user.user_id):
+    if testcase is None:
         raise HTTPException(status_code=404, detail="测试用例不存在")
     return testcase
 
 
 def _require_owned_record(db: Session, user: UserInfo, record_id: Any) -> UIExecutionRecord:
-    """取执行记录并校验归属;失败统一按「任务不存在或已过期」处理。"""
+    """取执行记录;失败统一按「任务不存在或已过期」处理。有权限即可访问。"""
     record = db.get(UIExecutionRecord, record_id)
-    if record is None or (record.user_id and record.user_id != user.user_id):
+    if record is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return record
 
@@ -191,13 +191,12 @@ def stop_ui_execution_task(task_id: str, db: SessionDep, user: CurrentUser):
 def list_ui_execution_records(
     db: SessionDep, user: CurrentUser, testcase_id: Optional[int] = None
 ):
-    """某用例的历史执行记录(仅本人),按 id 倒序。"""
+    """某用例的历史执行记录,按 id 倒序。有权限即可查看全部。"""
     if testcase_id is None:
         raise HTTPException(status_code=400, detail="缺少 testcase_id 参数")
     records = db.exec(
         select(UIExecutionRecord)
         .where(UIExecutionRecord.testcase_id == testcase_id)
-        .where(UIExecutionRecord.user_id == user.user_id)
         .order_by(UIExecutionRecord.id.desc())
     ).all()
     return Response(data=records)

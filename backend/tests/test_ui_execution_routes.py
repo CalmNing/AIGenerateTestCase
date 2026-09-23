@@ -195,7 +195,7 @@ def test_stop_task_404(db_session, fake_user):
     assert exc.value.status_code == 404
 
 
-def test_stop_task_other_user_404(db_session, fake_user, fake_tc):
+def test_stop_task_other_user_ok(db_session, fake_user, fake_tc):
     import app.routes.ui_execution as route
     rec = UIExecutionRecord(testcase_id=fake_tc.id, user_id="someone-else",
                             target_url="http://a.com", status="RUNNING")
@@ -204,9 +204,8 @@ def test_stop_task_other_user_404(db_session, fake_user, fake_tc):
     db_session.refresh(rec)
     route._ui_tasks["stop-other"] = {"task_id": "stop-other", "status": "running", "record_id": rec.id}
     try:
-        with pytest.raises(HTTPException) as exc:
-            route.stop_ui_execution_task("stop-other", db_session, fake_user)
-        assert exc.value.status_code == 404
+        result = route.stop_ui_execution_task("stop-other", db_session, fake_user)
+        assert result.data["stopped"] is True
     finally:
         route._ui_tasks.pop("stop-other", None)
 

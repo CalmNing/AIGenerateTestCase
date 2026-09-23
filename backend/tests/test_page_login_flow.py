@@ -442,11 +442,21 @@ class TestPageObjectRoutes:
         db_session.refresh(target)
         assert target.login_page_object_id is None
 
-    def test_create_rejects_foreign_login_page(self, db_session, fake_user, login_page):
+    def test_create_rejects_missing_login_page(self, db_session, fake_user, login_page):
         body = route.PageObjectPayload(name="x", url="http://a.com/x", login_page_object_id=99999)
         with pytest.raises(HTTPException) as exc:
             route.create_page_object(body, db_session, fake_user)
         assert exc.value.status_code == 404
+
+    def test_create_allows_other_user_login_page(self, db_session, fake_user, other_user, login_page):
+        login_page.user_id = "u2"
+        db_session.add(login_page)
+        db_session.commit()
+        body = route.PageObjectPayload(
+            name="x", url="http://a.com/x", login_page_object_id=login_page.id,
+        )
+        result = route.create_page_object(body, db_session, fake_user)
+        assert result.data.login_page_object_id == login_page.id
 
     def test_session_endpoint_reports_state(self, db_session, fake_user, login_page):
         _write_state(pl.ensure_session_path(login_page), cookies=2)

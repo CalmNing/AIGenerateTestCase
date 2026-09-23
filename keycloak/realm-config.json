@@ -48,7 +48,9 @@
             "scheduled_task:manage",
             "mock:manage",
             "mock_log:read",
-            "mock_log:delete"
+            "mock_log:delete",
+            "ui_execute:manage",
+            "ui_automation:manage"
           ]
         }
       },
@@ -75,7 +77,9 @@
             "iot:create",
             "iot:update",
             "iot:delete",
-            "iot:execute"
+            "iot:execute",
+            "ui_execute:manage",
+            "ui_automation:manage"
           ]
         }
       },
@@ -181,6 +185,14 @@
       },
       {
         "name": "mock_log:delete",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "ui_execute:manage",
+        "description": "Auto-managed permission role"
+      },
+      {
+        "name": "ui_automation:manage",
         "description": "Auto-managed permission role"
       }
     ]
