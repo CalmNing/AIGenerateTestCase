@@ -43,6 +43,8 @@ from urllib.parse import urlparse
 from sqlmodel import Session
 
 from config import config_manager, PROJECT_ROOT
+from app.services.ui_binding_schemas import UIBoundAssert, UIBoundStep
+from app.services.ui_steps import normalize_ui_steps  # noqa: F401  (延迟重导出给 _agent_prompt_for)
 from db.models import TestCase, UIExecutionRecord, cn_tz
 
 logger = logging.getLogger(__name__)
@@ -761,6 +763,7 @@ async def establish_login_session(
     task_id: Optional[str] = None,
     llm: Optional[Any] = None,
     session_path: Optional[str] = None,
+    environment_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """执行一次「仅登录」browser-use 任务,把登录态写入登录态文件。
 
@@ -773,7 +776,7 @@ async def establish_login_session(
     """
     from app.routes.proxy import build_param_map
 
-    param_map = build_param_map(db, None, [])
+    param_map = build_param_map(db, environment_id, [])
     login_ctx, meta = resolve_login_context(
         db, param_map, target_url, login_overrides, session_path=session_path
     )
@@ -875,6 +878,8 @@ class UIExecutionRunner:
         max_steps: int = MAX_STEPS,
         timeout_seconds: int = EXECUTION_TIMEOUT_SECONDS,
         login_overrides: Optional[dict] = None,
+        environment_id: Optional[int] = None,
+        final_judgement: bool = False,
     ):
         # 构造期传入的 session:存活则复用(测试),否则 run() 内自建独立 session
         self._request_db = db
@@ -883,6 +888,10 @@ class UIExecutionRunner:
         self.timeout_seconds = timeout_seconds
         # 本次执行的显式登录配置,不落库、不进任务状态(避免凭据经 /tasks 泄露)
         self.login_overrides = login_overrides or {}
+        # 前端当前选中的环境(解析 {{var}});None 时回退默认/任意环境
+        self.environment_id = environment_id
+        # hybrid: 未结构化预期是否 LLM 终判(默认跳过)
+        self.final_judgement = final_judgement
 
     def _acquire_session(self) -> Session:
         """优先复用构造期传入的 session(测试用 in-memory session),否则自建独立 session。
@@ -941,6 +950,7 @@ class UIExecutionRunner:
         """状态机主体:准备 → 浏览器阶段(执行+判定) → 落库。
 
         origin 提升到 try 之外,供 finally 统一做登录态编码归一化(即使中途异常)。
+        hybrid 模式:先按绑定计划跑 L1/L2,失败或有 L3 再走整例 agent 兜底。
         """
         origin = ""
         try:
@@ -948,9 +958,25 @@ class UIExecutionRunner:
 
             _update_task(task_id, phase="launching_browser", progress=10, message="正在启动浏览器...")
             login_ctx, origin = self._resolve_login(db, record)
+            storage_state = self._prepare_origin_state(origin)
+
+            # ---- hybrid 分支(绑定 + 同页 L3 步进;失败降整例 agent) ----
+            if (record.execution_mode or "agent") == "hybrid":
+                hybrid_out = await self._try_hybrid(
+                    db, record, testcase, task_id, origin, storage_state, login_ctx,
+                )
+                if hybrid_out is not None:
+                    _persist(
+                        db, record, testcase, task_id,
+                        status=STATUS_PASSED if hybrid_out.success else STATUS_FAILED,
+                        summary=self._hybrid_summary(hybrid_out),
+                    )
+                    return
+                # hybrid_out is None → 需降级整例 agent,继续走下面 agent 路径
+
             inputs = _ExecutionInputs(
                 llm=_build_llm(),
-                storage_state=self._prepare_origin_state(origin),
+                storage_state=storage_state,
                 prompt=_agent_prompt_for(db, record, testcase, login_ctx),
             )
 
@@ -988,6 +1014,123 @@ class UIExecutionRunner:
             if task_id:
                 _update_task(task_id, status="done", progress=100, message="执行结束")
 
+    async def _try_hybrid(
+        self,
+        db: Session,
+        record: UIExecutionRecord,
+        testcase: TestCase,
+        task_id: Optional[str],
+        origin: str,
+        storage_state: Optional[str],
+        login_ctx: Any,
+    ) -> Optional[Any]:
+        """尝试 hybrid 执行;返回 HybridResult 表示已出终态,None 表示降级整例 agent。
+
+        绑定缺失/PO 缺失/编译非 ok → 返回 None(整例 agent)。
+        needs_agent_fallback → 返回 None,但先把 trace 落到 record 供调试。
+        """
+        from app.services.hybrid_runner import run_hybrid
+        from db.models import PageObject
+
+        binding = None
+        snap = list(record.binding_snapshot or [])
+        if snap and isinstance(snap[0], dict):
+            binding = snap[0]
+        elif isinstance(record.binding_snapshot, dict):
+            binding = record.binding_snapshot
+        if not binding:
+            return None
+        if str(binding.get("compile_status") or "ok") not in ("ok", ""):
+            return None
+        po_id = binding.get("page_object_id") or record.page_object_id
+        if not po_id:
+            return None
+        po = db.get(PageObject, int(po_id))
+        if po is None:
+            return None
+
+        _update_task(task_id, phase="executing", progress=20, message="Hybrid 确定性执行中...")
+
+        def _on_trace(entry: dict) -> None:
+            trace = list(record.steps_trace or [])
+            trace.append({
+                "step_no": entry.get("step_no") or entry.get("assert_index") or (len(trace) + 1),
+                "action": entry.get("action") or entry.get("nl") or "",
+                "result": entry.get("status") or "",
+                "level": entry.get("level"),
+                "element_key": entry.get("element_key"),
+                "healed": entry.get("healed"),
+                "error": entry.get("error"),
+            })
+            record.steps_trace = trace
+            _update_task(task_id, message=f"Hybrid 步骤: {entry.get('nl') or entry.get('action')}")
+
+        steps = [UIBoundStep.model_validate(s) for s in (binding.get("steps") or []) if isinstance(s, dict)]
+        asserts = [UIBoundAssert.model_validate(a) for a in (binding.get("asserts") or []) if isinstance(a, dict)]
+        expected = [str(e) for e in (testcase.expected_results or [])]
+
+        # 构造轻量 LLM(仅 L3 步进/终判用);测试注入 agent_factory 时不构建真 LLM
+        llm = None
+        if self.agent_factory is _default_agent_factory:
+            try:
+                from utils.llm_factory import build_chat_model
+                from config import config_manager
+                llm = build_chat_model(
+                    api_key=config_manager.get_api_key(),
+                    api_base_url=config_manager.config.get("api_base_url"),
+                    api_model=config_manager.config.get("api_model"),
+                    max_tokens=4096,
+                    temperature=0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[Hybrid] LLM 构建失败(将整例降级 agent): {exc}")
+                return None
+
+        async def _phase():
+            return await run_hybrid(
+                url=record.target_url,
+                page_elements=list(po.elements or []),
+                steps=steps,
+                asserts=asserts,
+                storage_state=storage_state,
+                task_id=task_id,
+                final_judgement=self.final_judgement,
+                expected_results=expected,
+                llm=llm,
+                on_trace=_on_trace,
+            )
+
+        try:
+            out = await asyncio.wait_for(
+                _run_browser_phase(_phase()),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"执行超时(>{self.timeout_seconds}s)")
+
+        if getattr(out, "needs_agent_fallback", False):
+            logger.info(
+                f"[Hybrid] record {record.id} 降级整例 agent: "
+                f"{getattr(out, 'agent_fallback_reason', '')}"
+            )
+            return None
+        return out
+
+    @staticmethod
+    def _hybrid_summary(out: Any) -> str:
+        """hybrid 结果 → agent_summary 文本。"""
+        parts = []
+        trace = list(getattr(out, "steps_trace", None) or [])
+        passed = sum(1 for t in trace if t.get("status") == "passed")
+        parts.append(f"Hybrid 步骤 {passed}/{len(trace)} 通过")
+        heals = len(getattr(out, "heal_events", None) or [])
+        if heals:
+            parts.append(f"自愈 {heals} 次")
+        summary = getattr(out, "agent_summary", "") or ""
+        if summary:
+            parts.append(summary)
+        return "; ".join(parts)
+
     # ---- 真实现/Stub 差异收敛点 ----
 
     def _restore_storage_state_if_empty(self, origin: str) -> None:
@@ -1022,7 +1165,7 @@ class UIExecutionRunner:
         """解析登录上下文 + 目标地址 origin(供登录态缓存定位)。"""
         from app.routes.proxy import build_param_map
 
-        param_map = build_param_map(db, None, [])
+        param_map = build_param_map(db, self.environment_id, [])
         login_ctx, meta = resolve_login_context(
             db, param_map, record.target_url, self.login_overrides
         )
@@ -1276,11 +1419,14 @@ def launch_ui_execution(
     agent_factory: Optional[Callable] = None,
     login_overrides: Optional[dict] = None,
     max_steps: int = MAX_STEPS,
+    environment_id: Optional[int] = None,
+    final_judgement: bool = False,
 ) -> str:
     """创建内存任务并后台启动 runner,返回 task_id。
 
     login_overrides 仅传给 runner 实例(不写入 _ui_tasks,避免 GET /tasks 泄露凭据)。
     max_steps 透传步数预算;<=0 时回退默认值。
+    final_judgement: hybrid 模式下未结构化预期是否做 LLM 终判(默认跳过)。
     """
     task_id = str(uuid.uuid4())
     _ui_tasks[task_id] = {
@@ -1301,6 +1447,8 @@ def launch_ui_execution(
         agent_factory=agent_factory,
         login_overrides=login_overrides,
         max_steps=max_steps if max_steps and max_steps > 0 else MAX_STEPS,
+        environment_id=environment_id,
+        final_judgement=final_judgement,
     )
 
     async def _guarded():

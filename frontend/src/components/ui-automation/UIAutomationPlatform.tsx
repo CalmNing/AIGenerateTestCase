@@ -11,12 +11,14 @@ import {
   Progress,
   Select,
   Space,
+  Switch,
   Table,
   TableProps,
   Tabs,
   Tag,
   Tooltip,
   TreeSelect,
+  Drawer,
   message,
 } from 'antd';
 import {
@@ -24,19 +26,47 @@ import {
   CodeOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  DownOutlined,
   EditOutlined,
   ExperimentOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import { PageElement, PageLocator, PageObject, UIAutomationRun, UIAutomationTaskStatus } from '../../types';
 import { LubanMenuNode, LubanModule, globalParameterApi, uiAutomationApi } from '../../services/api';
+import {
+  addLocatorByKey,
+  addChildByKey,
+  flattenElementTree,
+  nextElementKey,
+  pathByKey,
+  removeByKey,
+  removeLocatorByKey,
+  updateByKey,
+  updateLocatorByKey,
+} from '../../utils/elementTree';
 
 const STRATEGY_OPTIONS = [
   'testid', 'role', 'label', 'aria-label', 'placeholder', 'name', 'id', 'text', 'css', 'xpath',
 ].map((value) => ({ value, label: value }));
+
+// 与后端 element_type 归一化结果对齐(page_extractor.element_type / LLM prompt)
+const ELEMENT_TYPE_OPTIONS = [
+  { value: 'input', label: 'input 输入框' },
+  { value: 'button', label: 'button 按钮' },
+  { value: 'link', label: 'link 链接' },
+  { value: 'select', label: 'select 下拉' },
+  { value: 'textarea', label: 'textarea 文本域' },
+  { value: 'checkbox', label: 'checkbox 复选' },
+  { value: 'radio', label: 'radio 单选' },
+  { value: 'upload', label: 'upload 上传' },
+  { value: 'element', label: 'element 其他' },
+];
+
+const emptyLocator = (): PageLocator => ({ strategy: 'css', value: '', stability: 50 });
 
 const ACTION_OPTIONS = [
   'fill', 'click', 'select_option', 'upload_file', 'check', 'uncheck', 'press',
@@ -85,11 +115,33 @@ const formatTime = (value?: string | null) => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 };
 
+/** localStorage 里的环境 id 是字符串(可能为 env-1 形态);仅数字才作为后端 environment_id */
+const currentEnvId = (): number | null => {
+  const raw = localStorage.getItem('currentEnvironmentId');
+  if (!raw) return null;
+  const id = Number(raw);
+  return Number.isFinite(id) && id > 0 ? id : null;
+};
+
+/** localStorage 缺失/非数字(env-1)时,用后端列表解析真实 id 并写回,避免 environment_id 一直为 null */
+const resolveAndPersistEnvId = (list: Array<{ id: number | string; is_default?: boolean }>): number | null => {
+  const saved = currentEnvId();
+  const matched = saved != null ? list.find((e) => Number(e.id) === saved) : undefined;
+  const env = matched ?? list.find((e) => e.is_default) ?? list[0];
+  if (!env) return saved;
+  const id = Number(env.id);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  localStorage.setItem('currentEnvironmentId', String(id));
+  return id;
+};
+
 interface ExtractFormState {
   name: string;
   site_origin: string;
   page_path: string;
   use_llm_naming: boolean;
+  /** 浮层递归深度:0=只采当前页,默认 3,上限 5(仅浮层不跟路由) */
+  max_depth: number;
   /** 关联的登录页对象(0=不关联):有登录态直接复用,没有就先执行它的登录步骤 */
   login_page_object_id: number;
 }
@@ -99,6 +151,7 @@ const EMPTY_EXTRACT: ExtractFormState = {
   site_origin: '',
   page_path: '',
   use_llm_naming: true,
+  max_depth: 3,
   login_page_object_id: 0,
 };
 
@@ -126,7 +179,7 @@ const UIAutomationPlatform: React.FC = () => {
   }, [sidebarKeyword]);
   // 验证定位器的进行中状态:任务异步执行,按钮需要 loading 反馈
   const [validating, setValidating] = useState(false);
-  // 默认环境参数:仅用于展示时解析 {{web_url}} 等占位符,落库仍存原文
+  // 默认/当前环境参数:仅用于展示时解析 {{web_url}} 等占位符,落库仍存原文
   const [displayParams, setDisplayParams] = useState<Record<string, string>>({});
 
   // 鲁班平台「按菜单生成 URL」:模块/菜单选择,access-token 仅内存使用不落库
@@ -144,6 +197,20 @@ const UIAutomationPlatform: React.FC = () => {
   const [lubanAutoExtract, setLubanAutoExtract] = useState(false);
 
   const [elements, setElements] = useState<PageElement[]>([]);
+  const [expandedRowKeys, setExpandedRowKeys] = useState<React.Key[]>([]);
+  const handleExpandedRowsChange = useCallback((keys: readonly React.Key[]) => {
+    setExpandedRowKeys([...keys]);
+  }, []);
+  // 父节点(触发按钮)自身的定位器/说明编辑:展开只给子级,编辑走抽屉
+  const [locatorEditKey, setLocatorEditKey] = useState<string | null>(null);
+  /** 新增元素弹窗:空 parentKey = 顶层(页面主体),否则为父节点 key */
+  const [addElementOpen, setAddElementOpen] = useState(false);
+  const [addElementForm, setAddElementForm] = useState<{
+    name: string;
+    type: string;
+    parentKey: string;
+    locators: PageLocator[];
+  }>({ name: '新元素', type: 'input', parentKey: '', locators: [] });
   const [validation, setValidation] = useState<Array<Record<string, any>> | null>(null);
   const [code, setCode] = useState('');
   const [steps, setSteps] = useState<Array<Record<string, any>>>([]);
@@ -187,7 +254,11 @@ const UIAutomationPlatform: React.FC = () => {
       .getEnvironments()
       .then((res) => {
         const list = Array.isArray(res.data) ? res.data : [];
-        const env = list.find((e) => e.is_default) ?? list[0];
+        const envId = resolveAndPersistEnvId(list);
+        const env =
+          (envId != null ? list.find((e) => Number(e.id) === envId) : undefined) ??
+          list.find((e) => e.is_default) ??
+          list[0];
         if (!env) return;
         const map: Record<string, string> = {};
         for (const p of env.parameters || []) {
@@ -227,6 +298,7 @@ const UIAutomationPlatform: React.FC = () => {
       if (!res.data) return;
       setSelected(res.data);
       setElements(res.data.elements ?? []);
+      setExpandedRowKeys([]);
       // 步骤持久化在页面对象上:登录页对象的登录步骤就是在这里被保存/复用的
       setSteps(res.data.steps ?? []);
       loadRuns(res.data.id);
@@ -407,6 +479,7 @@ const UIAutomationPlatform: React.FC = () => {
       site_origin: selected.site_origin,
       page_path: selected.page_path,
       use_llm_naming: true,
+      max_depth: 3,
       // 自己就是登录页对象时预选它自己(拿自己的登录态抽,否则会被重定向到登录页);
       // 未关联登录页对象的普通页面预选 0 = 本次以匿名身份抽取,不读已缓存登录态
       login_page_object_id:
@@ -439,7 +512,12 @@ const UIAutomationPlatform: React.FC = () => {
     }
     setLubanLoading('modules');
     try {
-      const res = await uiAutomationApi.lubanModules({ base_url: base, access_token: token, res_id: lubanResId.trim() });
+      const res = await uiAutomationApi.lubanModules({
+        base_url: base,
+        access_token: token,
+        res_id: lubanResId.trim(),
+        environment_id: currentEnvId(),
+      });
       if (res.code !== 200) {
         message.error(res.message || '获取系统模块失败');
         return;
@@ -467,6 +545,7 @@ const UIAutomationPlatform: React.FC = () => {
         access_token: lubanToken.trim(),
         res_id: lubanResId.trim(),
         sys_module_code: moduleCode,
+        environment_id: currentEnvId(),
       });
       if (res.code !== 200) {
         message.error(res.message || '获取菜单失败');
@@ -535,7 +614,12 @@ const UIAutomationPlatform: React.FC = () => {
     }
     setLubanScanning(true);
     try {
-      const modRes = await uiAutomationApi.lubanModules({ base_url: base, access_token: token, res_id: lubanResId.trim() });
+      const modRes = await uiAutomationApi.lubanModules({
+        base_url: base,
+        access_token: token,
+        res_id: lubanResId.trim(),
+        environment_id: currentEnvId(),
+      });
       if (modRes.code !== 200) {
         message.error(modRes.message || '获取系统模块失败');
         return;
@@ -554,6 +638,7 @@ const UIAutomationPlatform: React.FC = () => {
           access_token: token,
           res_id: lubanResId.trim(),
           sys_module_code: mod.code,
+          environment_id: currentEnvId(),
         });
         done += 1;
         setLubanScanProgress({ done, total: modules.length });
@@ -616,6 +701,7 @@ const UIAutomationPlatform: React.FC = () => {
                     page_path: page.page_path,
                     url: page.url,
                     use_llm_naming: true,
+                    environment_id: currentEnvId(),
                   });
                 }
               } else {
@@ -654,18 +740,22 @@ const UIAutomationPlatform: React.FC = () => {
         site_origin: extractForm.site_origin.trim(),
         page_path: extractForm.page_path.trim(),
         use_llm_naming: extractForm.use_llm_naming,
+        max_depth: extractForm.max_depth,
         login_page_object_id: extractForm.login_page_object_id || null,
         // 没选登录页对象 = 本次显式不使用登录态(匿名抽取,不读站点缓存、不登录)
         skip_login: !extractForm.login_page_object_id,
+        environment_id: currentEnvId(),
       };
       const res =
         extractMode === 'regenerate' && selected
           ? await uiAutomationApi.regenerate(selected.id, {
               use_llm_naming: extractForm.use_llm_naming,
               merge: mergeOnRegenerate,
+              max_depth: extractForm.max_depth,
               login_page_object_id: extractForm.login_page_object_id || null,
               // 没选登录页对象 = 本次显式不使用登录态(匿名抽取,不读站点缓存、不登录)
               skip_login: !extractForm.login_page_object_id,
+              environment_id: currentEnvId(),
             })
           : await uiAutomationApi.extract(payload);
       if (res.code !== 200 || !res.data) {
@@ -720,16 +810,16 @@ const UIAutomationPlatform: React.FC = () => {
   // 元素全没了以后,已配置步骤里的 element key 必然失效,一并清掉。
   const clearElements = () => {
     if (!selected) return;
-    if (elements.length === 0) {
+    if (totalElementCount === 0) {
       message.info('当前没有元素可清空');
       return;
     }
-    const count = elements.length;
+    const count = totalElementCount;
     Modal.confirm({
       title: `清空「${selected.name}」的全部元素?`,
       content: (
         <div>
-          将删除 {count} 个元素及其定位器、名称编辑与自愈记录,已配置的执行步骤同时清空。
+          将删除 {count} 个元素(含子节点)及其定位器、名称编辑与自愈记录,已配置的执行步骤同时清空。
           此操作不可撤销,之后需要重新抽取或手工新增。
         </div>
       ),
@@ -751,6 +841,7 @@ const UIAutomationPlatform: React.FC = () => {
             return;
           }
           setElements([]);
+          setExpandedRowKeys([]);
           setSteps([]);
           setSelected(res.data ?? selected);
           await loadPageObjects(selected.id);
@@ -800,6 +891,7 @@ const UIAutomationPlatform: React.FC = () => {
         message.success('已保存');
         setSelected(res.data);
         setElements(res.data.elements ?? []);
+        setExpandedRowKeys([]);
         setEditOpen(false);
         loadPageObjects(selected.id);
       }
@@ -826,6 +918,7 @@ const UIAutomationPlatform: React.FC = () => {
     try {
       const res = await uiAutomationApi.validate(selected.id, {
         login_page_object_id: activeLoginPage?.id ?? selected.login_page_object_id ?? null,
+        environment_id: currentEnvId(),
       });
       if (res.code !== 200 || !res.data) {
         message.error(res.message || '发起验证失败');
@@ -858,9 +951,40 @@ const UIAutomationPlatform: React.FC = () => {
     }
   };
 
+  /** 步骤将实际执行的列表(优先本次编辑,否则页面对象已保存步骤) */
+  const activeRunSteps = () => (steps.length > 0 ? steps : (selected?.steps ?? []));
+
+  /** 引用了 enabled===false 元素的步骤 → 无效元素 key(有序去重) */
+  const invalidStepElementKeys = (runStepsList: Array<Record<string, any>>) => {
+    const disabled = new Map<string, string>();
+    flattenElementTree(elements).forEach(({ element }) => {
+      if (element.enabled === false) disabled.set(element.key, element.name || element.key);
+    });
+    if (!disabled.size) return [];
+    const keys: string[] = [];
+    runStepsList.forEach((step) => {
+      const key = step?.element;
+      if (key && disabled.has(key) && !keys.includes(key)) keys.push(key);
+    });
+    return keys;
+  };
+
   const runSteps = async () => {
     if (!selected || (steps.length === 0 && (selected.steps ?? []).length === 0)) {
       message.warning('请先添加执行步骤(或使用页面对象上已保存的步骤)');
+      return;
+    }
+    const invalidKeys = invalidStepElementKeys(activeRunSteps());
+    if (invalidKeys.length) {
+      const disabledMap = new Map<string, string>();
+      flattenElementTree(elements).forEach(({ element }) => {
+        if (element.enabled === false) disabledMap.set(element.key, element.name || element.key);
+      });
+      const labels = invalidKeys.map((k) => {
+        const name = disabledMap.get(k) || k;
+        return name === k ? k : `${name}(${k})`;
+      });
+      message.error(`步骤中存在无效的元素: ${labels.join('、')}`);
       return;
     }
     setRunning(true);
@@ -868,6 +992,7 @@ const UIAutomationPlatform: React.FC = () => {
     try {
       const res = await uiAutomationApi.run(selected.id, steps, {
         login_page_object_id: activeLoginPage?.id ?? selected.login_page_object_id ?? null,
+        environment_id: currentEnvId(),
       });
       if (res.code !== 200 || !res.data) {
         message.error(res.message || '发起执行失败');
@@ -899,155 +1024,409 @@ const UIAutomationPlatform: React.FC = () => {
     }
   };
 
-  // 元素编辑统一按 key 定位(树形表格里 index 不再等于扁平数组下标)
+  // 元素编辑按 key 在树中深度定位(不再假设扁平数组下标)
   const updateElement = (key: string, patch: Partial<PageElement>) => {
-    setElements((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)));
+    setElements((prev) => updateByKey(prev, key, patch));
+  };
+
+  /** 打开新增元素弹窗(parentKey 预选挂载位置) */
+  const openAddElement = (parentKey = '') => {
+    if (!selected) return;
+    setAddElementForm({
+      name: '新元素',
+      type: 'input',
+      parentKey,
+      locators: [emptyLocator()],
+    });
+    setAddElementOpen(true);
+  };
+
+  const updateAddLocator = (index: number, patch: Partial<PageLocator>) => {
+    setAddElementForm((prev) => ({
+      ...prev,
+      locators: prev.locators.map((loc, i) => (i === index ? { ...loc, ...patch } : loc)),
+    }));
+  };
+
+  const addAddLocator = () => {
+    setAddElementForm((prev) => ({ ...prev, locators: [...prev.locators, emptyLocator()] }));
+  };
+
+  const removeAddLocator = (index: number) => {
+    setAddElementForm((prev) => ({
+      ...prev,
+      locators: prev.locators.filter((_, i) => i !== index),
+    }));
+  };
+
+  /** 确认新增:插到目标位置最前;父级自动展开;丢弃空定位器 */
+  const confirmAddElement = () => {
+    if (!selected) return;
+    const { name, type, parentKey, locators } = addElementForm;
+    const keptLocators = locators
+      .filter((loc) => loc.value.trim())
+      .map((loc) => ({ ...loc, value: loc.value.trim() }));
+    setElements((prev) => {
+      const key = nextElementKey(prev);
+      const child: PageElement = {
+        key,
+        name: name.trim() || '新元素',
+        type: type || 'input',
+        enabled: true,
+        locators: keptLocators,
+      };
+      if (!parentKey) return [child, ...prev];
+      return addChildByKey(prev, parentKey, child);
+    });
+    if (parentKey) {
+      setExpandedRowKeys((prev) => (prev.includes(parentKey) ? prev : [...prev, parentKey]));
+    }
+    setAddElementOpen(false);
+    message.success(keptLocators.length ? '已新增元素(含定位器)' : '已新增元素');
   };
 
   const updateLocator = (elementKey: string, locatorIndex: number, patch: Partial<PageLocator>) => {
-    setElements((prev) =>
-      prev.map((item) => {
-        if (item.key !== elementKey) return item;
-        const locators = (item.locators ?? []).map((loc, j) => (j === locatorIndex ? { ...loc, ...patch } : loc));
-        return { ...item, locators };
-      })
-    );
+    setElements((prev) => updateLocatorByKey(prev, elementKey, locatorIndex, patch));
   };
 
   const addLocator = (elementKey: string) => {
-    setElements((prev) =>
-      prev.map((item) =>
-        item.key === elementKey
-          ? { ...item, locators: [...(item.locators ?? []), { strategy: 'css', value: '', stability: 50 }] }
-          : item
-      )
-    );
+    setElements((prev) => addLocatorByKey(prev, elementKey));
   };
 
   const removeLocator = (elementKey: string, locatorIndex: number) => {
-    setElements((prev) =>
-      prev.map((item) =>
-        item.key === elementKey ? { ...item, locators: (item.locators ?? []).filter((_, j) => j !== locatorIndex) } : item
-      )
-    );
+    setElements((prev) => removeLocatorByKey(prev, elementKey, locatorIndex));
   };
 
-  // 分组:probeTrigger 相同的元素归入同一弹窗组,排序 = 页面主体 → 新增类 → 编辑类 → 删除类 → 其他
-  const groupElements = useCallback((items: PageElement[]) => {
+  // 树形:带 children 的触发按钮作顶层可展开行;无子节点的根归入「页面主体」。
+  // 旧扁平数据(仅有 probeTrigger、无 children)仍按触发词归组为一层伪分组。
+  const elementTreeRows = useMemo(() => {
+    type Row = PageElement & { isGroup?: boolean; group?: string; count?: number };
+    const hasTree = elements.some((el) => (el.children?.length ?? 0) > 0);
+    if (hasTree) {
+      const parents = elements.filter((el) => (el.children?.length ?? 0) > 0);
+      const leaves = elements.filter((el) => (el.children?.length ?? 0) === 0);
+      const rows: Row[] = [];
+      if (leaves.length) {
+        rows.push({
+          key: `__group__::${BASE_GROUP}`,
+          name: groupLabel(BASE_GROUP),
+          type: '',
+          locators: [],
+          isGroup: true,
+          group: BASE_GROUP,
+          count: leaves.length,
+          children: leaves,
+        });
+      }
+      rows.push(...parents);
+      return rows;
+    }
+    // 扁平:按 probeTrigger 分组成一层(保持旧 UI 分组语义)
     const groups = new Map<string, PageElement[]>();
-    items.forEach((el) => {
+    elements.forEach((el) => {
       const g = groupOf(el);
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g)!.push(el);
     });
     return [...groups.keys()]
       .sort((a, b) => groupSortIndex(a) - groupSortIndex(b))
-      .map((g) => ({ group: g, items: groups.get(g) || [] }));
-  }, []);
-
-  const elementTreeRows = useMemo(
-    () =>
-      groupElements(elements).map(({ group, items }) => ({
-        key: `__group__::${group}`,
+      .map((g) => ({
+        key: `__group__::${g}`,
+        name: groupLabel(g),
+        type: '',
+        locators: [],
         isGroup: true as const,
-        group,
-        count: items.length,
-        children: items,
-      })),
-    [elements, groupElements],
-  );
+        group: g,
+        count: (groups.get(g) || []).length,
+        children: groups.get(g) || [],
+      }));
+  }, [elements]);
 
-  const elementSelectOptions = useMemo(
-    () =>
-      groupElements(elements).map(({ group, items }) => ({
-        label: `${groupLabel(group)} (${items.length})`,
-        title: group,
-        options: items.map((el) => ({ value: el.key, label: `${el.name} (${el.key})` })),
-      })),
-    [elements, groupElements],
-  );
+  const totalElementCount = useMemo(() => flattenElementTree(elements).length, [elements]);
+
+  // 层级序号:顶层 1,2…;子级 2.1、2.1.1(按当前树顺序,含分组行)
+  const seqByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    const walk = (nodes: Array<PageElement & { isGroup?: boolean }>, prefix?: string) => {
+      let i = 0;
+      for (const n of nodes || []) {
+        i += 1;
+        const seq = prefix ? `${prefix}.${i}` : String(i);
+        map.set(n.key, seq);
+        if (n.children?.length) {
+          walk(n.children as Array<PageElement & { isGroup?: boolean }>, seq);
+        }
+      }
+    };
+    walk(elementTreeRows as Array<PageElement & { isGroup?: boolean }>);
+    return map;
+  }, [elementTreeRows]);
+
+  // 可展开 key:仅有子级的行(分组/触发按钮);叶子不可展开,编辑走操作列抽屉
+  const expandableKeys = useMemo(() => {
+    const keys: React.Key[] = [];
+    const walk = (nodes?: Array<PageElement & { isGroup?: boolean }>) => {
+      for (const n of nodes || []) {
+        if (n.isGroup || n.children?.length) {
+          keys.push(n.key);
+          if (n.children?.length) walk(n.children as Array<PageElement & { isGroup?: boolean }>);
+        }
+      }
+    };
+    walk(elementTreeRows as Array<PageElement & { isGroup?: boolean }>);
+    return keys;
+  }, [elementTreeRows]);
+
+  const locatorEditNode = useMemo(() => {
+    if (!locatorEditKey) return null;
+    return flattenElementTree(elements).find((f) => f.element.key === locatorEditKey)?.element ?? null;
+  }, [elements, locatorEditKey]);
+
+  // 工具栏「挂到」下拉:顶层 + 所有可作父级的触发按钮(含嵌套)
+  const parentAddOptions = useMemo(() => {
+    const opts: Array<{ value: string; label: string }> = [
+      { value: '', label: '页面主体(顶层)' },
+    ];
+    const walk = (nodes: PageElement[], prefix = '') => {
+      for (const n of nodes) {
+        if (n.children?.length) {
+          opts.push({
+            value: n.key,
+            label: `${prefix}${n.name || n.key} (${n.children.length} 子级)`,
+          });
+          walk(n.children, `${prefix}${n.name || n.key} / `);
+        }
+      }
+    };
+    walk(elements);
+    return opts;
+  }, [elements]);
+
+  const rowKindClass = (row: PageElement & { isGroup?: boolean }) => {
+    if (row.isGroup) return 'ui-auto-tree-row ui-auto-tree-row--group';
+    const base = row.children?.length ? 'ui-auto-tree-row ui-auto-tree-row--parent' : 'ui-auto-tree-row ui-auto-tree-row--leaf';
+    return row.enabled === false ? `${base} ui-auto-tree-row--disabled` : base;
+  };
+
+  // 步骤下拉:树形拍平 + 按祖先路径分组
+  const elementSelectOptions = useMemo(() => {
+    const paths = pathByKey(elements);
+    const flat = flattenElementTree(elements);
+    const groups = new Map<string, PageElement[]>();
+    flat.forEach(({ element, path }) => {
+      const g = path.length ? path.join(' / ') : groupOf(element);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g)!.push(element);
+    });
+    return [...groups.entries()].map(([group, items]) => ({
+      label: `${group} (${items.length})`,
+      title: group,
+      options: items.map((el) => {
+        const p = paths[el.key] ?? [];
+        return { value: el.key, label: `${p.length ? `${p.join(' / ')} / ` : ''}${el.name} (${el.key})` };
+      }),
+    }));
+  }, [elements]);
 
   const validationTreeRows = useMemo(() => {
     if (!validation) return [];
-    const triggerByKey = new Map(elements.map((el) => [el.key, groupOf(el)]));
+    const paths = pathByKey(elements);
+    // 按祖先路径分组(与后端 ensure_overlay_path 分组一致)
     const groups = new Map<string, Array<Record<string, any>>>();
     validation.forEach((row) => {
-      const g = triggerByKey.get(row.key) || BASE_GROUP;
+      const path = paths[row.key] ?? [];
+      const g = path.length
+        ? path.join(' / ')
+        : groupOf(elements.find((el) => el.key === row.key) ?? ({} as PageElement));
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g)!.push(row);
     });
+    if (elements.some((el) => (el.children?.length ?? 0) > 0)) {
+      // 树形:validation 行按 key 挂回对应节点的 children(展示层用 elements 结构)
+      const attach = (nodes: PageElement[]): Array<Record<string, any>> =>
+        nodes.flatMap((node) => {
+          const own = validation.filter((r) => r.key === node.key);
+          const kids = node.children?.length ? attach(node.children) : [];
+          const row = own[0];
+          if (!row && !kids.length) return [];
+          return [
+            {
+              ...(row ?? { key: node.key, name: node.name, matched: false, locators: [] }),
+              enabled: node.enabled,
+              children: kids.length ? kids : undefined,
+            },
+          ];
+        });
+      const attached = attach(elements);
+      const parents = attached.filter((r) => r.children?.length);
+      const leaves = attached.filter((r) => !r.children?.length);
+      const rows: Array<Record<string, any>> = [];
+      if (leaves.length) {
+        rows.push({
+          key: `__vgroup__::${BASE_GROUP}`,
+          isGroup: true,
+          group: BASE_GROUP,
+          count: leaves.length,
+          children: leaves,
+        });
+      }
+      rows.push(...parents);
+      return rows;
+    }
     return [...groups.keys()]
       .sort((a, b) => groupSortIndex(a) - groupSortIndex(b))
       .map((g) => ({
         key: `__vgroup__::${g}`,
-        isGroup: true as const,
+        isGroup: true,
         group: g,
         count: (groups.get(g) || []).length,
         children: groups.get(g) || [],
       }));
   }, [validation, elements]);
 
+  const validationSeqByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    const walk = (nodes: Array<Record<string, any>>, prefix?: string) => {
+      let i = 0;
+      for (const n of nodes || []) {
+        i += 1;
+        const seq = prefix ? `${prefix}.${i}` : String(i);
+        map.set(String(n.key), seq);
+        if (n.children?.length) walk(n.children, seq);
+      }
+    };
+    walk(validationTreeRows);
+    return map;
+  }, [validationTreeRows]);
+
   type ElementRow = PageElement & { isGroup?: boolean; group?: string; count?: number };
+
   const elementColumns: TableProps<ElementRow>['columns'] = [
+    {
+      title: '#',
+      width: 64,
+      render: (_: unknown, row: ElementRow) => (
+        <span className="ui-auto-tree-seq" title={`序号 ${seqByKey.get(row.key) ?? ''}`}>
+          {seqByKey.get(row.key) ?? '—'}
+        </span>
+      ),
+    },
     {
       title: '名称 / 分组',
       dataIndex: 'name',
+      width: 340,
       render: (value: string, row: ElementRow) =>
         row.isGroup ? (
-          <Space size={8}>
+          <Space size={8} className="ui-auto-tree-group-label">
             <Tag color={groupTagColor(row.group!)} style={{ marginInlineEnd: 0 }}>
-              {groupLabel(row.group!)}
+              {row.group! === BASE_GROUP ? row.name : groupLabel(row.group!)}
             </Tag>
             <span style={{ color: 'var(--color-text-secondary)' }}>{row.count} 个元素</span>
           </Space>
         ) : (
-          <Input value={value} onChange={(e) => updateElement(row.key, { name: e.target.value })} />
+          <span className="ui-auto-tree-name ui-auto-tree-name--static">
+            <span className="ui-auto-tree-name__text" title={value}>
+              {value || '—'}
+            </span>
+            {row.children?.length ? (
+              <Tooltip title={`${row.children.length} 个弹窗子元素`}>
+                <Tag color="geekblue" className="ui-auto-tree-count" style={{ marginInlineEnd: 0 }}>
+                  {row.children.length}
+                </Tag>
+              </Tooltip>
+            ) : null}
+          </span>
         ),
     },
     {
       title: 'key',
       dataIndex: 'key',
-      width: 140,
+      width: 130,
       render: (v: string, row: ElementRow) => (row.isGroup ? null : <Tag>{v}</Tag>),
     },
     {
       title: '类型',
       dataIndex: 'type',
-      width: 120,
+      width: 110,
       render: (value: string, row: ElementRow) =>
-        row.isGroup ? null : (
-          <Input value={value} onChange={(e) => updateElement(row.key, { type: e.target.value })} />
-        ),
+        row.isGroup ? null : (value ? <Tag>{value}</Tag> : '—'),
     },
     {
       title: '定位器',
-      width: 90,
+      width: 78,
       render: (_: unknown, row: ElementRow) => (row.isGroup ? null : `${(row.locators ?? []).length} 个`),
     },
     {
-      title: '自愈次数',
+      title: '自愈',
       dataIndex: 'heal_count',
-      width: 90,
-      render: (v?: number, row?: ElementRow) => (row?.isGroup ? null : v ?? 0),
+      width: 64,
+      render: (v?: number, row?: ElementRow) => (row?.isGroup ? null : (v ?? 0) || '—'),
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 72,
+      render: (_: unknown, row: ElementRow) =>
+        row.isGroup ? null : (
+          <Tooltip title={row.enabled === false ? '无效:引用它的执行步骤会被拦截' : '有效'}>
+            <Switch
+              size="small"
+              checked={row.enabled !== false}
+              aria-label={`有效开关 ${row.key}`}
+              onChange={(checked) => updateElement(row.key, { enabled: checked })}
+            />
+          </Tooltip>
+        ),
     },
     {
       title: '操作',
-      width: 80,
+      width: 120,
       render: (_: unknown, row: ElementRow) =>
         row.isGroup ? null : (
-          <Button
-            size="small"
-            danger
-            type="text"
-            onClick={() => setElements((prev) => prev.filter((item) => item.key !== row.key))}
-          >
-            删除
-          </Button>
+          <Space size={0}>
+            {row.children?.length || parentAddOptions.some((o) => o.value === row.key) ? (
+              <Tooltip title="在该节点下新增子元素">
+                <Button
+                  size="small"
+                  type="text"
+                  aria-label={`在 ${row.key} 下新增子元素`}
+                  icon={<PlusOutlined />}
+                  onClick={() => openAddElement(row.key)}
+                />
+              </Tooltip>
+            ) : null}
+            <Tooltip title="编辑名称、类型、说明与定位器">
+              <Button
+                size="small"
+                type="text"
+                aria-label={`编辑 ${row.key}`}
+                icon={<EditOutlined />}
+                onClick={() => setLocatorEditKey(row.key)}
+              />
+            </Tooltip>
+            <Popconfirm
+              title={row.children?.length ? `删除「${row.name}」及其 ${row.children.length} 个子节点?` : `删除「${row.name}」?`}
+              description="将移除该元素及子树上的定位器与名称,需重新抽取或手工补回。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => setElements((prev) => removeByKey(prev, row.key))}
+            >
+              <Button size="small" type="text" danger aria-label={`删除 ${row.key}`} icon={<DeleteOutlined />} />
+            </Popconfirm>
+          </Space>
         ),
     },
   ];
 
   const validationColumns: TableProps<Record<string, any>>['columns'] = [
+    {
+      title: '#',
+      width: 64,
+      render: (_: unknown, row: Record<string, any>) => (
+        <span className="ui-auto-tree-seq">{validationSeqByKey.get(String(row.key)) ?? '—'}</span>
+      ),
+    },
     {
       title: '元素 / 分组',
       dataIndex: 'name',
@@ -1098,36 +1477,137 @@ const UIAutomationPlatform: React.FC = () => {
     { title: '时间', dataIndex: 'finished_at', width: 170, render: (v?: string) => formatTime(v) },
   ];
 
-  const elementsTab = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Space>
-        <Button type="primary" icon={<SaveOutlined />} onClick={saveElements} disabled={!selected}>
-          保存元素
-        </Button>
-        <Button
-          icon={<PlusOutlined />}
-          disabled={!selected}
-          onClick={() =>
-            setElements((prev) => {
-              // 清空/删除后 prev.length 会与已有 key 撞车(如残留 element_2),按占用情况取号
-              const used = new Set(prev.map((item) => item.key));
-              let index = prev.length + 1;
-              while (used.has(`element_${index}`)) index += 1;
-              return [...prev, { key: `element_${index}`, name: '新元素', type: 'input', locators: [] }];
-            })
+  /** 名称/类型/说明 + 定位器编辑面板(操作列抽屉统一入口;台账表只读) */
+  const locatorEditor = (row: PageElement, opts?: { inDrawer?: boolean }) => (
+    <div className={opts?.inDrawer ? 'ui-auto-locator-panel ui-auto-locator-panel--drawer' : 'ui-auto-locator-panel'}>
+      <div className="ui-auto-locator-panel__section">
+        <div className="ui-auto-locator-panel__label">名称</div>
+        <Input
+          size="small"
+          value={row.name ?? ''}
+          placeholder="元素业务名称"
+          aria-label={`名称 ${row.key}`}
+          onChange={(e) => updateElement(row.key, { name: e.target.value })}
+        />
+      </div>
+      <div className="ui-auto-locator-panel__section">
+        <div className="ui-auto-locator-panel__label">类型</div>
+        <Select
+          size="small"
+          style={{ width: '100%' }}
+          value={row.type || 'input'}
+          options={
+            row.type && !ELEMENT_TYPE_OPTIONS.some((o) => o.value === row.type)
+              ? [{ value: row.type, label: row.type }, ...ELEMENT_TYPE_OPTIONS]
+              : ELEMENT_TYPE_OPTIONS
           }
-        >
-          新增元素
-        </Button>
-        <Button
-          danger
-          icon={<DeleteOutlined />}
-          disabled={!selected || elements.length === 0}
-          onClick={clearElements}
-        >
-          清空元素
-        </Button>
-      </Space>
+          aria-label={`类型 ${row.key}`}
+          onChange={(value) => updateElement(row.key, { type: value })}
+        />
+      </div>
+      <div className="ui-auto-locator-panel__section">
+        <div className="ui-auto-locator-panel__label">说明</div>
+        <Input
+          size="small"
+          value={row.description ?? ''}
+          placeholder="元素用途说明,便于写用例时理解"
+          aria-label={`说明 ${row.key}`}
+          onChange={(e) => updateElement(row.key, { description: e.target.value })}
+        />
+      </div>
+      <div className="ui-auto-locator-panel__section">
+        <div className="ui-auto-locator-panel__label">定位器</div>
+        <div className="ui-auto-locator-panel__list">
+          {(row.locators ?? []).length === 0 ? (
+            <span className="ui-auto-locator-panel__empty">暂无定位器,点下方添加</span>
+          ) : null}
+          {(row.locators ?? []).map((loc, locIndex) => (
+            <div key={locIndex} className="ui-auto-locator-panel__row">
+              <Select
+                size="small"
+                style={{ width: 120 }}
+                value={loc.strategy}
+                options={STRATEGY_OPTIONS}
+                aria-label={`策略 ${loc.strategy}`}
+                onChange={(value) => updateLocator(row.key, locIndex, { strategy: value })}
+              />
+              <Input
+                size="small"
+                className="ui-auto-locator-panel__value"
+                value={loc.value}
+                placeholder="选择器 / 表达式"
+                aria-label={`定位器值 ${locIndex + 1}`}
+                onChange={(e) => updateLocator(row.key, locIndex, { value: e.target.value })}
+              />
+              <Tooltip title={`稳定性评分 ${loc.stability ?? 0}`}>
+                <Tag style={{ marginInlineEnd: 0 }}>稳 {loc.stability ?? 0}</Tag>
+              </Tooltip>
+              <Button
+                size="small"
+                danger
+                type="text"
+                aria-label={`删除定位器 ${locIndex + 1}`}
+                onClick={() => removeLocator(row.key, locIndex)}
+              >
+                删除
+              </Button>
+            </div>
+          ))}
+          <Button size="small" icon={<PlusOutlined />} onClick={() => addLocator(row.key)}>
+            添加定位器
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const elementsTab = (
+    <div className="ui-auto-tab-body">
+      <div className="ui-auto-toolbar">
+        <Space wrap size={8}>
+          <Button type="primary" icon={<SaveOutlined />} onClick={saveElements} disabled={!selected}>
+            保存元素
+          </Button>
+          <Button
+            type="default"
+            icon={<PlusOutlined />}
+            disabled={!selected}
+            onClick={() => openAddElement()}
+          >
+            新增元素
+          </Button>
+          <Button
+            danger
+            type="default"
+            icon={<DeleteOutlined />}
+            disabled={!selected || totalElementCount === 0}
+            onClick={clearElements}
+          >
+            清空元素
+          </Button>
+        </Space>
+        <Space wrap size={6}>
+          <Button
+            size="small"
+            type="text"
+            icon={<DownOutlined />}
+            disabled={!selected || expandableKeys.length === 0}
+            onClick={() => setExpandedRowKeys(expandableKeys)}
+          >
+            全部展开
+          </Button>
+          <Button
+            size="small"
+            type="text"
+            icon={<UpOutlined />}
+            disabled={expandedRowKeys.length === 0}
+            onClick={() => setExpandedRowKeys([])}
+          >
+            全部收起
+          </Button>
+          <span className="ui-auto-toolbar__meta">{totalElementCount} 个元素</span>
+        </Space>
+      </div>
       {task?.uncollected_count ? (
         <Alert
           type="warning"
@@ -1150,52 +1630,44 @@ const UIAutomationPlatform: React.FC = () => {
         />
       ) : null}
       <Table
+        className="ui-auto-elements-table"
         size="small"
         rowKey="key"
         dataSource={elementTreeRows as unknown as ElementRow[]}
         columns={elementColumns}
         pagination={false}
-        locale={{ emptyText: '暂无元素,请先抽取' }}
+        scroll={{ x: 'max-content', y: 'max(240px, calc(100vh - 360px))' }}
         childrenColumnName="children"
+        rowClassName={(row) => rowKindClass(row as ElementRow)}
         expandable={{
-          expandedRowRender: (row: ElementRow) =>
-            row.isGroup ? null : (
-            <Space direction="vertical" style={{ width: '100%' }} size={6}>
-              <Space align="baseline">
-                <span style={{ width: 56, display: 'inline-block', color: 'var(--color-text-tertiary)' }}>说明</span>
-                <Input
-                  style={{ width: 452, maxWidth: '100%' }}
-                  value={row.description ?? ''}
-                  placeholder="元素用途说明"
-                  onChange={(e) => updateElement(row.key, { description: e.target.value })}
-                />
-              </Space>
-              {(row.locators ?? []).map((loc, locIndex) => (
-                <Space key={locIndex} align="baseline">
-                  <Select
-                    style={{ width: 130 }}
-                    value={loc.strategy}
-                    options={STRATEGY_OPTIONS}
-                    onChange={(value) => updateLocator(row.key, locIndex, { strategy: value })}
-                  />
-                  <Input
-                    style={{ width: 320 }}
-                    value={loc.value}
-                    onChange={(e) => updateLocator(row.key, locIndex, { value: e.target.value })}
-                  />
-                  <Tag>稳定性 {loc.stability}</Tag>
-                  <Button size="small" danger type="text" onClick={() => removeLocator(row.key, locIndex)}>
-                    删除
-                  </Button>
-                </Space>
-              ))}
-              <Button size="small" icon={<PlusOutlined />} onClick={() => addLocator(row.key)}>
-                添加定位器
-              </Button>
-            </Space>
-            )
+          expandedRowKeys,
+          onExpandedRowsChange: handleExpandedRowsChange,
+          indentSize: 20,
+          // 只有分组/有 children 的父级可展开;叶子无展开箭头,编辑走操作列抽屉
+          rowExpandable: (row: ElementRow) => !!row.isGroup || !!row.children?.length,
         }}
       />
+      <Drawer
+        title={
+          locatorEditNode ? (
+            <Space size={8}>
+              <span>编辑「{locatorEditNode.name}」</span>
+              <Tag>{locatorEditNode.key}</Tag>
+              {locatorEditNode.children?.length ? (
+                <Tag color="geekblue">{locatorEditNode.children.length} 子节点</Tag>
+              ) : null}
+            </Space>
+          ) : (
+            '编辑元素'
+          )
+        }
+        open={!!locatorEditKey}
+        width={480}
+        onClose={() => setLocatorEditKey(null)}
+        destroyOnClose
+      >
+        {locatorEditNode ? locatorEditor(locatorEditNode, { inDrawer: true }) : null}
+      </Drawer>
     </div>
   );
 
@@ -1221,12 +1693,20 @@ const UIAutomationPlatform: React.FC = () => {
       </Button>
       {validation ? (
         <Table
+          className="ui-auto-elements-table"
           size="small"
           rowKey="key"
           dataSource={validationTreeRows}
           columns={validationColumns}
           pagination={false}
+          scroll={{ x: 'max-content' }}
           childrenColumnName="children"
+          rowClassName={(row) => rowKindClass(row as ElementRow)}
+          expandable={{
+            expandedRowKeys,
+            onExpandedRowsChange: handleExpandedRowsChange,
+            indentSize: 20,
+          }}
         />
       ) : (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未验证" />
@@ -1322,6 +1802,21 @@ const UIAutomationPlatform: React.FC = () => {
                 style={{ width: '100%' }}
                 value={row.element}
                 options={elementSelectOptions}
+                showSearch
+                placeholder="搜索元素名称或 key"
+                optionFilterProp="label"
+                filterOption={(input, option) => {
+                  const q = input.trim().toLowerCase();
+                  if (!q) return true;
+                  const opt = option as { label?: unknown; value?: unknown; options?: Array<{ label?: unknown; value?: unknown }> };
+                  const label = String(opt?.label ?? '').toLowerCase();
+                  const value = String(opt?.value ?? '').toLowerCase();
+                  const nested = (opt?.options ?? [])
+                    .map((o) => `${o.label ?? ''} ${o.value ?? ''}`)
+                    .join(' ')
+                    .toLowerCase();
+                  return label.includes(q) || value.includes(q) || nested.includes(q);
+                }}
                 onChange={(value) =>
                   setSteps((prev) => prev.map((s, i) => (i === index ? { ...s, element: value } : s)))
                 }
@@ -1472,7 +1967,10 @@ const UIAutomationPlatform: React.FC = () => {
                 </Popconfirm>,
               ]}
             >
-              <List.Item.Meta title={item.name} description={`${(item.elements ?? []).length} 个元素`} />
+              <List.Item.Meta
+                title={item.name}
+                description={`${flattenElementTree(item.elements).length} 个元素`}
+              />
             </List.Item>
           )}
         />
@@ -1482,24 +1980,26 @@ const UIAutomationPlatform: React.FC = () => {
         {selected ? (
           <>
             <div className="ui-auto-detail-head">
-              <Space direction="vertical" size={2} style={{ flex: 1 }}>
-                <Space>
-                  <span style={{ fontWeight: 600, fontSize: 16 }}>{selected.name}</span>
-                  <Button size="small" icon={<EditOutlined />} onClick={openEditPageObject}>
-                    编辑信息
-                  </Button>
-                  <Button size="small" icon={<ReloadOutlined />} onClick={openRegenerate}>
-                    重新生成
-                  </Button>
-                </Space>
+              <div className="ui-auto-detail-head__main">
+                <div className="ui-auto-detail-head__title-row">
+                  <span className="ui-auto-detail-title">{selected.name}</span>
+                  <span className="ui-auto-detail-head__actions">
+                    <Button size="small" icon={<EditOutlined />} onClick={openEditPageObject}>
+                      编辑信息
+                    </Button>
+                    <Button size="small" icon={<ReloadOutlined />} onClick={openRegenerate}>
+                      重新生成
+                    </Button>
+                  </span>
+                </div>
                 <Tooltip title={resolveVars(selected.url)} placement="bottomLeft">
                   <span className="ui-auto-detail-url">{resolveVars(selected.url)}</span>
                 </Tooltip>
                 {selected.description ? (
-                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{selected.description}</span>
+                  <span className="ui-auto-detail-desc">{selected.description}</span>
                 ) : null}
-                <Space size={6} wrap>
-                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                <div className="ui-auto-detail-meta">
+                  <span className="ui-auto-detail-meta__label">
                     登录页对象:{activeLoginPage ? activeLoginPage.name : '未关联'}
                   </span>
                   {renderSessionTag(activeLoginPage)}
@@ -1509,16 +2009,16 @@ const UIAutomationPlatform: React.FC = () => {
                       description="清除后下次抽取/执行会重新执行登录步骤建立。"
                       onConfirm={() => clearPageObjectLogin(activeLoginPage)}
                     >
-                      <Button size="small" type="link" style={{ padding: 0 }}>
+                      <Button size="small" type="link" className="ui-auto-detail-meta__link">
                         清除登录态
                       </Button>
                     </Popconfirm>
                   ) : null}
-                </Space>
-              </Space>
-              <Tag>{elements.length} 个元素</Tag>
+                </div>
+              </div>
             </div>
             <Tabs
+              className="ui-auto-detail-tabs"
               activeKey={activeTab}
               onChange={setActiveTab}
               items={[
@@ -1536,49 +2036,173 @@ const UIAutomationPlatform: React.FC = () => {
       </section>
 
       <Modal
+        title="新增元素"
+        open={addElementOpen}
+        onCancel={() => setAddElementOpen(false)}
+        onOk={confirmAddElement}
+        okText="新增"
+        width={560}
+        className="ui-auto-edit-modal"
+      >
+        <div className="ui-auto-edit-form">
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">名称</span>
+            <Input
+              value={addElementForm.name}
+              onChange={(e) => setAddElementForm({ ...addElementForm, name: e.target.value })}
+              placeholder="如 提交按钮"
+              maxLength={64}
+              autoFocus
+            />
+          </label>
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">类型</span>
+            <Select
+              style={{ width: '100%' }}
+              value={addElementForm.type}
+              aria-label="元素类型"
+              options={ELEMENT_TYPE_OPTIONS}
+              onChange={(value) => setAddElementForm({ ...addElementForm, type: value })}
+            />
+          </div>
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">挂载位置</span>
+            <Select
+              style={{ width: '100%' }}
+              value={addElementForm.parentKey}
+              aria-label="新元素挂载位置"
+              options={parentAddOptions}
+              onChange={(value) => setAddElementForm({ ...addElementForm, parentKey: value })}
+              showSearch
+              optionFilterProp="label"
+            />
+            <div className="ui-auto-edit-form__hint">
+              新元素会插到所选位置最上方;选「页面主体(顶层)」则作为根节点展示
+            </div>
+          </div>
+
+          <div className="ui-auto-edit-form__divider" />
+
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">
+              定位器
+              <span className="ui-auto-edit-form__optional">可选</span>
+            </span>
+            <div className="ui-auto-locator-panel ui-auto-locator-panel--modal">
+              <div className="ui-auto-locator-panel__list">
+                {addElementForm.locators.length === 0 ? (
+                  <span className="ui-auto-locator-panel__empty">
+                    暂无定位器,可稍后在表格里补,或点下方添加
+                  </span>
+                ) : null}
+                {addElementForm.locators.map((loc, locIndex) => (
+                  <div key={locIndex} className="ui-auto-locator-panel__row">
+                    <Select
+                      size="small"
+                      style={{ width: 120 }}
+                      value={loc.strategy}
+                      options={STRATEGY_OPTIONS}
+                      aria-label={`新增定位器策略 ${locIndex + 1}`}
+                      onChange={(value) => updateAddLocator(locIndex, { strategy: value })}
+                    />
+                    <Input
+                      size="small"
+                      className="ui-auto-locator-panel__value"
+                      value={loc.value}
+                      placeholder="选择器 / 表达式"
+                      aria-label={`新增定位器值 ${locIndex + 1}`}
+                      onChange={(e) => updateAddLocator(locIndex, { value: e.target.value })}
+                    />
+                    <Tooltip title={`稳定性评分 ${loc.stability ?? 50}`}>
+                      <Tag style={{ marginInlineEnd: 0 }}>稳 {loc.stability ?? 50}</Tag>
+                    </Tooltip>
+                    <Button
+                      size="small"
+                      danger
+                      type="text"
+                      aria-label={`移除新增定位器 ${locIndex + 1}`}
+                      onClick={() => removeAddLocator(locIndex)}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                ))}
+                <Button size="small" icon={<PlusOutlined />} onClick={addAddLocator}>
+                  添加定位器
+                </Button>
+              </div>
+            </div>
+            <div className="ui-auto-edit-form__hint">
+              仅保存值非空的定位器;新增后也可在表格操作列继续编辑
+            </div>
+          </div>
+
+          <div className="ui-auto-edit-form__tips">
+            新增后点「保存元素」落库
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
         title={extractMode === 'regenerate' ? `重新生成页面对象 - ${selected?.name ?? ''}` : '抽取页面元素'}
         open={extractOpen}
         onCancel={() => setExtractOpen(false)}
         onOk={startExtract}
         okText={extractMode === 'regenerate' ? '重新生成' : '开始抽取'}
         confirmLoading={extracting}
+        width={520}
+        className="ui-auto-edit-modal"
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <div className="ui-auto-edit-form">
           {extractMode === 'regenerate' ? (
-            <Alert
-              type="info"
-              showIcon
-              message={`目标地址: ${resolveVars(selected?.url) || '-'}`}
-              description="将重新打开该页面抽取元素;勾选「合并」可保留已编辑的元素名称与自愈历史。"
-            />
+            <div className="ui-auto-edit-form__target">
+              <div className="ui-auto-edit-form__target-label">目标地址</div>
+              <div className="ui-auto-edit-form__target-url">{resolveVars(selected?.url) || '-'}</div>
+              <div className="ui-auto-edit-form__target-desc">
+                将重新打开该页面抽取元素;勾选「合并」可保留已编辑的元素名称与自愈历史。
+              </div>
+            </div>
           ) : null}
+
           {extractMode === 'create' ? (
             <>
-              <Input
-                addonBefore="名称"
-                value={extractForm.name}
-                onChange={(e) => setExtractForm({ ...extractForm, name: e.target.value })}
-                placeholder="如 LoginPage,留空自动命名"
-              />
-              <Input
-                addonBefore="站点地址"
-                value={extractForm.site_origin}
-                onChange={(e) => setExtractForm({ ...extractForm, site_origin: e.target.value })}
-                placeholder="http://192.168.13.178:8182 或 {{web_url}}"
-              />
-              <Input
-                addonBefore="页面路径"
-                value={extractForm.page_path}
-                onChange={(e) => setExtractForm({ ...extractForm, page_path: e.target.value })}
-                placeholder="#/login 或 /login,可留空"
-              />
-              <Button icon={<AppstoreOutlined />} onClick={openLubanModal}>
-                按菜单生成 URL(鲁班平台)
-              </Button>
+              <label className="ui-auto-edit-form__field">
+                <span className="ui-auto-edit-form__label">
+                  名称
+                  <span className="ui-auto-edit-form__optional">可选</span>
+                </span>
+                <Input
+                  value={extractForm.name}
+                  onChange={(e) => setExtractForm({ ...extractForm, name: e.target.value })}
+                  placeholder="如 LoginPage,留空自动命名"
+                />
+              </label>
+              <label className="ui-auto-edit-form__field">
+                <span className="ui-auto-edit-form__label">站点地址</span>
+                <Input
+                  value={extractForm.site_origin}
+                  onChange={(e) => setExtractForm({ ...extractForm, site_origin: e.target.value })}
+                  placeholder="http://192.168.13.178:8182 或 {{web_url}}"
+                />
+              </label>
+              <label className="ui-auto-edit-form__field">
+                <span className="ui-auto-edit-form__label">页面路径</span>
+                <Input
+                  value={extractForm.page_path}
+                  onChange={(e) => setExtractForm({ ...extractForm, page_path: e.target.value })}
+                  placeholder="#/login 或 /login,可留空"
+                />
+              </label>
+              <div>
+                <Button icon={<AppstoreOutlined />} onClick={openLubanModal}>
+                  按菜单生成 URL(鲁班平台)
+                </Button>
+              </div>
             </>
           ) : null}
-          <Space.Compact style={{ width: '100%' }}>
-            <span className="ui-auto-addon">登录页对象</span>
+
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">登录页对象</span>
             <Select
               style={{ width: '100%' }}
               value={extractForm.login_page_object_id}
@@ -1586,35 +2210,71 @@ const UIAutomationPlatform: React.FC = () => {
               options={extractLoginPageOptions}
               notFoundContent="暂无登录页对象,可在该页面对象的「编辑信息」里勾选「作为登录页对象」"
             />
-          </Space.Compact>
-          {extractForm.login_page_object_id ? (
-            <Space size={8} wrap>
-              {renderSessionTag(pageObjects.find((item) => item.id === extractForm.login_page_object_id))}
-              <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                有登录态直接复用;没有就先执行它的登录步骤,再抽取本页面
-              </span>
-            </Space>
-          ) : (
-            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-              不选登录页对象 = 本次不使用登录态:不读取该站点已缓存的登录态,也不触发登录,直接匿名访问
-            </span>
-          )}
+            <div className="ui-auto-edit-form__session">
+              {extractForm.login_page_object_id ? (
+                <Space size={8} wrap>
+                  {renderSessionTag(pageObjects.find((item) => item.id === extractForm.login_page_object_id))}
+                  <span className="ui-auto-edit-form__hint">
+                    有登录态直接复用;没有就先执行它的登录步骤,再抽取本页面
+                  </span>
+                </Space>
+              ) : (
+                <span className="ui-auto-edit-form__hint">
+                  不选 = 本次不使用登录态:不读站点缓存、不触发登录,直接匿名访问
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="ui-auto-edit-form__divider" />
+
           <Checkbox
+            className="ui-auto-edit-form__checkbox"
             checked={extractForm.use_llm_naming}
             onChange={(e) => setExtractForm({ ...extractForm, use_llm_naming: e.target.checked })}
           >
-            使用 AI 语义命名元素(失败自动回退规则命名)
+            <span className="ui-auto-edit-form__checkbox-title">使用 AI 语义命名元素</span>
+            <span className="ui-auto-edit-form__checkbox-desc">失败时自动回退规则命名</span>
           </Checkbox>
+
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">
+              浮层深度
+              <span className="ui-auto-edit-form__hint">0=不点触发按钮 · 默认 3 · 上限 5</span>
+            </span>
+            <Select
+              style={{ width: '100%' }}
+              value={extractForm.max_depth}
+              onChange={(value) => setExtractForm({ ...extractForm, max_depth: value })}
+              options={[0, 1, 2, 3, 4, 5].map((d) => ({
+                value: d,
+                label: d === 0 ? '0(仅当前页)' : `${d} 层`,
+              }))}
+            />
+            <div className="ui-auto-edit-form__hint">
+              触发按钮(如「新增」)下的弹窗元素会挂在其子节点;只跟浮层不跳路由
+            </div>
+          </div>
+
           {extractMode === 'regenerate' ? (
-            <Checkbox checked={mergeOnRegenerate} onChange={(e) => setMergeOnRegenerate(e.target.checked)}>
-              合并到现有元素(保留已编辑的名称/描述与自愈历史)
-            </Checkbox>
+            <>
+              <div className="ui-auto-edit-form__divider" />
+              <Checkbox
+                className="ui-auto-edit-form__checkbox"
+                checked={mergeOnRegenerate}
+                onChange={(e) => setMergeOnRegenerate(e.target.checked)}
+              >
+                <span className="ui-auto-edit-form__checkbox-title">合并到现有元素</span>
+                <span className="ui-auto-edit-form__checkbox-desc">保留已编辑的名称/描述与自愈历史</span>
+              </Checkbox>
+            </>
           ) : null}
+
           {extracting && task ? <Progress percent={task.progress} status="active" /> : null}
           {extracting && task?.message ? (
-            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{task.message}</span>
+            <span className="ui-auto-edit-form__hint">{task.message}</span>
           ) : null}
-        </Space>
+        </div>
       </Modal>
 
       <Modal
@@ -1623,72 +2283,105 @@ const UIAutomationPlatform: React.FC = () => {
         onCancel={() => setLubanOpen(false)}
         footer={null}
         width={520}
+        className="ui-auto-edit-modal"
       >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <Alert
-            type="info"
-            showIcon
-            message="URL 拼接规则: 站点地址 + /?redirect=#/home + 模块 url + 目录 url + 菜单 url"
-          />
-          <Input
-            addonBefore="access-token"
-            value={lubanToken}
-            onChange={(e) => setLubanToken(e.target.value)}
-            placeholder="鲁班平台 access-token,仅内存使用不落库"
-          />
-          <Input
-            addonBefore="resId"
-            value={lubanResId}
-            onChange={(e) => setLubanResId(e.target.value)}
-            placeholder="可选,部分环境菜单接口需要"
-          />
-          <Space.Compact style={{ width: '100%' }}>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="选择系统模块(如 项目管理)"
-              value={lubanModuleCode || undefined}
-              onChange={loadLubanMenus}
-              loading={lubanLoading === 'modules'}
-              options={lubanModules.map((m) => ({ value: m.code, label: `${m.name} (${m.url})` }))}
-              notFoundContent={lubanLoading === 'modules' ? '加载中...' : '无数据,请先加载模块'}
+        <div className="ui-auto-edit-form">
+          <div className="ui-auto-edit-form__tips">
+            URL 拼接规则:站点地址 + /?redirect=#/home + 模块 url + 目录 url + 菜单 url
+          </div>
+
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">access-token</span>
+            <Input
+              value={lubanToken}
+              onChange={(e) => setLubanToken(e.target.value)}
+              placeholder="鲁班平台 access-token,仅内存使用不落库"
             />
-            <Button onClick={loadLubanModules} loading={lubanLoading === 'modules'}>
-              加载模块
-            </Button>
-          </Space.Compact>
+          </label>
+
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">
+              resId
+              <span className="ui-auto-edit-form__optional">可选</span>
+            </span>
+            <Input
+              value={lubanResId}
+              onChange={(e) => setLubanResId(e.target.value)}
+              placeholder="部分环境菜单接口需要"
+            />
+          </label>
+
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">系统模块</span>
+            <div className="ui-auto-edit-form__inline">
+              <Select
+                style={{ flex: 1, minWidth: 0 }}
+                placeholder="选择系统模块(如 项目管理)"
+                value={lubanModuleCode || undefined}
+                onChange={loadLubanMenus}
+                loading={lubanLoading === 'modules'}
+                options={lubanModules.map((m) => ({ value: m.code, label: `${m.name} (${m.url})` }))}
+                notFoundContent={lubanLoading === 'modules' ? '加载中...' : '无数据,请先加载模块'}
+              />
+              <Button onClick={loadLubanModules} loading={lubanLoading === 'modules'}>
+                加载模块
+              </Button>
+            </div>
+          </div>
+
           {lubanModuleCode ? (
-            <TreeSelect
-              style={{ width: '100%' }}
-              placeholder="选择菜单页面(如 WBS模板)"
-              value={lubanMenuId || undefined}
-              treeData={lubanTreeData}
-              treeDefaultExpandAll={false}
-              showSearch
-              treeNodeFilterProp="title"
-              loading={lubanLoading === 'menus'}
-              onChange={(value) => applyLubanMenu(String(value))}
-              notFoundContent={lubanLoading === 'menus' ? '加载中...' : '无菜单数据'}
-            />
+            <div className="ui-auto-edit-form__field">
+              <span className="ui-auto-edit-form__label">菜单页面</span>
+              <TreeSelect
+                style={{ width: '100%' }}
+                placeholder="选择菜单页面(如 WBS模板)"
+                value={lubanMenuId || undefined}
+                treeData={lubanTreeData}
+                treeDefaultExpandAll={false}
+                showSearch
+                treeNodeFilterProp="title"
+                loading={lubanLoading === 'menus'}
+                onChange={(value) => applyLubanMenu(String(value))}
+                notFoundContent={lubanLoading === 'menus' ? '加载中...' : '无菜单数据'}
+              />
+            </div>
           ) : null}
-          <Checkbox checked={lubanAutoExtract} onChange={(e) => setLubanAutoExtract(e.target.checked)}>
-            创建后自动排队抽取元素(后端串行执行,每页约 1-2 分钟)
+
+          <div className="ui-auto-edit-form__divider" />
+
+          <Checkbox
+            className="ui-auto-edit-form__checkbox"
+            checked={lubanAutoExtract}
+            onChange={(e) => setLubanAutoExtract(e.target.checked)}
+          >
+            <span className="ui-auto-edit-form__checkbox-title">创建后自动排队抽取元素</span>
+            <span className="ui-auto-edit-form__checkbox-desc">后端串行执行,每页约 1-2 分钟</span>
           </Checkbox>
-          <Button block onClick={runLubanScan} loading={lubanScanning}>
+
+          <Button
+            block
+            type="primary"
+            ghost={false}
+            className="ui-auto-edit-form__submit"
+            onClick={runLubanScan}
+            loading={lubanScanning}
+          >
             全量扫描全部模块并批量创建页面对象
           </Button>
+
           {lubanScanning && lubanScanProgress ? (
-            <>
+            <div className="ui-auto-edit-form__field">
               <Progress
                 percent={Math.round((lubanScanProgress.done / Math.max(lubanScanProgress.total, 1)) * 100)}
                 size="small"
                 status="active"
               />
-              <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+              <span className="ui-auto-edit-form__hint">
                 正在扫描模块 {lubanScanProgress.done}/{lubanScanProgress.total}...
               </span>
-            </>
+            </div>
           ) : null}
-        </Space>
+        </div>
       </Modal>
 
       <Modal
@@ -1697,60 +2390,86 @@ const UIAutomationPlatform: React.FC = () => {
         onCancel={() => setEditOpen(false)}
         onOk={savePageObjectMeta}
         okText="保存"
+        width={520}
+        className="ui-auto-edit-modal"
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Input
-            addonBefore="名称"
-            value={editForm.name}
-            onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-            placeholder="页面对象名称"
-          />
-          <Input
-            addonBefore="站点地址"
-            value={editForm.site_origin}
-            onChange={(e) => setEditForm({ ...editForm, site_origin: e.target.value })}
-            placeholder="http://host:port 或 {{web_url}}"
-          />
-          <Input
-            addonBefore="页面路径"
-            value={editForm.page_path}
-            onChange={(e) => setEditForm({ ...editForm, page_path: e.target.value })}
-            placeholder="#/login 或 /login"
-          />
-          <Input.TextArea
-            value={editForm.description}
-            onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-            placeholder="页面说明(可选)"
-            autoSize={{ minRows: 2, maxRows: 4 }}
-          />
-          <div>
-            <Space size={8}>
-              <span style={{ fontSize: 14 }}>登录页对象</span>
-              <Select
-                style={{ width: 280 }}
-                value={editForm.login_page_object_id}
-                onChange={(value) => setEditForm({ ...editForm, login_page_object_id: Number(value) })}
-                options={loginPageOptions}
-                notFoundContent="暂无登录页对象"
-              />
-            </Space>
-            <div style={{ marginTop: 4 }}>
+        <div className="ui-auto-edit-form">
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">名称</span>
+            <Input
+              value={editForm.name}
+              onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              placeholder="页面对象名称"
+            />
+          </label>
+
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">
+              站点地址
+              <span className="ui-auto-edit-form__hint">支持 {'{{变量}}'}(如 {'{{web_url}}'})</span>
+            </span>
+            <Input
+              value={editForm.site_origin}
+              onChange={(e) => setEditForm({ ...editForm, site_origin: e.target.value })}
+              placeholder="http://host:port 或 {{web_url}}"
+            />
+          </label>
+
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">页面路径</span>
+            <Input
+              value={editForm.page_path}
+              onChange={(e) => setEditForm({ ...editForm, page_path: e.target.value })}
+              placeholder="#/login 或 /login"
+            />
+          </label>
+
+          <label className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">
+              页面说明
+              <span className="ui-auto-edit-form__optional">可选</span>
+            </span>
+            <Input.TextArea
+              value={editForm.description}
+              onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+              placeholder="这个页面是做什么的,便于团队理解"
+              autoSize={{ minRows: 2, maxRows: 4 }}
+            />
+          </label>
+
+          <div className="ui-auto-edit-form__field">
+            <span className="ui-auto-edit-form__label">登录页对象</span>
+            <Select
+              style={{ width: '100%' }}
+              value={editForm.login_page_object_id}
+              onChange={(value) => setEditForm({ ...editForm, login_page_object_id: Number(value) })}
+              options={loginPageOptions}
+              notFoundContent="暂无登录页对象"
+            />
+            <div className="ui-auto-edit-form__session">
               {renderSessionTag(
                 pageObjects.find((item) => item.id === editForm.login_page_object_id) ?? null
               )}
             </div>
           </div>
+
+          <div className="ui-auto-edit-form__divider" />
+
           <Checkbox
+            className="ui-auto-edit-form__checkbox"
             checked={editForm.is_login_page}
             onChange={(e) => setEditForm({ ...editForm, is_login_page: e.target.checked })}
           >
-            作为登录页对象(登录 = 在「执行(自愈)」里配置登录步骤,其他页面对象关联它即可复用登录态)
+            <span className="ui-auto-edit-form__checkbox-title">作为登录页对象</span>
+            <span className="ui-auto-edit-form__checkbox-desc">
+              在「执行(自愈)」里配置登录步骤,其他页面对象关联它即可复用登录态
+            </span>
           </Checkbox>
-          <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-            修改站点地址/页面路径会同步更新目标 URL,元素需点击「重新生成」刷新。
-            站点地址支持 {'{{变量}}'}(如 {'{{web_url}}'}),执行/验证/抽取时按默认环境参数解析。
-          </span>
-        </Space>
+
+          <div className="ui-auto-edit-form__tips">
+            修改站点地址/页面路径会同步更新目标 URL,元素需点击「重新生成」刷新。执行/验证/抽取时按默认环境参数解析变量。
+          </div>
+        </div>
       </Modal>
 
     </div>

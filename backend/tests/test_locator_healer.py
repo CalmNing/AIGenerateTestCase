@@ -245,6 +245,101 @@ class TestMergeElements:
         new = [{"key": "a", "name": "A", "locators": [], "fingerprint": {}}]
         assert merge_elements([], new) == new
 
+    def test_match_defaults_enabled_true_when_old_missing_field(self):
+        old = {
+            "key": "username",
+            "name": "旧名",
+            "type": "input",
+            "locators": [{"strategy": "css", "value": "old-css", "stability": 50}],
+            "fingerprint": build_fingerprint({"tag": "input", "name": "username"}),
+        }
+        new = {
+            "key": "username",
+            "name": "新名",
+            "type": "input",
+            "fingerprint": build_fingerprint({"tag": "input", "name": "username"}),
+            "locators": [{"strategy": "testid", "value": "login-username", "stability": 100}],
+        }
+        merged = merge_elements([old], [new])
+        assert merged[0]["enabled"] is True
+        assert merged[0]["name"] == "旧名"
+
+
+class TestMergeElementsTree:
+    """嵌套 children 树的合并:结构跟随 new,用户字段来自 old 匹配。"""
+
+    def _node(self, key, name, **extra):
+        node = {
+            "key": key,
+            "name": name,
+            "type": "button",
+            "locators": [{"strategy": "text", "value": name, "stability": 80}],
+            "fingerprint": build_fingerprint({"tag": "button", "text": name}),
+            "children": [],
+        }
+        node.update(extra)
+        return node
+
+    def test_key_match_keeps_old_name_in_tree(self):
+        old_tree = [self._node("btn_add", "我改的名", heal_count=2)]
+        new_tree = [self._node("btn_add", "新增")]
+        merged = merge_elements(old_tree, new_tree)
+        assert merged[0]["name"] == "我改的名"
+        assert merged[0]["heal_count"] == 2
+
+    def test_nested_children_structure_follows_new(self):
+        old_tree = [{
+            **self._node("btn_add", "新增"),
+            "children": [self._node("input_old", "旧字段")],
+        }]
+        new_tree = [{
+            **self._node("btn_add", "新增"),
+            "children": [self._node("input_new", "新字段")],
+        }]
+        merged = merge_elements(old_tree, new_tree)
+        child_keys = [c["key"] for c in merged[0]["children"]]
+        assert child_keys == ["input_new"]
+
+    def test_deep_merge_preserves_user_edits(self):
+        old_tree = [{
+            **self._node("btn_add", "新增"),
+            "children": [{
+                **self._node("input_name", "用户改过的名字"),
+                "enabled": False,
+                "heal_count": 5,
+                "description": "desc",
+            }],
+        }]
+        new_tree = [{
+            **self._node("btn_add", "新增"),
+            "children": [self._node("input_name", "名称")],
+        }]
+        merged = merge_elements(old_tree, new_tree)
+        child = merged[0]["children"][0]
+        assert child["name"] == "用户改过的名字"
+        assert child["enabled"] is False
+        assert child["heal_count"] == 5
+        assert child["description"] == "desc"
+
+    def test_old_flat_new_tree_builds_tree(self):
+        old_flat = [self._node("btn_add", "新增"), self._node("input_q", "搜索")]
+        new_tree = [{
+            **self._node("btn_add", "新增"),
+            "children": [self._node("input_name", "名称")],
+        }]
+        merged = merge_elements(old_flat, new_tree)
+        assert merged[0]["children"]
+        keys = [c["key"] for c in merged[0]["children"]]
+        assert keys == ["input_name"]
+
+    def test_empty_old_returns_new_tree(self):
+        new_tree = [{
+            **self._node("btn_add", "新增"),
+            "children": [self._node("input_name", "名称")],
+        }]
+        merged = merge_elements([], new_tree)
+        assert merged[0]["children"][0]["key"] == "input_name"
+
 
 class TestResolveLocator:
     def test_primary_hit_index_zero(self):

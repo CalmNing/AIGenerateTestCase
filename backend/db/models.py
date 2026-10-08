@@ -103,6 +103,9 @@ class TestCase(BaseModel, table=True):
     validation_detail: Optional[str] = Field(default=None, description="验证结果详情(JSON字符串)")
     validation_at: Optional[datetime] = Field(default=None, description="验证执行时间(UTC+8)")
 
+    # UI 自动化绑定计划(NL 步骤 → PageObject 元素),由 /ui-execution/compile 生成、前端可修正
+    ui_binding: Optional[dict] = Field(default=None, sa_type=JSON, description="UI绑定计划{page_object_id,steps,asserts,...}")
+
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
 
@@ -116,6 +119,9 @@ class UIExecutionRecord(BaseModel, table=True):
     agent_summary: str = Field(default="", description="Agent最终判定说明(逐条预期核对)")
     error: Optional[str] = Field(default=None, description="异常信息(仅ERROR时)")
     finished_at: Optional[datetime] = Field(default=None, description="执行完成时间(UTC+8)")
+    execution_mode: str = Field(default="agent", description="执行模式: agent(纯浏览器Agent) / hybrid(绑定+Agent兜底)")
+    page_object_id: Optional[int] = Field(default=None, foreign_key="pageobject.id", index=True, description="本次使用的页面对象ID")
+    binding_snapshot: List = Field(default_factory=list, sa_type=JSON, description="执行时的绑定计划快照(防用例后续被改)")
 
 class PageObject(BaseModel, table=True):
     """UI 自动化页面对象(抽取页面元素 + 多候选定位器,支持执行期自愈)。

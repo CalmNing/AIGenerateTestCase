@@ -65,6 +65,7 @@ def normalize_url(url: str) -> str:
 
     典型场景:全局参数 web_url 带尾斜杠 + 页面对象 url 也以 / 开头,
     拼出 http://host//#/path,path 变成 //,SPA 路由会异常。
+    无 scheme 的相对路径(//host/path)也折叠前导重复斜杠。
     """
     if not url:
         return url
@@ -86,22 +87,3 @@ def normalize_url(url: str) -> str:
         path_part, query_part = before_hash, ""
     path_part = re.sub(r"/{2,}", "/", path_part)
     return f"{scheme}://{path_part}{query_part}{hash_part}"
-
-
-def normalize_url(url: str) -> str:
-    """折叠 URL 路径中的重复斜杠(保留 scheme:// 与 query/hash)。
-
-    典型场景:全局参数 `web_url=http://host/`(带尾斜杠)+ 页面对象
-    `url={{web_url}}/#/home`(路径也以 / 开头)拼出 `http://host//#/home`,
-    path 变成 `//`,SPA 路由/服务端可能异常。只折叠 path,不动 hash。
-    """
-    if not url:
-        return url
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return url
-    if not parts.scheme and not parts.netloc:
-        return url
-    path = re.sub(r"/{2,}", "/", parts.path)
-    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))

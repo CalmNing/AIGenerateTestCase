@@ -674,6 +674,7 @@ class PipelineRunner:
         api_context: str = "",
         original_requirement: str = "",
         stop_after_stage: int = 4,
+        feishu_section: Optional[str] = None,
     ) -> str:
         """
         启动 4 阶段 pipeline（异步执行）
@@ -688,7 +689,7 @@ class PipelineRunner:
             api_project_id: API 项目 ID
             endpoint_index_to_id: 接口序号→数据库ID映射
             api_context: API 接口信息文本
-            stop_after_stage: 执行到哪个阶段后停止（2=只跑需求拆分+测试点生成）
+            stop_after_stage: 执行到哪个阶段后停止（1-4），后续阶段跳过
 
         Returns:
             task_id: 任务ID，可用于查询进度
@@ -725,13 +726,21 @@ class PipelineRunner:
                 api_context=api_context,
                 original_requirement=original_requirement,
                 stop_after_stage=stop_after_stage,
+                feishu_section=feishu_section,
             )
         )
 
         return task_id
 
-    async def _prefetch_document(self, requirement_text: str) -> str:
+    async def _prefetch_document(self, requirement_text: str, feishu_section: str | None = None) -> str:
         """预取飞书/蓝湖文档内容，替换需求文本中的链接为实际内容"""
+        feishu_url = _FEISHU_URL_RE.search(requirement_text or "")
+        if feishu_url and feishu_section:
+            from utils.document_prefetch import fetch_feishu_document
+            content = await fetch_feishu_document(requirement_text, self.mcp_configs, section=feishu_section)
+            if not content:
+                raise ValueError(f"飞书文档目录读取失败：{feishu_section}")
+            return content
         return await prefetch_document(requirement_text, self.mcp_configs)
 
     async def _run_pipeline(
@@ -748,6 +757,7 @@ class PipelineRunner:
         api_context: str = "",
         original_requirement: str = "",
         stop_after_stage: int = 4,
+        feishu_section: Optional[str] = None,
     ):
         """执行完整的 4 阶段 pipeline"""
         from db.models import RequirementPoint, TestPoint, TestCase
@@ -760,7 +770,7 @@ class PipelineRunner:
             has_lanhu = bool(_LANHU_URL_RE.search(requirement_text))
             if has_feishu or has_lanhu:
                 self._update_progress(task_id, 1, "需求拆分", 2, "正在预取文档内容...")
-                prefetched = await self._prefetch_document(requirement_text)
+                prefetched = await self._prefetch_document(requirement_text, feishu_section)
                 if prefetched != requirement_text:
                     requirement_text = prefetched
                     logger.info(f"Pipeline: 文档预取成功，内容长度 {len(requirement_text)}")
@@ -826,6 +836,20 @@ class PipelineRunner:
                 f"需求拆分完成，新建 {len(req_points)} 个需求点"
                 + (f"（已跳过 {skipped} 个重复）" if skipped else "")
             )
+
+            # 阶段1模式：只完成需求拆分
+            if stop_after_stage <= 1:
+                self._update_progress(
+                    task_id, 0, "完成", 100,
+                    f"需求拆分完成：{len(req_points)} 个需求点"
+                )
+                self._complete_task(task_id, {
+                    "requirement_points_count": len(req_points),
+                    "test_points_count": 0,
+                    "test_cases_count": 0,
+                    "mode": "stage1",
+                })
+                return
 
             # ========== 阶段2: 测试点生成 (25-50%) ==========
             all_test_points = []
@@ -1126,6 +1150,19 @@ class PipelineRunner:
                 task_id, 3, "用例设计", 85,
                 f"用例设计完成，共 {len(all_test_cases)} 个用例"
             )
+
+            if stop_after_stage <= 3:
+                self._update_progress(
+                    task_id, 0, "完成", 100,
+                    f"用例设计完成：{len(req_points)} 个需求点，{len(all_test_points)} 个测试点，{len(all_test_cases)} 个测试用例"
+                )
+                self._complete_task(task_id, {
+                    "requirement_points_count": len(req_points),
+                    "test_points_count": len(all_test_points),
+                    "test_cases_count": len(all_test_cases),
+                    "mode": "stage3",
+                })
+                return
 
             # ========== 阶段4: 用例优化 (85-100%) ==========
             if all_test_cases:

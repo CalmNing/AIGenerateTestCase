@@ -26,6 +26,15 @@ from app.services.locator_healer import (
     validate_element,
 )
 from app.services.locator_strategies import playwright_locator
+from app.services.element_tree import (
+    ancestors_for_key,
+    build_element_tree,
+    build_execution_index,
+    collect_invalid_step_elements,
+    count_elements,
+    format_invalid_elements_message,
+    open_state_diff,
+)
 from app.services.page_extractor import (
     apply_llm_names,
     build_llm_naming_prompt,
@@ -44,6 +53,21 @@ _po_task_handles: Dict[str, "asyncio.Task"] = {}
 EXTRACT_TIMEOUT_SECONDS = 180
 VALIDATE_TIMEOUT_SECONDS = 240
 EXECUTE_TIMEOUT_SECONDS = 600
+
+
+def extract_timeout_seconds(max_depth: int) -> int:
+    """按浮层深度放宽超时:基线 180s,每多一层 +60s,封顶 360s。"""
+    depth = max(0, min(int(max_depth or 0), 5))
+    return min(360, 180 + 60 * max(depth - 1, 0))
+
+
+def _clamp_max_depth(value: Any) -> int:
+    """把请求里的 max_depth 夹到 [0, 5];非法值回落默认 3。"""
+    try:
+        depth = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 3
+    return max(0, min(depth, 5))
 
 
 def get_po_task(task_id: str) -> Optional[Dict[str, Any]]:
@@ -106,6 +130,7 @@ class PageObjectRunner:
         login_page_object_id: Optional[int] = None,
         mark_login_page: bool = False,
         skip_login: bool = False,
+        environment_id: Optional[int] = None,
     ):
         self._request_db = request_db
         # 本次请求显式关联的登录页对象(优先级高于页面对象自身已关联的那个)
@@ -119,6 +144,8 @@ class PageObjectRunner:
         self.login_overrides = {k: v for k, v in (login_overrides or {}).items() if v}
         # 仅登录阶段的 browser-use Agent 工厂(测试注入 fake;None 时用真实现)
         self.agent_factory = agent_factory
+        # 前端当前选中的环境(解析 {{var}});None 时回退默认/任意环境
+        self.environment_id = environment_id
 
     def _acquire_session(self) -> Session:
         req = self._request_db
@@ -154,6 +181,8 @@ class PageObjectRunner:
                 await self._run_validate(db, run, task_id)
             elif run.run_type == "execute":
                 await self._run_execute(db, run, task_id)
+            elif run.run_type == "login":
+                await self._run_login(db, run, task_id)
             else:
                 raise RuntimeError(f"未知运行类型: {run.run_type}")
         finally:
@@ -171,6 +200,7 @@ class PageObjectRunner:
             )
             # 抽取器「疑似可交互但未采集」的诊断清单(闭包外持有,供 _phase 填充)
             skipped: list = []
+            max_depth = _clamp_max_depth(spec.get("max_depth"))
 
             async def _phase():
                 _update_task(task_id, phase="extracting", progress=40, message="正在抽取页面元素...")
@@ -179,6 +209,7 @@ class PageObjectRunner:
                     storage_state=storage_state,
                     trigger_texts=spec.get("trigger_texts"),
                     skipped_out=skipped,
+                    max_depth=max_depth,
                 )
                 # 登录态过期探测:页面采到密码输入框 ≈ 被重定向到登录页
                 # (缓存文件非空但服务端会话已失效,_ensure_session 无法识别)。
@@ -216,6 +247,7 @@ class PageObjectRunner:
                             storage_state=fresh,
                             trigger_texts=spec.get("trigger_texts"),
                             skipped_out=skipped,
+                            max_depth=max_depth,
                         )
                 if spec.get("use_llm_naming", True):
                     _update_task(task_id, phase="naming", progress=65, message="AI 正在语义命名元素...")
@@ -223,10 +255,13 @@ class PageObjectRunner:
                 return raw, skipped
 
             raw, skipped = await asyncio.wait_for(
-                ba._run_browser_phase(_phase()), timeout=EXTRACT_TIMEOUT_SECONDS
+                ba._run_browser_phase(_phase()),
+                timeout=extract_timeout_seconds(max_depth),
             )
             _update_task(task_id, phase="persisting", progress=90, message="正在生成 PageObject...")
-            new_elements = normalize_elements(raw)
+            flat = normalize_elements(raw)
+            # 中间流水线保持扁平;落库前按 probePath 建树(触发按钮 → 弹窗 children)
+            new_elements = build_element_tree(flat)
             existing = page_object
             if existing is not None:
                 # 重新生成:合并刷新现有 PageObject,保留用户编辑与自愈历史
@@ -271,15 +306,17 @@ class PageObjectRunner:
             # uncollected:界面上看得见、像控件,却没被采到的元素。非空说明抽取器有覆盖盲区,
             # 前端据此提示用户 —— 让「漏采」当场可见,而不是写用例时才发现少了个字段。
             uncollected = [item for item in skipped if item.get("reason") == "visible-not-collected"]
+            tree_count = count_elements(elements)
             run.result = {
                 "elements": elements,
                 "raw_count": len(raw),
-                "element_count": len(elements),
+                "element_count": tree_count,
                 "uncollected": uncollected,
                 "uncollected_count": len(uncollected),
+                "max_depth": max_depth,
             }
             run.status = "PASSED"
-            run.summary = f"共采集 {len(raw)} 个交互元素,生成 {len(elements)} 个带定位器的元素"
+            run.summary = f"共采集 {len(raw)} 个交互元素,生成 {tree_count} 个带定位器的元素"
             if uncollected:
                 run.summary += f";另有 {len(uncollected)} 个疑似控件未采集,请核对"
             run.finished_at = datetime.now(tz=cn_tz)
@@ -357,6 +394,9 @@ class PageObjectRunner:
             steps = run.steps or list(page_object.steps or [])
             if not steps:
                 raise RuntimeError("执行步骤为空")
+            invalid = collect_invalid_step_elements(steps, page_object.elements or [])
+            if invalid:
+                raise RuntimeError(format_invalid_elements_message(invalid))
             _update_task(task_id, phase="launching_browser", progress=15, message="正在启动浏览器...")
             storage_state = await self._ensure_session(
                 db, run.target_url, task_id, page_object, run.user_id
@@ -410,6 +450,42 @@ class PageObjectRunner:
 
     # ---- 登录态(载体是页面对象) ----
 
+    async def _run_login(self, db: Session, run: UIAutomationRun, task_id: Optional[str]) -> None:
+        """login 任务:为登录页对象建立/刷新登录态(执行步骤或 AI 登录)。"""
+        try:
+            page_object = db.get(PageObject, run.page_object_id) if run.page_object_id else None
+            if page_object is None:
+                raise RuntimeError("login 任务缺少页面对象")
+            if not _is_self_login_page(page_object):
+                raise RuntimeError(
+                    f"页面对象「{page_object.name}」不是登录页对象:"
+                    "请到「编辑信息」勾选「作为登录页对象」后再发起登录"
+                )
+            # 清掉本进程标记,确保这次真的重新执行登录而不是复用旧会话
+            state_file = pl.ensure_session_path(page_object)
+            ba._established_sessions.discard(str(state_file))
+            _update_task(
+                task_id, phase="logging_in", progress=25,
+                message=f"正在通过「{page_object.name}」建立登录态...",
+            )
+            ok = await self._bootstrap_login(db, page_object, task_id)
+            run.status = "PASSED" if ok else "FAILED"
+            run.summary = (
+                "登录成功,登录态已建立"
+                if ok
+                else f"登录失败:{page_object.last_login_error or '未知原因'}"
+            )
+            run.finished_at = datetime.now(tz=cn_tz)
+            db.add(run)
+            db.commit()
+            _update_task(task_id, status="done", phase="done", progress=100, result_status=run.status)
+        except asyncio.CancelledError:
+            _mark_stopped(db, run, task_id)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[UIAuto] run {run.id} 登录异常")
+            _persist_error(db, run, task_id, str(exc))
+
     def _resolve_login_page(
         self, db: Session, page_object: Optional[PageObject], user_id: Optional[str]
     ) -> Optional[PageObject]:
@@ -452,14 +528,51 @@ class PageObjectRunner:
 
         steps = [step for step in (login_page.steps or []) if isinstance(step, dict)]
         if not steps:
-            reason = f"「{login_page.name}」未配置登录步骤:请到「执行(自愈)」里配置登录步骤并保存"
-            _update_task(task_id, message=reason)
-            pl.refresh_status(db, login_page, error=reason)
-            return False
+            # 未配步骤 → 回退 AI 登录(仅登录凭证路径),登录态仍写本页面对象专属文件
+            from app.routes.proxy import build_param_map
 
-        # 登录页对象存的可能是 {{web_url}} 等占位符原文;goto 前必须按默认环境参数解析,
+            param_map = build_param_map(db, self.environment_id, [])
+            login_ctx, _meta = ba.resolve_login_context(
+                db, param_map, login_page.url, self.login_overrides, session_path=str(state_file)
+            )
+            if not login_ctx.configured:
+                reason = (
+                    f"「{login_page.name}」未配置登录步骤:"
+                    f"请到「执行(自愈)」里配置登录步骤并保存"
+                )
+                _update_task(task_id, message=reason)
+                pl.refresh_status(db, login_page, error=reason)
+                return False
+            goto_url = _resolve_page_url(db, login_page.url, self.environment_id) or login_page.url
+            _update_task(
+                task_id, phase="logging_in", progress=25,
+                message=f"未配置登录步骤,使用 AI 登录「{login_page.name}」...",
+            )
+            result = await ba.establish_login_session(
+                db,
+                goto_url,
+                self.login_overrides,
+                agent_factory=self.agent_factory,
+                task_id=task_id,
+                session_path=str(state_file),
+                environment_id=self.environment_id,
+            )
+            ok = bool(result.get("ok"))
+            pl.refresh_status(
+                db,
+                login_page,
+                logged_in=ok,
+                error="" if ok else (result.get("reason") or "AI 登录未产生有效登录态"),
+            )
+            if ok:
+                origin = _origin_of(goto_url)
+                if origin:
+                    ba.sync_state_file(state_file, ba._cache_path(origin))
+            return ok
+
+        # 登录页对象存的可能是 {{web_url}} 等占位符原文;goto 前必须按本次环境参数解析,
         # 否则 page.goto("{{web_url}}/") 直接失败,重登录永远建不出登录态(实测 PO514)。
-        goto_url = _resolve_page_url(db, login_page.url)
+        goto_url = _resolve_page_url(db, login_page.url, self.environment_id)
         if not goto_url:
             pl.refresh_status(db, login_page, error="登录页对象目标地址解析后为空")
             return False
@@ -507,7 +620,7 @@ class PageObjectRunner:
         if login_page is not None:
             return str(pl.ensure_session_path(login_page))
         if page_object is not None and page_object.url:
-            origin = _origin_of(_resolve_page_url(db, page_object.url))
+            origin = _origin_of(_resolve_page_url(db, page_object.url, self.environment_id))
             if origin:
                 return str(ba._cache_path(origin))
         return None
@@ -570,6 +683,7 @@ class PageObjectRunner:
             self.login_overrides,
             agent_factory=self.agent_factory,
             task_id=task_id,
+            environment_id=self.environment_id,
         )
         return (result.get("cache_path") or None) if result.get("ok") else None
 
@@ -635,7 +749,7 @@ class PageObjectRunner:
 
         from app.routes.proxy import build_param_map
 
-        param_map = build_param_map(db, None, [])
+        param_map = build_param_map(db, self.environment_id, [])
         login_ctx, meta = ba.resolve_login_context(db, param_map, target_url, self.login_overrides)
         origin = meta.get("origin", "")
         if not origin:
@@ -657,6 +771,7 @@ class PageObjectRunner:
             self.login_overrides,
             agent_factory=self.agent_factory,
             task_id=task_id,
+            environment_id=self.environment_id,
         )
         if not result.get("ok"):
             raise RuntimeError(f"登录失败,无法访问登录后页面:{result.get('reason') or '未知原因'}")
@@ -729,8 +844,8 @@ def _origin_of(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
 
 
-def _resolve_page_url(db: Session, url: str) -> str:
-    """页面对象地址存原文(可含 {{var}});需要真实访问或算 origin 时按默认环境参数解析。
+def _resolve_page_url(db: Session, url: str, environment_id: Optional[int] = None) -> str:
+    """页面对象地址存原文(可含 {{var}});需要真实访问或算 origin 时按本次环境参数解析。
 
     不含占位符时原样返回(但仍归一化双斜杠);解析后折叠 path 中的重复斜杠,
     避免 {{web_url}}=/ + /#/x 拼出 http://host//#/x 导致 SPA 落回登录页。
@@ -743,7 +858,9 @@ def _resolve_page_url(db: Session, url: str) -> str:
         return normalize_url(url)
     from app.routes.proxy import build_param_map, substitute_variables
 
-    return normalize_url(substitute_variables(url, build_param_map(db, None, []), set()))
+    return normalize_url(
+        substitute_variables(url, build_param_map(db, environment_id, []), set())
+    )
 
 
 def _frame_for(page, element: dict):
@@ -780,6 +897,99 @@ async def _wait_for_page_ready(page) -> None:
         pass
 
 
+# 浮层打开后的落稳等待(与探针 DIALOG_OPEN_WAIT_MS 同量级)
+OVERLAY_OPEN_WAIT_MS = 400
+
+
+async def _click_trigger_button(page, trigger: dict) -> bool:
+    """用触发按钮自身的定位器点开浮层;失败时回退按文案点。返回是否点到。"""
+    from app.services.locator_strategies import playwright_locator
+
+    for loc in (trigger.get("locators") or []):
+        strategy, value = loc.get("strategy"), loc.get("value")
+        if not strategy or not value:
+            continue
+        try:
+            target = playwright_locator(_frame_for(page, trigger), strategy, value).first
+            await target.click(timeout=3000)
+            await page.wait_for_timeout(OVERLAY_OPEN_WAIT_MS)
+            return True
+        except Exception:
+            continue
+    # 回退:按按钮文案在全 frame 里找点
+    text = str(trigger.get("name") or trigger.get("fingerprint", {}).get("text") or "").strip()
+    if not text:
+        return False
+    from app.services.page_extractor import DIALOG_OPEN_WAIT_MS, FIND_POINT_JS
+
+    for candidate in list(page.frames):
+        try:
+            point = await candidate.evaluate(FIND_POINT_JS, {"pattern": ".*", "text": text})
+        except Exception:
+            continue
+        if not point:
+            continue
+        try:
+            from app.services.page_extractor import _frame_viewport_offset
+
+            offset = await _frame_viewport_offset(page, candidate)
+            if offset is None:
+                continue
+            await page.mouse.click(offset["x"] + point["x"], offset["y"] + point["y"])
+            await page.wait_for_timeout(DIALOG_OPEN_WAIT_MS)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def ensure_overlay_path(
+    page,
+    desired_path: list[str],
+    opened: list[str],
+    by_key: dict[str, dict],
+    path_by_key: dict[str, list[str]],
+) -> list[str]:
+    """按祖先链把浮层开到 desired_path;返回新的 opened 栈。
+
+    - desired_path 是元素的祖先 key 列表(根→叶,不含自身);
+    - 用 open_state_diff 求 LCA:公共前缀保留,其余先关再开;
+    - 关浮层仅 Escape(allow_reload=False),避免执行中整页重载丢状态;
+    - 打不开的触发按钮跳过继续(父层缺失时子层定位会走自愈)。
+    """
+    from app.services.page_extractor import CLOSE_WAIT_MS
+
+    to_close, to_open = open_state_diff(opened, desired_path)
+    for _ in to_close:
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(CLOSE_WAIT_MS)
+        except Exception:
+            pass
+    remaining = opened[: len(opened) - len(to_close)] if to_close else list(opened)
+    for key in to_open:
+        trigger = by_key.get(key)
+        if not trigger:
+            remaining.append(key)
+            continue
+        await _click_trigger_button(page, trigger)
+        remaining.append(key)
+    return remaining
+
+
+async def _heal_candidates_current_page(page, storage_state: Optional[str], url: str) -> list[dict]:
+    """自愈候选:优先当前页 DOM 重扫(不导航),失败才回退整页 extract_elements。"""
+    from app.services.page_extractor import _collect_all_frames, normalize_elements
+
+    try:
+        raw = await _collect_all_frames(page)
+        if raw:
+            return normalize_elements(raw)
+    except Exception:
+        pass
+    return await extract_elements(url, storage_state=storage_state)
+
+
 # 抓取会话前的额外等待:前端把 token 写进 localStorage 通常发生在登录请求返回、
 # 路由跳转之后,比最后一步点击晚一拍(实测约 1s)。
 SNAPSHOT_SETTLE_MS = 1500
@@ -807,6 +1017,18 @@ async def _settle_before_snapshot(page) -> None:
 async def _validate_in_browser(url: str, elements: list[dict], storage_state: Optional[str]) -> list[dict]:
     from playwright.async_api import async_playwright
 
+    by_key, path_by_key = build_execution_index(elements)
+    # 按祖先链分组:同路径的元素开一次浮层后批量校验
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for element in by_key.values():
+        key = str(element.get("key") or "")
+        path = tuple(path_by_key.get(key) or [])
+        if path not in groups:
+            groups[path] = []
+            order.append(path)
+        groups[path].append(element)
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         try:
@@ -818,10 +1040,12 @@ async def _validate_in_browser(url: str, elements: list[dict], storage_state: Op
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await _wait_for_page_ready(page)
             results = []
-            for element in elements:
-                if not isinstance(element, dict):
-                    continue
-                results.append(await validate_element(_frame_for(page, element), element))
+            opened: list[str] = []
+            for path in order:
+                desired = list(path)
+                opened = await ensure_overlay_path(page, desired, opened, by_key, path_by_key)
+                for element in groups[path]:
+                    results.append(await validate_element(_frame_for(page, element), element))
             return results
         finally:
             await browser.close()
@@ -843,11 +1067,20 @@ async def _execute_in_browser(
     「登录后保持登录状态」就靠这一步:执行过程中的登录/续期不会随浏览器关闭而丢失。
     落盘前先 `_settle_before_snapshot` 等页面安静(否则抓到的是没有 token 的空壳),
     落盘后再同步一份到该 origin 的通用缓存(供未关联登录页对象的旧链路复用)。
+
+    子元素(树上有祖先)定位前先 `ensure_overlay_path` 按祖先链开浮层。
     """
     from playwright.async_api import async_playwright
 
-    by_key = {e.get("key"): e for e in elements if isinstance(e, dict)}
+    # elements 可能是嵌套树:建执行索引(by_key 扫平 + path_by_key 祖先链)
+    by_key, path_by_key = build_execution_index(elements)
+    # 兼容调用方传入的扁平列表里未建索引的 key(索引里没有时兜底)
+    for e in elements:
+        if isinstance(e, dict) and e.get("key") and e["key"] not in by_key:
+            by_key[e["key"]] = {k: v for k, v in e.items() if k != "children"}
+            path_by_key.setdefault(e["key"], [])
     passed = True
+    opened: list[str] = []
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = None
@@ -861,7 +1094,8 @@ async def _execute_in_browser(
             await _wait_for_page_ready(page)
 
             for index, step in enumerate(steps, 1):
-                element = by_key.get(step.get("element"))
+                step_key = str(step.get("element") or "")
+                element = by_key.get(step_key)
                 entry = {
                     "step_no": index,
                     "element": step.get("element"),
@@ -877,6 +1111,10 @@ async def _execute_in_browser(
                     passed = False
                     break
 
+                # 子元素:先把浮层开到它所在的祖先链(触发按钮 → 弹窗)
+                desired = list(path_by_key.get(step_key) or [])
+                opened = await ensure_overlay_path(page, desired, opened, by_key, path_by_key)
+
                 resolved = await resolve_target(_frame_for(page, element), element)
                 if resolved:
                     # 多候选降级命中:提升为主定位器(回写)
@@ -887,8 +1125,8 @@ async def _execute_in_browser(
                         entry["healed"] = True
 
                 if resolved is None:
-                    # 全部候选失败:重扫 DOM 相似度重匹配
-                    raw = await extract_elements(url, storage_state=storage_state)
+                    # 全部候选失败:优先当前页 DOM 重扫(不导航)相似度重匹配
+                    raw = await _heal_candidates_current_page(page, storage_state, url)
                     event = heal_from_candidates(element, raw)
                     if event:
                         event["step"] = index
@@ -1236,6 +1474,7 @@ def launch_extraction(
     login_page_object_id: Optional[int] = None,
     mark_login_page: bool = False,
     skip_login: bool = False,
+    environment_id: Optional[int] = None,
 ) -> str:
     task_id = _new_task(record_id, "extract")
     _launch(
@@ -1246,6 +1485,7 @@ def launch_extraction(
             login_page_object_id=login_page_object_id,
             mark_login_page=mark_login_page,
             skip_login=skip_login,
+            environment_id=environment_id,
         ),
         task_id,
     )
@@ -1257,9 +1497,19 @@ def launch_validation(
     request_db: Optional[Session] = None,
     login_overrides: Optional[dict] = None,
     login_page_object_id: Optional[int] = None,
+    environment_id: Optional[int] = None,
 ) -> str:
     task_id = _new_task(record_id, "validate")
-    _launch(record_id, PageObjectRunner(request_db, login_overrides, login_page_object_id=login_page_object_id), task_id)
+    _launch(
+        record_id,
+        PageObjectRunner(
+            request_db,
+            login_overrides,
+            login_page_object_id=login_page_object_id,
+            environment_id=environment_id,
+        ),
+        task_id,
+    )
     return task_id
 
 
@@ -1268,7 +1518,40 @@ def launch_execution(
     request_db: Optional[Session] = None,
     login_overrides: Optional[dict] = None,
     login_page_object_id: Optional[int] = None,
+    environment_id: Optional[int] = None,
 ) -> str:
     task_id = _new_task(record_id, "execute")
-    _launch(record_id, PageObjectRunner(request_db, login_overrides, login_page_object_id=login_page_object_id), task_id)
+    _launch(
+        record_id,
+        PageObjectRunner(
+            request_db,
+            login_overrides,
+            login_page_object_id=login_page_object_id,
+            environment_id=environment_id,
+        ),
+        task_id,
+    )
+    return task_id
+
+
+def launch_login(
+    record_id: int,
+    request_db: Optional[Session] = None,
+    login_overrides: Optional[dict] = None,
+    login_page_object_id: Optional[int] = None,
+    environment_id: Optional[int] = None,
+    **kwargs,
+) -> str:
+    """发起 login 任务:为登录页对象(run.page_object_id)建立/刷新登录态。"""
+    task_id = _new_task(record_id, "login")
+    _launch(
+        record_id,
+        PageObjectRunner(
+            request_db,
+            login_overrides,
+            login_page_object_id=login_page_object_id,
+            environment_id=environment_id,
+        ),
+        task_id,
+    )
     return task_id

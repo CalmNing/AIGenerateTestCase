@@ -57,7 +57,7 @@ class TestExtract:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             captured["run_id"] = run_id
             captured["login"] = login_overrides
             return "task-1"
@@ -79,6 +79,57 @@ class TestExtract:
             asyncio.run(route.extract_page_object(body, db_session, fake_user))
         assert exc.value.status_code == 400
 
+    def test_max_depth_defaults_to_three_and_stored_in_spec(self, db_session, fake_user, monkeypatch):
+        captured = {}
+
+        def fake_launch(run_id, request_db=None, **kwargs):
+            captured["run_id"] = run_id
+            return "task-md"
+
+        monkeypatch.setattr(route, "launch_extraction", fake_launch)
+        body = route.ExtractRequest(site_origin="http://a.com", page_path="#/login")
+        asyncio.run(route.extract_page_object(body, db_session, fake_user))
+        run = db_session.get(UIAutomationRun, captured["run_id"])
+        assert run.result["request"]["max_depth"] == 3
+
+    def test_max_depth_clamped_by_request_schema(self, db_session, fake_user):
+        with pytest.raises(Exception):
+            route.ExtractRequest(max_depth=6)
+        with pytest.raises(Exception):
+            route.ExtractRequest(max_depth=-1)
+        with pytest.raises(Exception):
+            route.RegenerateRequest(max_depth=9)
+
+    def test_extract_stores_custom_max_depth(self, db_session, fake_user, monkeypatch):
+        captured = {}
+
+        def fake_launch(run_id, request_db=None, **kwargs):
+            captured["run_id"] = run_id
+            return "task-md2"
+
+        monkeypatch.setattr(route, "launch_extraction", fake_launch)
+        body = route.ExtractRequest(
+            site_origin="http://a.com", page_path="#/login", max_depth=1
+        )
+        asyncio.run(route.extract_page_object(body, db_session, fake_user))
+        run = db_session.get(UIAutomationRun, captured["run_id"])
+        assert run.result["request"]["max_depth"] == 1
+
+    def test_regenerate_stores_max_depth(self, db_session, fake_user, page_object, monkeypatch):
+        captured = {}
+
+        def fake_launch(run_id, request_db=None, **kwargs):
+            captured["run_id"] = run_id
+            return "task-md3"
+
+        monkeypatch.setattr(route, "launch_extraction", fake_launch)
+        asyncio.run(route.regenerate_page_object(
+            page_object.id, route.RegenerateRequest(max_depth=5), db_session, fake_user
+        ))
+        run = db_session.get(UIAutomationRun, captured["run_id"])
+        assert run.result["request"]["max_depth"] == 5
+        assert run.result["request"]["merge"] is True
+
     def test_skip_login_overrides_explicit_selection(self, db_session, fake_user, monkeypatch):
         """没选登录页对象(显式不使用登录态):即便请求里带了登录页对象 id,也不解析、不复用。"""
         login_po = PageObject(
@@ -91,7 +142,7 @@ class TestExtract:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             captured["login_page_object_id"] = login_page_object_id
             captured["skip_login"] = skip_login
             return "task-a"
@@ -141,7 +192,7 @@ class TestCrud:
 class TestValidateAndRun:
     def test_validate_launches(self, db_session, fake_user, page_object, monkeypatch):
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             asyncio.get_running_loop()  # 路由必须是 async,否则后台任务无事件循环可挂
             return "task-v"
 
@@ -161,7 +212,7 @@ class TestValidateAndRun:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             asyncio.get_running_loop()
             captured["login"] = login_overrides
             return "task-v"
@@ -182,7 +233,7 @@ class TestValidateAndRun:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             asyncio.get_running_loop()
             captured["run_id"] = run_id
             return "task-e"
@@ -198,13 +249,70 @@ class TestValidateAndRun:
         assert run.run_type == "execute"
         assert run.steps[0]["action"] == "fill"
 
+    def test_run_rejects_disabled_elements(self, db_session, fake_user, page_object, monkeypatch):
+        page_object.elements = [{
+            "key": "username",
+            "name": "用户名输入框",
+            "enabled": False,
+            "locators": [{"strategy": "testid", "value": "login-username", "stability": 100}],
+        }]
+        db_session.add(page_object)
+        db_session.commit()
+
+        def fail_launch(*args, **kwargs):
+            raise AssertionError("disabled elements must not launch")
+
+        monkeypatch.setattr(route, "launch_execution", fail_launch)
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(route.run_page_object(
+                page_object.id,
+                route.RunRequest(steps=[{"element": "username", "action": "fill", "value": "admin"}]),
+                db_session, fake_user,
+            ))
+        assert exc.value.status_code == 400
+        assert "步骤中存在无效的元素" in str(exc.value.detail)
+        assert "username" in str(exc.value.detail)
+
+    def test_run_allows_disabled_elements_not_referenced(self, db_session, fake_user, page_object, monkeypatch):
+        page_object.elements = [
+            {
+                "key": "username",
+                "name": "用户名输入框",
+                "enabled": True,
+                "locators": [{"strategy": "testid", "value": "login-username", "stability": 100}],
+            },
+            {
+                "key": "unused",
+                "name": "未使用的无效元素",
+                "enabled": False,
+                "locators": [{"strategy": "css", "value": "#unused", "stability": 50}],
+            },
+        ]
+        db_session.add(page_object)
+        db_session.commit()
+        captured = {}
+
+        def fake_launch(run_id, **kwargs):
+            asyncio.get_running_loop()
+            captured["run_id"] = run_id
+            return "task-e2"
+
+        monkeypatch.setattr(route, "launch_execution", fake_launch)
+        result = asyncio.run(route.run_page_object(
+            page_object.id,
+            route.RunRequest(steps=[{"element": "username", "action": "fill", "value": "admin"}]),
+            db_session, fake_user,
+        ))
+        assert result.data["task_id"] == "task-e2"
+        assert captured["run_id"]
+
 
 class TestLogin:
     def test_creates_run_and_launches(self, db_session, fake_user, monkeypatch):
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             asyncio.get_running_loop()
             captured["run_id"] = run_id
             captured["login"] = login_overrides
@@ -237,7 +345,7 @@ class TestExport:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             asyncio.get_running_loop()
             captured["run_id"] = run_id
             return "task-r"
@@ -270,7 +378,7 @@ class TestExport:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             captured["login_page_object_id"] = login_page_object_id
             captured["skip_login"] = skip_login
             return "task-s"
@@ -299,7 +407,7 @@ class TestExport:
         captured = {}
 
         def fake_launch(run_id, request_db=None, login_overrides=None, login_page_object_id=None,
-                        mark_login_page=False, skip_login=False):
+                        mark_login_page=False, skip_login=False, environment_id=None, **kwargs):
             captured["login_page_object_id"] = login_page_object_id
             captured["skip_login"] = skip_login
             return "task-f"
@@ -574,6 +682,52 @@ class TestSiteOriginVariables:
         body = route.LubanProxyRequest(base_url="{{web_url}}/", access_token="tok")
         asyncio.run(route.luban_modules(body, db_session, fake_user))
         assert _FakeAsyncClient.last_request["url"] == "http://env-a.com/service/acl/biz/modules"
+
+    def test_extract_uses_selected_environment_id(self, db_session, fake_user, env, monkeypatch):
+        """前端传当前选中环境时,{{var}} 按该环境解析,不用默认环境。"""
+        from db.models import GlobalParameter
+        other = GlobalParameter(
+            name="环境B", is_default=False,
+            parameters=[{"key": "web_url", "value": "http://env-b.com"}],
+        )
+        db_session.add(other)
+        db_session.commit()
+        db_session.refresh(other)
+
+        captured = {}
+
+        def fake_launch(run_id, **kwargs):
+            captured["run_id"] = run_id
+            captured["environment_id"] = kwargs.get("environment_id")
+            return "task-env-b"
+
+        monkeypatch.setattr(route, "launch_extraction", fake_launch)
+        body = route.ExtractRequest(
+            site_origin="{{web_url}}", page_path="#/login", environment_id=other.id
+        )
+        asyncio.run(route.extract_page_object(body, db_session, fake_user))
+        run = db_session.get(UIAutomationRun, captured["run_id"])
+        assert run.target_url == "http://env-b.com#/login"
+        assert captured["environment_id"] == other.id
+        assert run.result["request"]["site_origin"] == "{{web_url}}"
+
+    def test_luban_uses_selected_environment_id(self, db_session, fake_user, env, monkeypatch):
+        """鲁班代理 base_url 解析也要按选中环境。"""
+        from db.models import GlobalParameter
+        other = GlobalParameter(
+            name="环境B", is_default=False,
+            parameters=[{"key": "web_url", "value": "http://env-b.com"}],
+        )
+        db_session.add(other)
+        db_session.commit()
+        db_session.refresh(other)
+        _FakeAsyncClient.payload = {"success": True, "data": []}
+        monkeypatch.setattr(route.httpx, "AsyncClient", _FakeAsyncClient)
+        body = route.LubanProxyRequest(
+            base_url="{{web_url}}/", access_token="tok", environment_id=other.id
+        )
+        asyncio.run(route.luban_modules(body, db_session, fake_user))
+        assert _FakeAsyncClient.last_request["url"] == "http://env-b.com/service/acl/biz/modules"
 
 
 class TestTrailingSlashTargetUrl:

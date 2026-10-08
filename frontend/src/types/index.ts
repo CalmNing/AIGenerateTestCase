@@ -42,6 +42,65 @@ export interface TestCase {
   validation_at?: string | null;
   steps: (string | Record<string, any>)[];
   expected_results: (string | Record<string, any>)[];
+  /** UI 绑定计划(NL 步骤 → PageObject 元素),由 /ui-execution/compile 生成、前端可修正 */
+  ui_binding?: UIBindingPlan | null;
+}
+
+// ---------------------------------------------------------------------------
+// UI 步骤绑定(NL → PageObject)
+// ---------------------------------------------------------------------------
+
+export type UIBindLevel = 'L1' | 'L2' | 'L3';
+
+export interface UIBoundStep {
+  step_no: number;
+  nl?: string;
+  action: string;
+  element_key?: string | null;
+  value?: string | null;
+  confidence?: number;
+  level: UIBindLevel;
+  reason?: string;
+}
+
+export interface UIBoundAssert {
+  index: number;
+  nl?: string;
+  action: string;
+  element_key?: string | null;
+  value?: string | null;
+  confidence?: number;
+  level: UIBindLevel;
+  reason?: string;
+}
+
+export interface UIBindingPlan {
+  page_object_id?: number | null;
+  steps: UIBoundStep[];
+  asserts: UIBoundAssert[];
+  compile_status?: string;
+  site_origin?: string;
+  page_path?: string;
+  message?: string;
+}
+
+export interface UIElementOption {
+  key: string;
+  name?: string;
+  type?: string;
+}
+
+export interface UICompileResult {
+  page_object_id?: number | null;
+  page_object_name?: string;
+  elements: UIElementOption[];
+  steps: UIBoundStep[];
+  asserts: UIBoundAssert[];
+  unmatched_elements: string[];
+  compile_status: 'ok' | 'no_page_object' | 'llm_failed' | string;
+  site_origin?: string;
+  page_path?: string;
+  message?: string;
 }
 
 // 测试用例类型
@@ -163,17 +222,32 @@ export interface GlobalParameter {
   updated_at: string;
 }
 
-// UI 自动化执行记录(browser-use Agent)
+// UI 自动化执行记录(browser-use Agent / hybrid)
+export interface UIExecutionTraceStep {
+  step_no: number;
+  action: string;
+  result?: string;
+  url?: string;
+  /** hybrid 执行等级:L1 确定性 / L2 校验后执行 / L3 步进 Agent */
+  level?: UIBindLevel | string | null;
+  element_key?: string | null;
+  healed?: boolean | null;
+  error?: string | null;
+  nl?: string;
+}
+
 export interface UIExecutionRecord {
   id: number;
   testcase_id: number;
   user_id?: string;
   target_url: string;
   status: 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR' | 'STOPPED';
-  steps_trace: Array<{ step_no: number; action: string; result?: string; url?: string }>;
+  steps_trace: UIExecutionTraceStep[];
   agent_summary: string;
   error?: string | null;
   finished_at?: string | null;
+  execution_mode?: 'agent' | 'hybrid' | string;
+  page_object_id?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -202,11 +276,18 @@ export interface PageElement {
   name: string;
   type: string;
   description?: string;
+  /** true=有效, false=无效;缺省视为有效。无效元素仍参与验证/导出,但引用它的执行步骤会被拦截 */
   enabled?: boolean;
   fingerprint?: Record<string, string>;
   locators: PageLocator[];
   /** 探针来源触发词(新增/编辑/删除等),前端据此分组展示;基线元素为空 */
   probeTrigger?: string;
+  /** 嵌套子元素(触发按钮 → 弹窗 children);基线元素为空/[] */
+  children?: PageElement[];
+  /** 祖先触发路径(根→叶,不含自身);基线为 [] */
+  probePath?: string[];
+  /** 虚拟容器(触发按钮未采到时占位,type=trigger_group) */
+  synthetic?: boolean;
   heal_count?: number;
   last_healed_at?: string | null;
 }
@@ -302,6 +383,8 @@ export interface UIAutomationLoginConfig {
   login_company?: string;
   /** 关联的登录页对象ID:有登录态直接复用,没有就先执行它的登录步骤再继续 */
   login_page_object_id?: number | null;
+  /** 前端当前选中的环境(解析 {{var}});缺省时后端回退默认环境 */
+  environment_id?: number | null;
 }
 
 // 代理请求类型

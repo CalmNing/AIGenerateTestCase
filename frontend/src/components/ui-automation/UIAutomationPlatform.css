@@ -90,17 +90,580 @@
 .ui-auto-detail {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-container);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 16px;
-  overflow: auto;
+  /* 头部/Tab/工具栏固定,只有表格体内滚 */
+  overflow: hidden;
 }
 
+.ui-auto-detail > .ui-auto-detail-head {
+  flex-shrink: 0;
+}
+
+/* ---- 详情头:标题+操作一行,URL/登录态次级信息,行间留呼吸 ---- */
 .ui-auto-detail-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  padding-bottom: 4px;
+  margin-bottom: 0;
+}
+
+.ui-auto-detail-head__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 标题行:名称 + 操作按钮分组,操作区靠右视觉收束 */
+.ui-auto-detail-head__title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 2px;
+}
+
+.ui-auto-detail-title {
+  position: relative;
+  font-size: var(--font-size-lg);
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--color-text);
+  padding-inline-start: 10px;
+}
+
+.ui-auto-detail-title::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 0.95em;
+  border-radius: 2px;
+  background: var(--color-primary);
+}
+
+/* 标题旁操作:轻量分段感,弱化默认按钮边框噪音 */
+.ui-auto-detail-head__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ui-auto-detail-head__title-row .ant-btn {
+  font-size: var(--font-size-xs);
+}
+
+.ui-auto-detail-head__title-row .ant-btn-default {
+  border-color: var(--color-border-light);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+}
+
+.ui-auto-detail-head__title-row .ant-btn-default:hover {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.ui-auto-detail-desc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+
+.ui-auto-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border-light);
+}
+
+.ui-auto-detail-meta__label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.ui-auto-detail-meta__link {
+  padding: 0;
+  height: auto;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.ui-auto-detail-head__aside {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.ui-auto-detail-count {
+  margin-inline-end: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tab:与详情头、下方内容各留间距,避免按钮贴着 Tab 条
+   (index.css 全局 .ant-tabs-nav margin-bottom:0 !important 会盖掉默认值,这里必须 !important) */
+.ui-auto-detail-tabs {
+  margin-top: 12px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-auto-detail-tabs > .ant-tabs-nav {
+  margin-bottom: 20px !important;
+  flex-shrink: 0;
+}
+
+.ui-auto-detail-tabs > .ant-tabs-content-holder {
+  margin-top: 4px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-auto-detail-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.ui-auto-detail-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  height: 100%;
+}
+
+.ui-auto-detail-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane-active {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ui-auto-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- 元素工具栏:主操作左、树展开控制右,表格滚动时固定在上 ---- */
+.ui-auto-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 2px 2px 6px;
+  flex-shrink: 0;
+}
+
+/* 主操作按钮:统一圆角与阴影层次,危险操作降为 soft danger */
+.ui-auto-toolbar .ant-btn {
+  font-weight: 500;
+  border-radius: var(--radius-md);
+}
+
+.ui-auto-toolbar .ant-btn-primary {
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
+.ui-auto-toolbar .ant-btn-default {
+  border-color: var(--color-border);
+  background: var(--color-bg-container);
+  color: var(--color-text);
+}
+
+.ui-auto-toolbar .ant-btn-default:hover {
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+/* 清空:去掉刺眼的红描边,用 soft 危险按钮(浅底 + 红字) */
+.ui-auto-toolbar .ant-btn-dangerous.ant-btn-default {
+  border-color: color-mix(in srgb, var(--color-danger, #ef4444) 35%, white);
+  background: color-mix(in srgb, var(--color-danger, #ef4444) 6%, white);
+  color: var(--color-danger, #ef4444);
+}
+
+.ui-auto-toolbar .ant-btn-dangerous.ant-btn-default:hover:not(:disabled) {
+  border-color: var(--color-danger, #ef4444);
+  background: color-mix(in srgb, var(--color-danger, #ef4444) 12%, white);
+  color: var(--color-danger, #ef4444);
+}
+
+.ui-auto-toolbar .ant-btn-dangerous.ant-btn-default:disabled {
+  opacity: 0.45;
+}
+
+.ui-auto-toolbar__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 元素树表:占满剩余高度,表头吸附,只滚表体 ---- */
+.ui-auto-elements-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.ui-auto-elements-table .ant-table {
+  border: 1px solid var(--color-border-light);
+}
+
+.ui-auto-elements-table .ant-table-thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg) !important;
+}
+
+/* 分组行:底色区分层级,不只靠 Tag 颜色 */
+.ui-auto-tree-row--group > td {
+  background: var(--color-bg) !important;
+}
+
+.ui-auto-tree-row--group:hover > td {
+  background: var(--color-border-light) !important;
+}
+
+.ui-auto-tree-row--group .ui-auto-tree-group-label {
+  font-weight: 600;
+}
+
+/* 触发按钮父行:左侧色条 + 字重,扫一眼能分清「可展开的弹窗入口」 */
+.ui-auto-tree-row--parent > td {
+  background: color-mix(in srgb, var(--color-primary) 3%, var(--color-bg-container));
+}
+
+.ui-auto-tree-row--parent > td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.ui-auto-tree-row--parent:hover > td {
+  background: var(--color-primary-bg) !important;
+}
+
+.ui-auto-tree-row--parent .ant-table-cell-with-append .ant-table-expand-icon,
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--parent > td:first-child .ant-table-row-expand-icon {
+  cursor: pointer;
+}
+
+/* 叶子行:无子级 → 不显示展开按钮(保留缩进占位,树线对齐) */
+.ui-auto-tree-row--leaf > td:first-child .ant-table-row-expand-icon,
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--leaf > td:first-child .ant-table-row-expand-icon {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ui-auto-tree-row--leaf > td:first-child .ant-table-row-expand-icon-collapsed,
+.ui-auto-tree-row--leaf > td:first-child .ant-table-row-expand-icon-expanded {
+  visibility: hidden;
+}
+
+/* 无效元素行:整体弱化(状态开关仍可点击) */
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--disabled > td {
+  opacity: 0.55;
+}
+
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--disabled:hover > td {
+  opacity: 0.75;
+}
+
+/* 序号列:等宽数字,浅色弱化 */
+.ui-auto-tree-seq {
+  display: inline-block;
+  min-width: 2.5em;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.ui-auto-tree-row--group .ui-auto-tree-seq {
+  color: var(--color-primary);
+}
+
+/* 名称单元格:台账只读文本(编辑走操作列抽屉) */
+.ui-auto-tree-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 340px;
+  min-width: 0;
+}
+
+.ui-auto-tree-name__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-auto-tree-name--static .ui-auto-tree-count {
+  flex-shrink: 0;
+}
+
+.ui-auto-tree-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分组行:展开箭头热区更明显 + 左侧留白对齐树缩进 */
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--group > td:first-child {
+  padding-inline-start: 12px;
+}
+
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--group .ant-table-row-expand-icon {
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.ui-auto-elements-table .ant-table-row.ui-auto-tree-row--group .ant-table-row-expand-icon:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* 展开后的定位器编辑面板:次级底,与数据行区分 */
+.ui-auto-locator-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 4px 0 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+}
+
+.ui-auto-locator-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-auto-locator-panel__label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.ui-auto-locator-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-auto-locator-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-auto-locator-panel__value {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.ui-auto-locator-panel__empty {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 抽屉内编辑面板 */
+.ui-auto-locator-panel--drawer {
+  margin: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+/* 新增元素弹窗内嵌定位器区:贴合表单节奏 */
+.ui-auto-locator-panel--modal {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+}
+
+.ui-auto-locator-panel--modal .ui-auto-locator-panel__row {
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--color-bg-container, #fff);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+}
+
+/* 展开箭头手感:hover 热区更明显 */
+.ui-auto-elements-table .ant-table-row-expand-icon {
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.ui-auto-elements-table .ant-table-row-expand-icon:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.ui-auto-elements-table .ant-table-expanded-row > td {
+  background: var(--color-bg-container) !important;
+}
+
+/* 校验表与元素表共用层级视觉 */
+.ui-auto-elements-table .ant-table-tbody > tr.ui-auto-tree-row--parent > td {
+  background: color-mix(in srgb, var(--color-primary) 3%, var(--color-bg-container));
+}
+
+/* ---- 编辑页面对象弹窗 ---- */
+.ui-auto-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 4px;
+}
+
+.ui-auto-edit-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-auto-edit-form__inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ui-auto-edit-form__inline .ant-select {
+  min-width: 0;
+}
+
+.ui-auto-edit-form__submit {
+  margin-top: 2px;
+  height: 40px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
+.ui-auto-edit-form__label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.ui-auto-edit-form__hint {
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+}
+
+.ui-auto-edit-form__optional {
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.ui-auto-edit-form__session {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.ui-auto-edit-form__divider {
+  height: 1px;
+  background: var(--color-border-light);
+  margin: 2px 0;
+}
+
+.ui-auto-edit-form__checkbox.ant-checkbox-wrapper {
+  align-items: flex-start;
+  font-size: var(--font-size-base);
+  line-height: 1.4;
+}
+
+.ui-auto-edit-form__checkbox-title {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.ui-auto-edit-form__checkbox-desc {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+
+.ui-auto-edit-form__tips {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.6;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
+}
+
+/* 重新生成弹窗:目标地址卡片(替代大块 Alert) */
+.ui-auto-edit-form__target {
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--color-primary) 5%, white);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 14%, transparent);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ui-auto-edit-form__target-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.ui-auto-edit-form__target-url {
+  font-size: var(--font-size-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--color-text);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.ui-auto-edit-form__target-desc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+  margin-top: 2px;
 }

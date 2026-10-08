@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -241,12 +241,20 @@ export const testcaseApi = {
       moduleId?: number | string;
       file?: File | null;
       pipelineMode?: 'auto' | 'manual';
+      stopAfterStage?: 1 | 2 | 3 | 4;
+      feishuSection?: string;
     }
   ): Promise<ApiResponse<{ task_id: string }>> => {
     const formData = new FormData();
     formData.append("session_id", sessionId.toString());
     formData.append("requirement_text", requirementText);
     formData.append("pipeline_mode", options?.pipelineMode || "auto");
+    if (options?.stopAfterStage !== undefined) {
+      formData.append("stop_after_stage", options.stopAfterStage.toString());
+    }
+    if (options?.feishuSection?.trim()) {
+      formData.append("feishu_section", options.feishuSection.trim());
+    }
     if (options?.moduleId !== undefined && options.moduleId !== '' && options.moduleId !== 0) {
       formData.append("module_id", options.moduleId.toString());
     }
@@ -389,6 +397,12 @@ export const testcaseApi = {
     api.post(`/testcases/test-points/${id}/regenerate`),
 };
 
+// 飞书文档读取
+export const documentApi = {
+  getFeishuContent: (url: string): Promise<ApiResponse<{ text: string; document_id: string }>> =>
+    api.post('/document/feishu/content', { url, include_boards: false }),
+};
+
 // 模块管理API
 export const moduleApi = {
   // 获取会话的所有模块
@@ -486,18 +500,61 @@ export interface UILoginConfig {
   login_company?: string;
 }
 
+export interface UIExecutionRunOptions {
+  login?: UILoginConfig;
+  environmentId?: number | null;
+  /** 前端修正后的绑定计划;非空时覆盖用例上的 ui_binding 并优先生效 */
+  ui_binding?: Record<string, any> | null;
+  /** auto: 有绑定且含 L1/L2 → hybrid;agent: 纯 browser-use;hybrid: 强制混合 */
+  execution_mode?: 'auto' | 'agent' | 'hybrid';
+  /** 未结构化预期是否做 LLM 终判(默认跳过) */
+  final_judgement?: boolean;
+  max_steps?: number;
+}
+
 export const uiExecutionApi = {
   run: (
     testcaseId: number,
     siteOrigin: string,
     pagePath: string,
-    login?: UILoginConfig
-  ): Promise<ApiResponse<{ task_id: string; record_id: number }>> =>
-    api.post('/ui-execution/run', {
+    options: UIExecutionRunOptions = {}
+  ): Promise<ApiResponse<{ task_id: string; record_id: number; execution_mode?: string }>> => {
+    const { login, environmentId, ui_binding, execution_mode, final_judgement, max_steps } = options;
+    return api.post('/ui-execution/run', {
       testcase_id: testcaseId,
       site_origin: siteOrigin,
       page_path: pagePath,
       ...(login ?? {}),
+      ...(environmentId != null ? { environment_id: environmentId } : {}),
+      ...(ui_binding ? { ui_binding } : {}),
+      ...(execution_mode ? { execution_mode } : {}),
+      ...(final_judgement != null ? { final_judgement } : {}),
+      ...(max_steps ? { max_steps } : {}),
+    });
+  },
+
+  /** 预编译 NL 步骤 → PageObject 绑定(纯预览,不落库) */
+  compile: (
+    testcaseId: number,
+    siteOrigin: string,
+    pagePath: string,
+    environmentId?: number | null
+  ): Promise<ApiResponse<UICompileResult>> =>
+    api.post('/ui-execution/compile', {
+      testcase_id: testcaseId,
+      site_origin: siteOrigin,
+      page_path: pagePath,
+      ...(environmentId != null ? { environment_id: environmentId } : {}),
+    }),
+
+  /** 保存修正后的绑定到用例 */
+  saveBinding: (
+    testcaseId: number,
+    uiBinding: Record<string, any>
+  ): Promise<ApiResponse<{ saved: boolean; page_object_id?: number | null }>> =>
+    api.post('/ui-execution/bindings', {
+      testcase_id: testcaseId,
+      ui_binding: uiBinding,
     }),
 
   getTask: (taskId: string): Promise<ApiResponse<UIExecutionTaskStatus>> =>
@@ -518,6 +575,8 @@ interface ExtractPageObjectRequest extends UIAutomationLoginConfig {
   url?: string;
   description?: string;
   use_llm_naming?: boolean;
+  /** 浮层递归深度:0=只采当前页,默认 3,上限 5(仅浮层不跟路由) */
+  max_depth?: number;
   /** 本次抽取的页面是否直接作为登录页对象 */
   is_login_page?: boolean;
   /** 本次不使用登录态(没选登录页对象):不读站点缓存、不登录,直接匿名访问 */
@@ -563,6 +622,7 @@ export interface LubanProxyPayload {
   base_url: string;
   access_token: string;
   res_id?: string;
+  environment_id?: number | null;
 }
 
 export const uiAutomationApi = {
@@ -598,6 +658,8 @@ export const uiAutomationApi = {
     payload: {
       use_llm_naming?: boolean;
       merge?: boolean;
+      /** 浮层递归深度:0=只采当前页,默认 3,上限 5 */
+      max_depth?: number;
       /** 本次不使用登录态(没选登录页对象):不读站点缓存、不登录,直接匿名访问 */
       skip_login?: boolean;
     } & UIAutomationLoginConfig

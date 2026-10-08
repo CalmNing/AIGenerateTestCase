@@ -434,6 +434,8 @@ def normalize_element(attrs: dict, index: int, used_keys: set) -> dict:
         "frame": str(attrs.get("frame") or ""),
         # 探针来源触发词(新增/编辑/删除等),前端据此分组展示;基线元素为空
         "probeTrigger": str(attrs.get("probeTrigger") or ""),
+        # 触发路径(如 ["新增","高级设置"]),建树用;基线为 []
+        "probePath": list(attrs.get("probePath") or []),
         "trigger": trigger_locator(attrs),
         "heal_count": 0,
         "last_healed_at": None,
@@ -484,11 +486,16 @@ def _dedupe_key(element: dict) -> tuple:
     否则「请输入」会把 hazardCategory 与 checkLocation 等不同字段合成一条。
     role/testid/name 等强语义主定位器保持原行为,避免跨 frame 副本因 css 路径
     不同而拆开。
+
+    `probePath` 参与键:基线与各浮层、不同浮层之间的同结构元素不互相吞并
+    (弹窗字段与基线同指纹时若并入基线,子树会残缺且执行时不会先开浮层)。
+    同一浮层内的表格行仍按结构归并计次。
     """
     locators = element.get("locators") or []
     primary = locators[0] if locators else {}
     primary_value = primary.get("value") or ""
     fp = element.get("fingerprint") or {}
+    probe_path = tuple(str(s) for s in (element.get("probePath") or []))
     key = (
         fp.get("tag"),
         fp.get("input_type"),
@@ -500,8 +507,8 @@ def _dedupe_key(element: dict) -> tuple:
             (loc.get("value") or "" for loc in locators if loc.get("strategy") == "css"),
             "",
         )
-        return (*key, structural_key(css))
-    return key
+        return (*key, structural_key(css), probe_path)
+    return (*key, probe_path)
 
 
 def normalize_elements(raw_elements: list[dict]) -> list[dict]:
@@ -1210,13 +1217,23 @@ async def _overlay_gone(page, added_keys: set) -> bool:
     return not (added_keys & current)
 
 
-async def _close_overlay(page, added_keys: set, timeout_ms: int, activity=None) -> bool:
+async def _close_overlay(
+    page,
+    added_keys: set,
+    timeout_ms: int,
+    activity=None,
+    *,
+    allow_reload: bool = True,
+) -> bool:
     """尽最大努力关闭浮层,返回是否确认关闭。
 
-    逐级降级:Escape → 点「取消」/「关闭」→ 重载页面。原实现只试 Escape + 「取消」,
+    逐级降级:Escape → 点「取消」/「关闭」→ (可选)重载页面。原实现只试 Escape + 「取消」,
     失败就返回 False 让调用方终止整轮探针 —— 实测 wujie 子应用弹窗两者都无效,
     结果只探到前 1~2 个触发按钮(命中 306 → 153)。重载是最后一道防线,只有它也
     失败才认输。
+
+    `allow_reload=False` 时禁用重载兜底:深度递归中父浮层还开着,重载会把整页
+    打回基线、父层状态全丢,后续兄弟触发词无法继续 —— 嵌套层关不掉只能中止该枝。
     """
     for _ in range(CLOSE_RETRY):
         try:
@@ -1237,7 +1254,7 @@ async def _close_overlay(page, added_keys: set, timeout_ms: int, activity=None) 
             if await _overlay_gone(page, added_keys):
                 return True
 
-    if not CLOSE_RELOAD_FALLBACK:
+    if not allow_reload or not CLOSE_RELOAD_FALLBACK:
         return False
     try:
         await page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
@@ -1249,22 +1266,12 @@ async def _close_overlay(page, added_keys: set, timeout_ms: int, activity=None) 
         return False
 
 
-async def _probe_trigger(
-    page,
-    pattern: str,
-    text: str,
-    baseline_keys: set,
-    timeout_ms: int,
-    activity=None,
-) -> tuple[list[dict], bool]:
-    """触发单个按钮 → 落稳后增量采集 → 关闭浮层并验证。
+async def _click_trigger(page, pattern: str, text: str, timeout_ms: int) -> str:
+    """点击触发按钮,返回状态: `clicked` | `not_found` | `routed`。
 
     刻意不接收 frame 句柄:每次调用都在**当前** frame 列表里重新找按钮。关闭浮层的
-    兜底重载(见 `_close_overlay`)会让页面重建,重载前抓的 frame 句柄会全部失效 ——
-    实测因此静默丢掉后续探针,命中从 306 掉到 275(只探到第一个触发按钮)。
-
-    返回 (新增元素列表, 浮层是否确认关闭)。绝不点击「确定」类提交按钮;
-    关闭策略见 `_close_overlay`(Escape → 取消/关闭 → 重载)。
+    兜底重载(见 `_close_overlay`)会让页面重建,重载前抓的 frame 句柄会全部失效。
+    绝不点击「确定」类提交按钮。
     """
     base_url = page.url
     point = None
@@ -1278,25 +1285,96 @@ async def _probe_trigger(
             frame = candidate
             break
     if not point or frame is None:
-        return [], True
+        return "not_found"
     offset = await _frame_viewport_offset(page, frame)
     if offset is None:
-        return [], True
+        return "not_found"
     try:
         await page.mouse.click(offset["x"] + point["x"], offset["y"] + point["y"])
     except Exception:
-        return [], True
-    try:
-        if page.url != base_url:
-            # 路由跳转型触发:回到列表页继续,不采集跳转后的新页面
+        return "not_found"
+    if page.url != base_url:
+        # 路由跳转型触发:回到列表页继续,不采集跳转后的新页面(仅浮层递归)
+        try:
             await page.go_back(wait_until="domcontentloaded", timeout=timeout_ms)
             await page.wait_for_timeout(DIALOG_OPEN_WAIT_MS)
-            return [], True
+        except Exception:
+            pass
+        return "routed"
+    try:
         await page.wait_for_timeout(DIALOG_OPEN_WAIT_MS)
         try:
             await page.wait_for_load_state("networkidle", timeout=2500)
         except Exception:
             pass
+    except Exception:
+        return "not_found"
+    return "clicked"
+
+
+def _triggers_from_raw(items: list[dict], pattern: str, limit: int) -> list[str]:
+    """从本层新增的 raw 元素里找出可继续下探的触发按钮文案(不整页重扫)。"""
+    regex = re.compile(pattern)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        tag = (item.get("tag") or "").lower()
+        role = (item.get("role") or "").lower()
+        text = (item.get("text") or "").strip()
+        if not text or len(text) > 12:
+            continue
+        if tag not in ("button", "a") and role != "button":
+            continue
+        if not regex.search(text):
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+class _ProbeBudget:
+    """全局触发点击预算:防止 3 层 × 每层多触发词把探针拖到超时。"""
+
+    def __init__(self, max_total: int) -> None:
+        self.max_total = max(0, int(max_total))
+        self.used = 0
+
+    def consume(self) -> bool:
+        if self.used >= self.max_total:
+            return False
+        self.used += 1
+        return True
+
+
+async def _probe_trigger(
+    page,
+    pattern: str,
+    text: str,
+    baseline_keys: set,
+    timeout_ms: int,
+    activity=None,
+    *,
+    path: Optional[list[str]] = None,
+    allow_reload: bool = True,
+) -> tuple[list[dict], bool]:
+    """触发单个按钮 → 落稳后增量采集 → 关闭浮层并验证(单层,不递归)。
+
+    返回 (新增元素列表, 浮层是否确认关闭)。`path` 写入每个新增元素的
+    probePath/probeTrigger(建树用);缺省为 [text]。
+    """
+    probe_path = list(path) if path is not None else [text]
+    status = await _click_trigger(page, pattern, text, timeout_ms)
+    if status == "not_found":
+        return [], True
+    if status == "routed":
+        return [], True
+    try:
         added: list[dict] = []
         added_keys: set = set()
         for item in await _collect_all_frames(page):
@@ -1304,6 +1382,8 @@ async def _probe_trigger(
             if key in baseline_keys or key in added_keys:
                 continue
             added_keys.add(key)
+            item["probePath"] = probe_path
+            item["probeTrigger"] = "/".join(probe_path)
             added.append(item)
     except Exception:
         return [], False
@@ -1317,8 +1397,126 @@ async def _probe_trigger(
             pass
         return [], True
 
-    closed = await _close_overlay(page, added_keys, timeout_ms, activity)
+    closed = await _close_overlay(
+        page, added_keys, timeout_ms, activity, allow_reload=allow_reload
+    )
     return added, closed
+
+
+async def _probe_recursive(
+    page,
+    pattern: str,
+    pending: list[str],
+    ancestor_keys: set,
+    path: list[str],
+    depth: int,
+    max_depth: int,
+    budget: _ProbeBudget,
+    visited: set,
+    timeout_ms: int,
+    activity=None,
+    max_triggers: int = 8,
+) -> tuple[list[dict], bool]:
+    """在当前浮层状态下递归探针。
+
+    `path`: 祖先触发路径(基线为 []);本层点击 text 后新增元素的 probePath = path+[text]。
+    `depth`: 本层对应的浮层深度(path 长度);depth+1 为即将采集的元素深度。
+    `ancestor_keys`: 本层点击前已可见的所有元素键(基线 ∪ 祖先浮层),用于增量 diff。
+    `allow_reload`: 仅 depth==0(回基线)允许重载兜底。
+
+    返回 (本枝及子枝新增元素, 是否全程成功关闭)。
+    """
+    collected: list[dict] = []
+    ok = True
+    for text in pending:
+        if not text:
+            continue
+        visit_key = (tuple(path), text)
+        if visit_key in visited:
+            continue
+        if not budget.consume():
+            logger.info(f"[page_extractor] 触发预算耗尽({budget.max_total}),停止下探")
+            break
+        visited.add(visit_key)
+
+        item_path = path + [text]
+        status = await _click_trigger(page, pattern, text, timeout_ms)
+        if status in ("not_found", "routed"):
+            continue
+
+        try:
+            added: list[dict] = []
+            added_keys: set = set()
+            for item in await _collect_all_frames(page):
+                key = _probe_key(item)
+                if key in ancestor_keys or key in added_keys:
+                    continue
+                added_keys.add(key)
+                item["probePath"] = item_path
+                item["probeTrigger"] = "/".join(item_path)
+                added.append(item)
+        except Exception:
+            ok = False
+            break
+
+        if not added:
+            try:
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(CLOSE_WAIT_MS)
+            except Exception:
+                pass
+            continue
+
+        collected.extend(added)
+        logger.info(
+            f"[page_extractor] 探针{'/'.join(item_path)} 新增采集 {len(added)} 个元素"
+        )
+
+        # 深度递归:本层新增元素里若还有触发按钮,且未达 max_depth,继续下探
+        child_depth = depth + 1
+        if child_depth < max_depth:
+            nested_texts = _triggers_from_raw(added, pattern, max_triggers)
+            if nested_texts:
+                nested_ancestor = set(ancestor_keys)
+                for item in added:
+                    nested_ancestor.add(_probe_key(item))
+                child_ok = True
+                try:
+                    child_added, child_ok = await _probe_recursive(
+                        page,
+                        pattern,
+                        nested_texts,
+                        nested_ancestor,
+                        item_path,
+                        child_depth,
+                        max_depth,
+                        budget,
+                        visited,
+                        timeout_ms,
+                        activity,
+                        max_triggers,
+                    )
+                    collected.extend(child_added)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"[page_extractor] 深度探针「{'/'.join(item_path)}」异常: {exc}")
+                    child_ok = False
+                if not child_ok:
+                    ok = False
+                    break
+
+        # 关闭本层浮层(子层应已自行关闭);嵌套层禁用重载
+        allow_reload = depth == 0
+        closed = await _close_overlay(
+            page, added_keys, timeout_ms, activity, allow_reload=allow_reload
+        )
+        if not closed:
+            logger.warning(
+                f"[page_extractor] 探针「{'/'.join(item_path)}」浮层无法关闭,终止后续探针"
+            )
+            ok = False
+            break
+
+    return collected, ok
 
 
 async def extract_elements(
@@ -1328,6 +1526,8 @@ async def extract_elements(
     timeout_ms: int = 30000,
     trigger_texts: Optional[list[str]] = None,
     max_triggers: int = 8,
+    max_depth: int = 3,
+    max_total_triggers: int = 24,
     skipped_out: Optional[list] = None,
     settle_timeout_ms: int = SETTLE_TIMEOUT_MS,
 ) -> list[dict]:
@@ -1341,10 +1541,11 @@ async def extract_elements(
          的页面正文常渲染在 iframe 里,主 frame 往往只有外壳(搜索框、头像),
          只扫主 frame 会漏掉绝大部分元素。非 main frame 采集到的元素附带
          `frame` 字段(该 frame 的 URL),供验证/执行阶段路由到正确 frame。
-      2. 交互探针:自动点击「新增/新建」等触发按钮,等弹窗/抽屉渲染后重跑
-         采集脚本,仅保留基线中没有的元素(附带 `probeTrigger` 字段记录来源
-         触发词),随后关闭弹窗继续。`trigger_texts` 可自定义触发词白名单
-         (前缀匹配按钮文案)。
+      2. 交互探针(可深度):自动点击「新增/新建」等触发按钮,等弹窗/抽屉渲染后
+         重跑采集脚本,仅保留祖先层中没有的元素(附带 `probePath`/`probeTrigger`),
+         关闭弹窗继续。`max_depth>1` 时对弹窗内新出现的触发按钮递归下探
+         (最多 max_depth 层浮层;仅浮层,不跟路由跳转)。`trigger_texts` 可自定义
+         触发词白名单(前缀匹配按钮文案)。
     """
     from playwright.async_api import async_playwright
 
@@ -1370,51 +1571,46 @@ async def extract_elements(
             if scopes:
                 logger.info(f"[page_extractor] 微前端作用域: {scopes[0]}")
 
-            # ---- 交互探针:触发「新增」类弹窗并增量采集 ----
-            if trigger_texts:
-                pattern = "|".join(re.escape(t.strip()) for t in trigger_texts if t.strip())
-            else:
-                pattern = DEFAULT_TRIGGER_PATTERN
-            if pattern:
-                baseline_keys = {_probe_key(item) for item in raw}
-                # 先跨 frame 收集所有触发文案(同文案按钮如每行的「编辑」只探一次)。
-                # 之后按文案逐个探测,而不是按 frame 快照遍历 —— 关浮层的兜底重载会
-                # 重建页面,帧快照里的句柄会全部失效,后续探针会被静默跳过。
-                pending: list[str] = []
-                for frame in list(page.frames):
-                    try:
-                        triggers = await frame.evaluate(FIND_TRIGGERS_JS, pattern)
-                    except Exception:
-                        continue
-                    for trig in (triggers or [])[:max_triggers]:
-                        text = ((trig or {}).get("text") or "").strip()
-                        if text and text not in pending:
-                            pending.append(text)
-                probe_stuck = False
-                for text in pending:
-                    if probe_stuck:
-                        break
-                    try:
-                        added, closed = await _probe_trigger(
-                            page, pattern, text, baseline_keys, timeout_ms, activity
-                        )
-                    except Exception as exc:  # noqa: BLE001 - 单个触发失败不影响其余
-                        logger.warning(f"[page_extractor] 探针「{text}」异常: {exc}")
-                        continue
+            # ---- 交互探针:触发「新增」类弹窗并增量采集(支持深度递归) ----
+            if max_depth > 0:
+                if trigger_texts:
+                    pattern = "|".join(re.escape(t.strip()) for t in trigger_texts if t.strip())
+                else:
+                    pattern = DEFAULT_TRIGGER_PATTERN
+                if pattern:
+                    baseline_keys = {_probe_key(item) for item in raw}
+                    # 先跨 frame 收集所有触发文案(同文案按钮如每行的「编辑」只探一次)。
+                    # 之后按文案逐个探测,而不是按 frame 快照遍历 —— 关浮层的兜底重载会
+                    # 重建页面,帧快照里的句柄会全部失效,后续探针会被静默跳过。
+                    pending: list[str] = []
+                    for frame in list(page.frames):
+                        try:
+                            triggers = await frame.evaluate(FIND_TRIGGERS_JS, pattern)
+                        except Exception:
+                            continue
+                        for trig in (triggers or [])[:max_triggers]:
+                            text = ((trig or {}).get("text") or "").strip()
+                            if text and text not in pending:
+                                pending.append(text)
+                    budget = _ProbeBudget(max_total_triggers)
+                    visited: set = set()
+                    added, _ok = await _probe_recursive(
+                        page,
+                        pattern,
+                        pending,
+                        baseline_keys,
+                        [],
+                        0,
+                        max_depth,
+                        budget,
+                        visited,
+                        timeout_ms,
+                        activity,
+                        max_triggers,
+                    )
                     for item in added:
                         baseline_keys.add(_probe_key(item))
-                        item["probeTrigger"] = text
                         raw.append(item)
-                    if added:
-                        logger.info(
-                            f"[page_extractor] 探针「{text}」新增采集 {len(added)} 个元素"
-                        )
-                    if not closed:
-                        logger.warning(
-                            f"[page_extractor] 探针「{text}」浮层无法关闭,终止后续探针"
-                        )
-                        probe_stuck = True
-                        break
             return raw
         finally:
             await browser.close()
@@ -1436,10 +1632,12 @@ def build_llm_naming_prompt(raw_elements: list[dict]) -> str:
             "text": attrs.get("text"),
             "context": attrs.get("context"),
             "probe_trigger": attrs.get("probeTrigger"),
+            "probe_path": "/".join(attrs.get("probePath") or []) or attrs.get("probeTrigger") or "",
         })
     return (
         "你是 UI 测试专家。下面是网页上抽取到的可交互元素属性列表。\n"
-        "probe_trigger 表示该元素是通过点击「XX」按钮触发的弹窗/抽屉表单里的元素,命名时可参考。\n"
+        "probe_trigger/probe_path 表示该元素是通过点击路径上的按钮打开的弹窗/抽屉里的元素"
+        "(如「新增/高级设置」表示先点新增再点高级设置),命名时可参考层级上下文。\n"
         "请为每个元素给出简洁的中文业务名称(name)、类型(type: input/button/link/select/textarea/checkbox/radio)和用途说明(description)。\n"
         "名称要能体现业务用途(如「用户名输入框」「登录按钮」),不要使用随机 id。\n"
         "只输出 JSON 对象,格式: {\"1\": {\"name\": \"...\", \"type\": \"...\", \"description\": \"...\"}, ...}\n\n"

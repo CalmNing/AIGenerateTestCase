@@ -6,21 +6,23 @@ from typing import List, Optional
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from app.auth import UserInfo
 from app.deps import CurrentUser, SessionDep
 from app.services import page_login as pl
+from app.services.element_tree import collect_invalid_step_elements, format_invalid_elements_message
 from app.services.page_object_codegen import render_page_object_code, suggest_file_name
 from app.services.page_object_runner import (
     cancel_po_task,
     get_po_task,
     launch_execution,
     launch_extraction,
+    launch_login,
     launch_validation,
 )
-from app.services.ui_steps import build_target_url, normalize_url, normalize_url
+from app.services.ui_steps import build_target_url, normalize_url
 from db.models import PageObject, UIAutomationRun
 from utils.base_response import Response
 
@@ -36,6 +38,8 @@ class ExtractRequest(BaseModel):
     url: str = ""
     description: str = ""
     use_llm_naming: bool = True
+    # 浮层递归深度:0=只采当前页;1=点一层触发按钮;默认 3,上限 5(仅浮层不跟路由)
+    max_depth: int = Field(default=3, ge=0, le=5)
     # 本次抽取的显式登录配置(留空回退全局参数或页面对象关联的配置),只经内存传递不落库
     login_url: str = ""
     login_method: str = ""
@@ -48,11 +52,14 @@ class ExtractRequest(BaseModel):
     is_login_page: bool = False
     # 本次不使用登录态(前端没选登录页对象):不读该站点通用缓存、不触发登录,全程匿名
     skip_login: bool = False
+    # 前端当前选中的环境(解析 {{var}});None 时后端回退默认/任意环境
+    environment_id: Optional[int] = None
 
 
 class RegenerateRequest(BaseModel):
     use_llm_naming: bool = True
     merge: bool = True
+    max_depth: int = Field(default=3, ge=0, le=5)
     login_url: str = ""
     login_method: str = ""
     login_username: str = ""
@@ -62,6 +69,7 @@ class RegenerateRequest(BaseModel):
     is_login_page: bool = False
     # 本次不使用登录态(前端没选登录页对象):不读该站点通用缓存、不触发登录,全程匿名
     skip_login: bool = False
+    environment_id: Optional[int] = None
 
 
 class ValidateRequest(BaseModel):
@@ -71,6 +79,7 @@ class ValidateRequest(BaseModel):
     login_password: str = ""
     login_company: str = ""
     login_page_object_id: Optional[int] = None
+    environment_id: Optional[int] = None
 
 
 class PageObjectPayload(BaseModel):
@@ -97,23 +106,56 @@ class RunRequest(BaseModel):
     login_company: str = ""
     # 本次执行要复用的登录页对象(留空用页面对象自身关联的那个)
     login_page_object_id: Optional[int] = None
+    environment_id: Optional[int] = None
 
 
-def _substitute(text: str, db, user: UserInfo) -> str:
+class LoginRequest(BaseModel):
+    """独立发起「仅登录」任务(不绑定页面对象,登录态写该站点通用缓存)。"""
+
+    url: str = ""
+    login_url: str = ""
+    login_method: str = ""
+    login_username: str = ""
+    login_password: str = ""
+    login_company: str = ""
+    environment_id: Optional[int] = None
+
+
+class PageObjectLoginRequest(BaseModel):
+    """对指定页面对象发起登录(用它的执行步骤建立登录态)。"""
+
+    login_url: str = ""
+    login_method: str = ""
+    login_username: str = ""
+    login_password: str = ""
+    login_company: str = ""
+    environment_id: Optional[int] = None
+
+
+class PageObjectCaptureRequest(BaseModel):
+    """把该站点通用登录态缓存导入到指定页面对象。"""
+
+    site_origin: str = ""
+    environment_id: Optional[int] = None
+
+
+def _substitute(text: str, db, user: UserInfo, environment_id: Optional[int] = None) -> str:
     from app.routes.proxy import build_param_map, substitute_variables
-    param_map = build_param_map(db, None, [])
+    param_map = build_param_map(db, environment_id, [])
     return substitute_variables(text or "", param_map, set())
 
 
 _LEFTOVER_VAR = re.compile(r"\{\{([^}]+)\}\}")
 
 
-def _resolve_or_400(text: str, db, user: UserInfo, field: str) -> str:
-    """解析 {{var}} 变量(默认环境参数);解析后仍残留占位符 = 变量未定义,400 快速失败。
+def _resolve_or_400(
+    text: str, db, user: UserInfo, field: str, environment_id: Optional[int] = None
+) -> str:
+    """解析 {{var}} 变量(指定环境,缺省回退默认环境);解析后仍残留占位符 = 变量未定义,400 快速失败。
 
     URL 字段额外做 normalize_url:web_url 带尾斜杠 + url 也以 / 开头会拼出双斜杠。
     """
-    resolved = normalize_url(_substitute(text, db, user))
+    resolved = normalize_url(_substitute(text, db, user, environment_id))
     leftover = sorted(set(_LEFTOVER_VAR.findall(resolved)))
     if leftover:
         raise HTTPException(
@@ -122,7 +164,9 @@ def _resolve_or_400(text: str, db, user: UserInfo, field: str) -> str:
     return resolved
 
 
-def _resolve_page_target_url(db, user: UserInfo, page_object: PageObject) -> str:
+def _resolve_page_target_url(
+    db, user: UserInfo, page_object: PageObject, environment_id: Optional[int] = None
+) -> str:
     """解析页面对象目标地址:优先 site_origin+page_path 拼接(去尾斜杠),否则解析 url。
 
     这是 regenerate/validate/run 的统一入口 —— 旧代码直接 _resolve_or_400(url)
@@ -132,15 +176,17 @@ def _resolve_page_target_url(db, user: UserInfo, page_object: PageObject) -> str
     origin_raw = (page_object.site_origin or "").strip()
     path_raw = (page_object.page_path or "").strip()
     if origin_raw and path_raw:
-        origin = _resolve_or_400(origin_raw, db, user, "站点地址").strip()
-        path = _resolve_or_400(path_raw, db, user, "页面路径").strip()
+        origin = _resolve_or_400(origin_raw, db, user, "站点地址", environment_id).strip()
+        path = _resolve_or_400(path_raw, db, user, "页面路径", environment_id).strip()
         return build_target_url(origin, path)
     if not page_object.url:
         raise HTTPException(status_code=400, detail="页面对象缺少目标地址,无法解析")
-    return _resolve_or_400(page_object.url, db, user, "目标地址")
+    return _resolve_or_400(page_object.url, db, user, "目标地址", environment_id)
 
 
-def _resolve_target_url(db, user: UserInfo, page_object: PageObject) -> str:
+def _resolve_target_url(
+    db, user: UserInfo, page_object: PageObject, environment_id: Optional[int] = None
+) -> str:
     """解析页面对象目标地址:优先 site_origin+page_path 拼接(去重斜杠),否则解析 url。
 
     优先拼接是为了修「web_url 带尾斜杠 + path 以 / 开头 → 双斜杠」:
@@ -150,23 +196,31 @@ def _resolve_target_url(db, user: UserInfo, page_object: PageObject) -> str:
     origin_raw = (page_object.site_origin or "").strip()
     path_raw = (page_object.page_path or "").strip()
     if origin_raw and path_raw:
-        origin = _resolve_or_400(origin_raw, db, user, "站点地址").strip()
-        path = _resolve_or_400(path_raw, db, user, "页面路径").strip()
+        origin = _resolve_or_400(origin_raw, db, user, "站点地址", environment_id).strip()
+        path = _resolve_or_400(path_raw, db, user, "页面路径", environment_id).strip()
         return normalize_url(build_target_url(origin, path))
     if not page_object.url:
         raise HTTPException(status_code=400, detail="页面对象缺少目标地址,无法解析")
-    return normalize_url(_resolve_or_400(page_object.url, db, user, "目标地址").strip())
+    return normalize_url(
+        _resolve_or_400(page_object.url, db, user, "目标地址", environment_id).strip()
+    )
 
 
-def _login_overrides(body, db=None, user: UserInfo = None) -> dict:
+def _login_overrides(
+    body, db=None, user: UserInfo = None, environment_id: Optional[int] = None
+) -> dict:
     """本次执行的显式登录配置(弹窗填写),字段名与 LoginContext 对齐。
 
     login_url 支持 {{var}} 替换(传入 db/user 时解析),其余按原样透传;仅经内存交给
     runner,不落库、不写入任务状态(避免经 /tasks 泄露凭据)。
     """
     login_url = (getattr(body, "login_url", "") or "").strip()
+    if environment_id is None:
+        environment_id = getattr(body, "environment_id", None)
     if db is not None and user is not None and login_url:
-        login_url = normalize_url(_resolve_or_400(login_url, db, user, "登录入口").strip())
+        login_url = normalize_url(
+            _resolve_or_400(login_url, db, user, "登录入口", environment_id).strip()
+        )
     return {
         "login_url": login_url,
         "login_method": (getattr(body, "login_method", "") or "").strip(),
@@ -191,6 +245,7 @@ class LubanProxyRequest(BaseModel):
     base_url: str = ""
     access_token: str = ""
     res_id: str = ""
+    environment_id: Optional[int] = None
 
 
 class LubanMenusRequest(LubanProxyRequest):
@@ -230,7 +285,9 @@ async def _luban_get(url: str, headers: dict, params: dict) -> list:
 @router.post("/luban/modules", response_model=Response)
 async def luban_modules(body: LubanProxyRequest, db: SessionDep, user: CurrentUser):
     """代理 GET /service/acl/biz/modules?type=web(系统模块列表)。base_url 支持 {{var}} 变量。"""
-    body.base_url = _resolve_or_400(body.base_url, db, user, "base_url")
+    body.base_url = _resolve_or_400(
+        body.base_url, db, user, "base_url", body.environment_id
+    )
     headers = _luban_headers(body)
     base = body.base_url.strip().rstrip("/")
     data = await _luban_get(f"{base}/service/acl/biz/modules", headers, {"type": "web"})
@@ -240,7 +297,9 @@ async def luban_modules(body: LubanProxyRequest, db: SessionDep, user: CurrentUs
 @router.post("/luban/menus", response_model=Response)
 async def luban_menus(body: LubanMenusRequest, db: SessionDep, user: CurrentUser):
     """代理 GET /service/acl/biz/module/menus?sysModuleCode=...(模块菜单扁平树)。base_url 支持 {{var}} 变量。"""
-    body.base_url = _resolve_or_400(body.base_url, db, user, "base_url")
+    body.base_url = _resolve_or_400(
+        body.base_url, db, user, "base_url", body.environment_id
+    )
     headers = _luban_headers(body)
     if not body.sys_module_code.strip():
         raise HTTPException(status_code=400, detail="sys_module_code 不能为空")
@@ -294,6 +353,28 @@ def clear_page_object_session(page_object_id: int, db: SessionDep, user: Current
     return Response(data=pl.clear_session(db, _get_owned_page_object(db, page_object_id, user)))
 
 
+@router.post("/page-objects/{page_object_id}/session/capture", response_model=Response)
+def capture_page_object_session(
+    page_object_id: int, body: PageObjectCaptureRequest, db: SessionDep, user: CurrentUser
+):
+    """把该站点通用登录态缓存导入到本页面对象(已有缓存时一键复用)。"""
+    page_object = _get_owned_page_object(db, page_object_id, user)
+    origin = _resolve_or_400(
+        body.site_origin, db, user, "站点地址", body.environment_id
+    ).strip().rstrip("/")
+    if not origin:
+        raise HTTPException(status_code=400, detail="站点地址不能为空")
+    import app.services.browser_agent as ba
+
+    origin_file = ba._cache_path(origin)
+    stats = ba.state_file_stats(origin_file)
+    if not (stats.get("cookies") or stats.get("origins")):
+        raise HTTPException(status_code=400, detail="该站点暂无可用登录态缓存,无法导入")
+    return Response(
+        data=pl.refresh_status(db, page_object, capture_from_origin=True, origin=origin)
+    )
+
+
 # ---------------------------------------------------------------------------
 # 抽取
 # ---------------------------------------------------------------------------
@@ -301,16 +382,17 @@ def clear_page_object_session(page_object_id: int, db: SessionDep, user: Current
 @router.post("/page-objects/extract", response_model=Response)
 async def extract_page_object(body: ExtractRequest, db: SessionDep, user: CurrentUser):
     # 站点地址/页面路径支持 {{var}} 变量:执行用解析后的 URL,落库(新建页面对象)保留原文
+    env_id = body.environment_id
     raw_origin = body.site_origin.strip()
     raw_path = body.page_path.strip()
     raw_url = body.url.strip() or build_target_url(raw_origin, raw_path)
-    site_origin = _resolve_or_400(body.site_origin, db, user, "站点地址").strip()
-    page_path = _resolve_or_400(body.page_path, db, user, "页面路径").strip()
+    site_origin = _resolve_or_400(body.site_origin, db, user, "站点地址", env_id).strip()
+    page_path = _resolve_or_400(body.page_path, db, user, "页面路径", env_id).strip()
     # origin+path 都有时优先拼接(自动去尾斜杠),避免 {{web_url}}=/ + path=/#/x 出双斜杠
     if site_origin and page_path:
         url = normalize_url(build_target_url(site_origin, page_path))
     else:
-        url = normalize_url(_resolve_or_400(body.url, db, user, "页面地址").strip())
+        url = normalize_url(_resolve_or_400(body.url, db, user, "页面地址", env_id).strip())
     if not url:
         raise HTTPException(status_code=400, detail="页面地址不能为空")
 
@@ -328,6 +410,7 @@ async def extract_page_object(body: ExtractRequest, db: SessionDep, user: Curren
                 "url": raw_url,
                 "description": body.description.strip(),
                 "use_llm_naming": body.use_llm_naming,
+                "max_depth": body.max_depth,
             }
         },
     )
@@ -349,10 +432,11 @@ async def extract_page_object(body: ExtractRequest, db: SessionDep, user: Curren
         db.commit()
     task_id = launch_extraction(
         run.id,
-        login_overrides=_login_overrides(body, db, user),
+        login_overrides=_login_overrides(body, db, user, env_id),
         login_page_object_id=login_page_object_id,
         mark_login_page=bool(body.is_login_page),
         skip_login=bool(body.skip_login),
+        environment_id=env_id,
     )
     run.task_id = task_id
     db.add(run)
@@ -365,20 +449,21 @@ async def extract_page_object(body: ExtractRequest, db: SessionDep, user: Curren
 async def regenerate_page_object(page_object_id: int, body: RegenerateRequest, db: SessionDep, user: CurrentUser):
     """对已有页面对象重新抽取元素:刷新定位器,合并时保留用户编辑与自愈历史。"""
     page_object = _get_owned_page_object(db, page_object_id, user)
-    if not page_object.url and not (page_object.site_origin and page_object.page_path):
+    if not page_object.url:
         raise HTTPException(status_code=400, detail="页面对象缺少目标地址,无法重新生成")
 
     run = UIAutomationRun(
         page_object_id=page_object.id,
         user_id=user.user_id,
         run_type="extract",
-        # 页面对象地址存原文(可含 {{var}}),执行时才按默认环境参数解析;优先 origin+path 拼接去双斜杠
-        target_url=_resolve_target_url(db, user, page_object),
+        # 页面对象地址存原文(可含 {{var}}),执行时才按当前环境参数解析;优先 origin+path 拼接去双斜杠
+        target_url=_resolve_target_url(db, user, page_object, body.environment_id),
         status="RUNNING",
         result={
             "request": {
                 "use_llm_naming": body.use_llm_naming,
                 "merge": body.merge,
+                "max_depth": body.max_depth,
             }
         },
     )
@@ -395,10 +480,11 @@ async def regenerate_page_object(page_object_id: int, body: RegenerateRequest, d
     )
     task_id = launch_extraction(
         run.id,
-        login_overrides=_login_overrides(body, db, user),
+        login_overrides=_login_overrides(body, db, user, body.environment_id),
         login_page_object_id=login_page_object_id,
         mark_login_page=bool(body.is_login_page),
         skip_login=bool(body.skip_login),
+        environment_id=body.environment_id,
     )
     run.task_id = task_id
     db.add(run)
@@ -541,14 +627,15 @@ async def validate_page_object(
     body: Optional[ValidateRequest] = None,
 ):
     page_object = _get_owned_page_object(db, page_object_id, user)
-    if not page_object.url and not (page_object.site_origin and page_object.page_path):
+    if not page_object.url:
         raise HTTPException(status_code=400, detail="页面对象缺少目标地址,无法验证")
+    env_id = getattr(body, "environment_id", None) if body else None
     run = UIAutomationRun(
         page_object_id=page_object.id,
         user_id=user.user_id,
         run_type="validate",
-        # 页面对象地址存原文(可含 {{var}}),执行时才按默认环境参数解析;优先 origin+path 拼接去双斜杠
-        target_url=_resolve_target_url(db, user, page_object),
+        # 页面对象地址存原文(可含 {{var}}),执行时才按当前环境参数解析;优先 origin+path 拼接去双斜杠
+        target_url=_resolve_target_url(db, user, page_object, env_id),
         status="RUNNING",
     )
     db.add(run)
@@ -559,8 +646,9 @@ async def validate_page_object(
     )
     task_id = launch_validation(
         run.id,
-        login_overrides=_login_overrides(body, db, user) if body else {},
+        login_overrides=_login_overrides(body, db, user, env_id) if body else {},
         login_page_object_id=login_page_object_id,
+        environment_id=env_id,
     )
     run.task_id = task_id
     db.add(run)
@@ -577,12 +665,15 @@ async def run_page_object(page_object_id: int, body: RunRequest, db: SessionDep,
     steps = body.steps or list(page_object.steps or [])
     if not steps:
         raise HTTPException(status_code=400, detail="执行步骤不能为空")
+    invalid = collect_invalid_step_elements(steps, page_object.elements or [])
+    if invalid:
+        raise HTTPException(status_code=400, detail=format_invalid_elements_message(invalid))
     run = UIAutomationRun(
         page_object_id=page_object.id,
         user_id=user.user_id,
         run_type="execute",
-        # 页面对象地址存原文(可含 {{var}}),执行时才按默认环境参数解析;优先 origin+path 拼接去双斜杠
-        target_url=_resolve_target_url(db, user, page_object),
+        # 页面对象地址存原文(可含 {{var}}),执行时才按当前环境参数解析;优先 origin+path 拼接去双斜杠
+        target_url=_resolve_target_url(db, user, page_object, body.environment_id),
         status="RUNNING",
         steps=steps,
     )
@@ -594,8 +685,9 @@ async def run_page_object(page_object_id: int, body: RunRequest, db: SessionDep,
     )
     task_id = launch_execution(
         run.id,
-        login_overrides=_login_overrides(body, db, user),
+        login_overrides=_login_overrides(body, db, user, body.environment_id),
         login_page_object_id=login_page_object_id,
+        environment_id=body.environment_id,
     )
     run.task_id = task_id
     db.add(run)
@@ -642,3 +734,67 @@ def get_run(run_id: int, db: SessionDep, user: CurrentUser):
     if run is None:
         raise HTTPException(status_code=404, detail="运行记录不存在")
     return Response(data=run)
+
+
+# ---------------------------------------------------------------------------
+# 登录(独立任务 / 指定页面对象)
+# ---------------------------------------------------------------------------
+
+@router.post("/login", response_model=Response)
+async def start_login(body: LoginRequest, db: SessionDep, user: CurrentUser):
+    """独立发起「仅登录」:登录态写该站点通用缓存,不绑定页面对象。"""
+    url = normalize_url((body.url or "").strip())
+    if not url:
+        raise HTTPException(status_code=400, detail="登录地址不能为空")
+    # 凭据只经内存传给 launch_login,不写入 run.result(避免经任务接口泄露)
+    run = UIAutomationRun(
+        user_id=user.user_id,
+        run_type="login",
+        target_url=url,
+        status="RUNNING",
+        result={"request": {"url": url, "login_username": body.login_username}},
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    task_id = launch_login(
+        run.id,
+        login_overrides=_login_overrides(body, db, user, body.environment_id),
+        environment_id=body.environment_id,
+    )
+    run.task_id = task_id
+    db.add(run)
+    db.commit()
+    logger.info(f"[UIAuto] 用户 {user.username} 发起独立登录 run={run.id}")
+    return Response(data={"task_id": task_id, "run_id": run.id})
+
+
+@router.post("/page-objects/{page_object_id}/login", response_model=Response)
+async def login_page_object(
+    page_object_id: int, body: PageObjectLoginRequest, db: SessionDep, user: CurrentUser
+):
+    """对指定页面对象发起登录:执行它的登录步骤(或 AI 登录)建立登录态。"""
+    page_object = _get_owned_page_object(db, page_object_id, user)
+    if not page_object.url:
+        raise HTTPException(status_code=400, detail="页面对象缺少目标地址,无法登录")
+    run = UIAutomationRun(
+        page_object_id=page_object.id,
+        user_id=user.user_id,
+        run_type="login",
+        target_url=_resolve_target_url(db, user, page_object, body.environment_id),
+        status="RUNNING",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    task_id = launch_login(
+        run.id,
+        login_overrides=_login_overrides(body, db, user, body.environment_id),
+        login_page_object_id=page_object.id,
+        **({"environment_id": body.environment_id} if body.environment_id is not None else {}),
+    )
+    run.task_id = task_id
+    db.add(run)
+    db.commit()
+    logger.info(f"[UIAuto] 用户 {user.username} 对页面对象发起登录 po={page_object.id} run={run.id}")
+    return Response(data={"task_id": task_id, "run_id": run.id})

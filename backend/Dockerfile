@@ -36,6 +36,9 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r requirements.txt
 
+# Playwright 浏览器 + 系统依赖（page_extractor / page_object_runner 需要）
+RUN playwright install --with-deps chromium
+
 # ------------------------------------------------------------------
 # Layer 4: 应用代码（最频繁变化，放最后）
 # ------------------------------------------------------------------

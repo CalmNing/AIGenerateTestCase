@@ -762,7 +762,11 @@ async def resolve_mock_response(request_path: str, request_method: str,
     )
 
 
-@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+@router.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    include_in_schema=False,
+)
 async def mock_handler(request: Request, path: str):
     """拦截所有请求，匹配已启用的Mock配置并返回预设响应"""
     request_path = f"/{path}"

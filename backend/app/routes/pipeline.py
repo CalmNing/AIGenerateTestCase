@@ -146,6 +146,8 @@ async def generate_v2(
     api_project_id: Optional[str] = Form(None),
     api_endpoint_overrides: Optional[str] = Form(default=None),
     pipeline_mode: str = Form("auto"),
+    requested_stop_after_stage: Optional[int] = Form(None, alias="stop_after_stage"),
+    feishu_section: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     session: SessionDep = None,
     user: CurrentUser = None,
@@ -156,8 +158,8 @@ async def generate_v2(
     返回 task_id，前端可通过 /pipeline/{task_id}/status 轮询进度
     支持功能测试（无接口）和接口测试（有关联接口）两种模式
 
-    pipeline_mode: "auto"=4阶段全部执行, "manual"=只执行前两阶段(需求拆分+测试点生成)
-
+    pipeline_mode: 兼容旧客户端，"auto"=4阶段全部执行，"manual"=执行前两阶段。
+    stop_after_stage: 新客户端指定执行至第1-4阶段；后续阶段将跳过。
     文件上传：上传 .docx/.txt/.md 需求文档时，文件内容作为生成依据主体，
     文本框内已输入的文字作为「补充背景」拼接在文件内容之后。
     """
@@ -181,6 +183,10 @@ async def generate_v2(
     # 既无文件又无需求文本时拒绝空生成
     if not requirement_text or not requirement_text.strip():
         raise HTTPException(status_code=400, detail="请输入需求描述或上传需求文件")
+    if feishu_section and feishu_section.strip():
+        from utils.document_prefetch import FEISHU_URL_RE
+        if not FEISHU_URL_RE.search(requirement_text):
+            raise HTTPException(status_code=400, detail="指定飞书目录时，请同时提供飞书文档链接")
 
     # 解析 selected_skills
     skills_list = None
@@ -255,7 +261,10 @@ async def generate_v2(
     )
 
     # 启动 pipeline
-    stop_after_stage = 2 if pipeline_mode == "manual" else 4
+    # 新客户端指定截止阶段；未传时兼容旧 auto/manual 模式。
+    if requested_stop_after_stage is not None and requested_stop_after_stage not in (1, 2, 3, 4):
+        raise HTTPException(status_code=400, detail="stop_after_stage 必须为 1 到 4")
+    stop_after_stage = requested_stop_after_stage or (2 if pipeline_mode == "manual" else 4)
     task_id = await runner.run(
         session_id=session_id,
         requirement_text=requirement_text,
@@ -267,6 +276,7 @@ async def generate_v2(
         endpoint_index_to_id=endpoint_index_to_id,
         api_context=api_context,
         stop_after_stage=stop_after_stage,
+        feishu_section=feishu_section.strip() if feishu_section and feishu_section.strip() else None,
     )
 
     return Response(data={"task_id": task_id}, message="深度生成已启动")

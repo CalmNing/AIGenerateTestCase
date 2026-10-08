@@ -661,8 +661,10 @@ class TestLaunchMaxSteps:
 
         class FakeRunner:
             def __init__(self, db, agent_factory=None, max_steps=25, timeout_seconds=600,
-                         login_overrides=None):
+                         login_overrides=None, environment_id=None, final_judgement=False):
                 captured["max_steps"] = max_steps
+                captured["environment_id"] = environment_id
+                captured["final_judgement"] = final_judgement
 
             async def run(self, record_id):
                 return None

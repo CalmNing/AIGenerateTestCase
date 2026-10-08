@@ -95,7 +95,7 @@ async def fetch_feishu_content(
                     height=bt.get("height", 0),
                 ))
 
-        return Response.success(FeishuContentResponse(
+        return Response(data=FeishuContentResponse(
             text=content or "",
             boards=boards,
             document_id=token,
@@ -124,7 +124,7 @@ async def fetch_board_content(
     try:
         from utils.document_prefetch import fetch_feishu_board
         content = await fetch_feishu_board(board_token, mcp_configs)
-        return Response.success({
+        return Response(data={
             "token": board_token,
             "content": content or "",
         })
@@ -156,7 +156,7 @@ async def fetch_boards_content(
                 "token": token,
                 "content": content or "",
             })
-        return Response.success(results)
+        return Response(data=results)
     except Exception as e:
         logger.error("批量画板读取失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"画板读取失败: {str(e)}")

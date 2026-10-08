@@ -22,23 +22,25 @@ def fake_tc(db_session):
 
 
 def _run(db_session, fake_user, fake_tc, monkeypatch, site_origin="http://a.com", page_path="#/login",
-         testcase_id=None, max_steps=0, captured=None):
+         testcase_id=None, max_steps=0, captured=None, environment_id=None):
     import asyncio
     import app.routes.ui_execution as route
     from app.routes.ui_execution import RunRequest
     captured = captured if captured is not None else {}
 
-    def fake_launch(db, record_id, agent_factory=None, login_overrides=None, max_steps=None):
+    def fake_launch(db, record_id, agent_factory=None, login_overrides=None, max_steps=None, environment_id=None, **kwargs):
         captured["record_id"] = record_id
         captured["login_overrides"] = login_overrides
         captured["max_steps"] = max_steps
+        captured["environment_id"] = environment_id
         return "task-123"
 
     monkeypatch.setattr(route, "launch_ui_execution", fake_launch)
     # run_ui_execution 为 async def(Finding 1:后台 create_task 需真实事件循环)
     return asyncio.run(route.run_ui_execution(
         RunRequest(testcase_id=fake_tc.id if testcase_id is None else testcase_id,
-                   site_origin=site_origin, page_path=page_path, max_steps=max_steps),
+                   site_origin=site_origin, page_path=page_path, max_steps=max_steps,
+                   environment_id=environment_id),
         db_session,
         fake_user,
     ))
@@ -112,8 +114,9 @@ def test_run_passes_login_overrides(db_session, fake_user, fake_tc, monkeypatch)
     from app.routes.ui_execution import RunRequest
     captured = {}
 
-    def fake_launch(db, record_id, agent_factory=None, login_overrides=None, max_steps=None):
+    def fake_launch(db, record_id, agent_factory=None, login_overrides=None, max_steps=None, environment_id=None, **kwargs):
         captured["login_overrides"] = login_overrides
+        captured["environment_id"] = environment_id
         return "task-123"
 
     monkeypatch.setattr(route, "launch_ui_execution", fake_launch)
@@ -273,3 +276,30 @@ def test_run_supports_site_origin_variable(db_session, fake_user, fake_tc, monke
         _run(db_session, fake_user, fake_tc, monkeypatch, site_origin="{{nope}}", page_path="#/login")
     assert exc.value.status_code == 400
     assert "nope" in exc.value.detail
+
+
+def test_run_uses_selected_environment_id(db_session, fake_user, fake_tc, monkeypatch):
+    """前端传当前选中环境时,{{var}} 按该环境解析,并透传给 launch。"""
+    from db.models import GlobalParameter
+
+    default_env = GlobalParameter(
+        name="默认环境", is_default=True,
+        parameters=[{"key": "web_url", "value": "http://env-a.com"}],
+    )
+    other = GlobalParameter(
+        name="环境B", is_default=False,
+        parameters=[{"key": "web_url", "value": "http://env-b.com"}],
+    )
+    db_session.add_all([default_env, other])
+    db_session.commit()
+    db_session.refresh(other)
+
+    captured = {}
+    _run(
+        db_session, fake_user, fake_tc, monkeypatch,
+        site_origin="{{web_url}}", page_path="#/login",
+        captured=captured, environment_id=other.id,
+    )
+    row = db_session.exec(select(UIExecutionRecord)).first()
+    assert row.target_url == "http://env-b.com#/login"
+    assert captured["environment_id"] == other.id

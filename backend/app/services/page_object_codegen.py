@@ -31,10 +31,23 @@ def _property_name(key: str, used: set) -> str:
     return name
 
 
+def _walk_elements(nodes, prefix_keys: list[str]):
+    """深度优先展开 (element, 祖先 key 链)。"""
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        key = str(node.get("key") or "")
+        yield node, list(prefix_keys)
+        children = node.get("children") or []
+        if children:
+            yield from _walk_elements(children, prefix_keys + ([key] if key else []))
+
+
 def render_page_object_code(page_object: dict) -> str:
     """把 PageObject dict 渲染为 Python Playwright 类源码。
 
     每个元素导出主定位器属性;全部候选定位器写入 BACKUP_LOCATORS 供自愈/排查。
+    子元素(弹窗内)额外生成 `open_ancestor_<prop>` 辅助方法,执行前先按祖先链开浮层。
     """
     class_name = _class_name(page_object.get("name") or "")
     url = page_object.get("url") or ""
@@ -49,12 +62,32 @@ def render_page_object_code(page_object: dict) -> str:
     ]
 
     used_props: set = set()
-    elements = [e for e in (page_object.get("elements") or []) if isinstance(e, dict)]
+    elements = page_object.get("elements") or []
     prop_map = []
     backup_rows = []
-    for element in elements:
+    ancestor_props: dict[str, list[str]] = {}  # key → 祖先 property 名列表
+    prop_by_key: dict[str, str] = {}
+    open_methods: list[tuple[str, list[str]]] = []  # (self prop, 祖先 property 名)
+
+    # 先为所有节点分配 property 名(保证祖先的 property 在子元素生成前已知)
+    flat_list = list(_walk_elements(elements, []))
+    for element, _anc_keys in flat_list:
         prop = _property_name(element.get("key") or element.get("name") or "", used_props)
+        prop_by_key[str(element.get("key") or "")] = prop
+
+    for element, anc_keys in flat_list:
+        key = str(element.get("key") or "")
+        prop = prop_by_key.get(key) or _property_name(key or element.get("name") or "", used_props)
         locators = element.get("locators") or []
+        # 仅保留有定位器的祖先(虚拟容器/无定位器节点生成不了 property)
+        anc_props = [
+            prop_by_key[k]
+            for k in anc_keys
+            if k in prop_by_key and any(
+                n.get("locators") for n, _ in flat_list if str(n.get("key") or "") == k
+            )
+        ]
+        ancestor_props[key] = anc_props
         if not locators:
             continue
         primary = locators[0]
@@ -65,6 +98,8 @@ def render_page_object_code(page_object: dict) -> str:
         ]
         if backups:
             backup_rows.append((prop, backups))
+        if anc_props:
+            open_methods.append((prop, anc_props))
 
     lines.append("    BACKUP_LOCATORS = {")
     for prop, backups in backup_rows:
@@ -79,10 +114,30 @@ def render_page_object_code(page_object: dict) -> str:
     lines.append("        self.page = page")
     lines.append("")
 
+    if open_methods:
+        lines.append("    async def _open_overlay(self, prop: str) -> None:")
+        lines.append('        """按祖先链打开浮层:执行子元素定位前调用。"""')
+        lines.append("        opens = getattr(self, '_OVERLAY_PATHS', {})")
+        lines.append("        for trigger_prop in opens.get(prop, []):")
+        lines.append("            await getattr(self, trigger_prop).click()")
+        lines.append("            await self.page.wait_for_timeout(300)")
+        lines.append("")
+        lines.append("    _OVERLAY_PATHS = {")
+        for prop, anc in open_methods:
+            lines.append(f'        "{prop}": [{", ".join(repr(a) for a in anc)}],')
+        lines.append("    }")
+        lines.append("")
+
     for prop, primary in prop_map:
         lines.append("    @property")
         lines.append(f"    def {prop}(self) -> Locator:")
         lines.append(f"        return {locator_expression(primary.get('strategy'), primary.get('value'))}")
+        lines.append("")
+
+    if open_methods:
+        lines.append("    async def open_for(self, prop: str) -> None:")
+        lines.append('        """确保浮层已打开后再访问子元素属性。"""')
+        lines.append("        await self._open_overlay(prop)")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

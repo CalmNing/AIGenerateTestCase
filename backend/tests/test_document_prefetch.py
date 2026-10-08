@@ -8,7 +8,40 @@ from utils.document_prefetch import (
     FEISHU_SHEET_TOKEN_RE,
     _split_sheet_token,
     _sheet_rows_to_markdown,
+    extract_document_section,
 )
+
+
+def test_feishu_content_route_returns_standard_response(monkeypatch):
+    import app.deps
+    import app.services.mcp_loader as mcp_loader
+    from app.routes.document import FeishuContentRequest, fetch_feishu_content
+
+    class DummySession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_get_db():
+        yield DummySession()
+
+    async def fake_fetch(_url, _configs):
+        return "# Feature\nDetails"
+
+    monkeypatch.setattr(app.deps, "get_db", fake_get_db)
+    monkeypatch.setattr(mcp_loader, "load_user_mcp_configs", lambda _session, _user: [])
+    monkeypatch.setattr(dp, "fetch_feishu_document", fake_fetch)
+
+    result = asyncio.run(fetch_feishu_content(
+        FeishuContentRequest(url="https://team.feishu.cn/docx/AbC123", include_boards=False),
+        current_user=None,
+    ))
+
+    assert result.code == 200
+    assert result.data.text == "# Feature\nDetails"
+    assert result.data.document_id == "AbC123"
 
 
 def test_feishu_wiki_url_matches_and_captures_token():
@@ -31,6 +64,54 @@ def test_lanhu_url_matches():
 def test_no_match_plain_text():
     assert FEISHU_URL_RE.search("no url here") is None
     assert LANHU_URL_RE.search("no url here") is None
+
+
+def test_extract_document_section_handles_feishu_plain_text_numbering():
+    content = """方案3-安全AI相关
+一、用户故事与范围限定
+1.1 问题背景
+问题陈述
+使用量级与频率预估
+1.3 价值点分析
+二、功能模块拆解
+2.1 模块列表
+三、功能模块详细设计
+3.1 视频AI同步"""
+
+    section = extract_document_section(content, "用户故事与范围限定")
+
+    assert section is not None
+    assert "1.1 问题背景" in section
+    assert "1.3 价值点分析" in section
+    assert "二、功能模块拆解" not in section
+
+    numbered_section = extract_document_section(content, "1.1 问题背景")
+    assert numbered_section is not None
+    assert "问题陈述" in numbered_section
+    assert "1.3 价值点分析" not in numbered_section
+
+
+def test_extract_document_section_includes_nested_headings_only():
+    content = """# Overview
+Intro
+## API
+API intro
+### Auth
+Token details
+## UI
+Screen details
+# Appendix
+Notes"""
+
+    section = extract_document_section(content, "API")
+
+    assert section == "## API\nAPI intro\n### Auth\nToken details"
+    assert "Screen details" not in section
+    assert extract_document_section(content, "Missing") is None
+
+
+def test_extract_document_section_matches_case_insensitively():
+    assert extract_document_section("# Feature Design\nDetails", "feature design") == "# Feature Design\nDetails"
 
 
 def test_split_sheet_token_with_sheet_id():

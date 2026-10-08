@@ -37,3 +37,4 @@ frontend/.env.*
 /backend/data/
 /backend/.venv/
 /backend/.claude/
+/.dsh-acl-recovery/

@@ -23,6 +23,30 @@ PAGE_OBJECT = {
     ],
 }
 
+TREE_PAGE_OBJECT = {
+    "name": "List",
+    "url": "http://a.com/#/list",
+    "elements": [
+        {
+            "key": "btn_add",
+            "name": "新增",
+            "type": "button",
+            "locators": [{"strategy": "text", "value": "新增", "stability": 90}],
+            "probePath": [],
+            "children": [
+                {
+                    "key": "input_name",
+                    "name": "名称输入框",
+                    "type": "input",
+                    "locators": [{"strategy": "placeholder", "value": "请输入名称", "stability": 80}],
+                    "probePath": ["新增"],
+                    "children": [],
+                },
+            ],
+        },
+    ],
+}
+
 
 class TestRenderPageObjectCode:
     def test_module_and_class(self):
@@ -51,6 +75,26 @@ class TestRenderPageObjectCode:
     def test_empty_elements_still_valid(self):
         code = render_page_object_code({"name": "Blank", "elements": []})
         assert "def __init__(self, page: Page)" in code
+        # 无子元素时不生成浮层辅助方法
+        assert "_OVERLAY_PATHS" not in code
+        assert "open_for" not in code
+
+    def test_nested_child_generates_overlay_helper(self):
+        code = render_page_object_code(TREE_PAGE_OBJECT)
+        # 子元素也导出属性
+        assert "def input_name(self) -> Locator:" in code
+        assert "def btn_add(self) -> Locator:" in code
+        # 祖先链映射 + 打开浮层方法
+        assert "_OVERLAY_PATHS" in code
+        assert '"input_name": [\'btn_add\']' in code
+        assert "async def open_for(self, prop: str)" in code
+        assert "async def _open_overlay(self, prop: str)" in code
+        # 子元素定位器本身
+        assert "self.page.get_by_placeholder('请输入名称')" in code
+
+    def test_flat_elements_no_overlay_methods(self):
+        code = render_page_object_code(PAGE_OBJECT)
+        assert "_OVERLAY_PATHS" not in code
 
 
 class TestSuggestFileName:

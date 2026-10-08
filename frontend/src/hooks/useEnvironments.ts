@@ -15,7 +15,7 @@ export interface Environment {
  * 行为保持：从 App.tsx 原样迁移，状态、处理函数与 localStorage key
  * ('currentEnvironmentId') 完全一致；以同名返回，便于 App.tsx 直接解构使用。
  */
-export function useEnvironments(canManageGlobalParams: boolean) {
+export function useEnvironments(_canManageGlobalParams: boolean) {
   const [environments, setEnvironments] = useState<Environment[]>([
     { id: 'env-1', name: '默认环境', parameters: [] },
   ]);
@@ -41,17 +41,23 @@ export function useEnvironments(canManageGlobalParams: boolean) {
         }));
         if (backendEnvironments.length > 0) {
           setEnvironments(backendEnvironments);
+          // 解析出的真实环境 id 必须同步写回 localStorage:
+          // UI 自动化等模块只读 localStorage,不同步会一直是 env-1/空 → environment_id=null
+          const persist = (id: string) => {
+            setCurrentEnvironmentId(id);
+            localStorage.setItem('currentEnvironmentId', id);
+          };
           if (envId) {
-            setCurrentEnvironmentId(envId);
+            persist(envId);
             return;
           }
           // 优先使用 localStorage 中保存的环境，若不存在则使用默认环境
           const savedEnvId = localStorage.getItem('currentEnvironmentId');
           if (savedEnvId && backendEnvironments.find((env: any) => env.id === savedEnvId)) {
-            setCurrentEnvironmentId(savedEnvId);
+            persist(savedEnvId);
           } else {
             const defaultEnv = backendEnvironments.find((env: any) => env.is_default) || backendEnvironments[0];
-            setCurrentEnvironmentId(defaultEnv.id);
+            persist(defaultEnv.id);
           }
         }
       }
@@ -209,12 +215,10 @@ export function useEnvironments(canManageGlobalParams: boolean) {
     }
   }, [editingEnvironment, editEnvironmentName, fetchGlobalParameters]);
 
-  // 加载全局参数
+  // 加载全局参数:GET 对所有登录用户开放(展示 {{var}} 解析),不依赖 manage 权限
   useEffect(() => {
-    if (canManageGlobalParams) {
-      fetchGlobalParameters();
-    }
-  }, [canManageGlobalParams, fetchGlobalParameters]);
+    fetchGlobalParameters();
+  }, [fetchGlobalParameters]);
 
   return {
     environments,

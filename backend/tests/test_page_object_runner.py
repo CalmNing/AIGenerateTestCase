@@ -407,6 +407,84 @@ class TestExtractReloginOnExpiredSession:
         assert fn(None) is False
 
 
+class TestExtractMaxDepth:
+    """max_depth 透传 extract_elements,建树落库,超时按深度放宽。"""
+
+    @staticmethod
+    def _run(db_session, monkeypatch, max_depth=None, raw=None):
+        import app.services.page_object_runner as por
+
+        monkeypatch.setattr(ba, "_sessions_dir", __import__("pathlib").Path(__import__("tempfile").mkdtemp()))
+        calls = {"kwargs": {}}
+        payload = raw if raw is not None else [
+            {"tag": "button", "text": "新增", "key": "btn_add", "name": "新增",
+             "locators": [{"strategy": "text", "value": "新增", "stability": 80}],
+             "fingerprint": {"tag": "button"},
+             "probePath": [], "probeTrigger": ""},
+            {"tag": "input", "inputType": "text", "key": "input_name", "name": "名称",
+             "locators": [{"strategy": "css", "value": "input", "stability": 50}],
+             "fingerprint": {"tag": "input"},
+             "probePath": ["新增"], "probeTrigger": "新增"},
+        ]
+
+        async def fake_extract(url, *, storage_state=None, timeout_ms=30000, **kwargs):
+            calls["kwargs"] = kwargs
+            return payload
+
+        async def fake_phase(coro):
+            return await coro
+
+        monkeypatch.setattr(por, "extract_elements", fake_extract)
+        monkeypatch.setattr(ba, "_run_browser_phase", fake_phase)
+
+        spec = {"use_llm_naming": False}
+        if max_depth is not None:
+            spec["max_depth"] = max_depth
+        run = UIAutomationRun(
+            user_id="u1",
+            run_type="extract",
+            target_url="http://a.com#/home",
+            status="RUNNING",
+            result={"request": spec},
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+        runner = PageObjectRunner(db_session, skip_login=True)
+        asyncio.run(runner.run(run.id))
+        db_session.refresh(run)
+        return run, calls
+
+    def test_passes_max_depth_and_builds_tree(self, db_session, monkeypatch):
+        run, calls = self._run(db_session, monkeypatch, max_depth=2)
+        assert run.status == "PASSED"
+        assert calls["kwargs"].get("max_depth") == 2
+        elements = run.result["elements"]
+        # normalize_elements 会重写 key,这里按树结构断言:根按钮下挂一个 child
+        assert len(elements) >= 1
+        children = elements[0].get("children") or []
+        assert len(children) == 1
+        assert children[0].get("probePath") == ["新增"]
+        assert run.result["element_count"] == 2
+        assert run.result["max_depth"] == 2
+
+    def test_default_max_depth_is_three(self, db_session, monkeypatch):
+        run, calls = self._run(db_session, monkeypatch)
+        assert run.status == "PASSED"
+        assert calls["kwargs"].get("max_depth") == 3
+        assert run.result["max_depth"] == 3
+
+    def test_timeout_scales_with_depth(self):
+        from app.services.page_object_runner import extract_timeout_seconds
+
+        assert extract_timeout_seconds(0) == 180
+        assert extract_timeout_seconds(1) == 180
+        assert extract_timeout_seconds(2) == 240
+        assert extract_timeout_seconds(3) == 300
+        assert extract_timeout_seconds(5) == 360
+        assert extract_timeout_seconds(99) == 360
+
+
 # ---------------------------------------------------------------------------
 # 登录页对象自己的执行路径:匿名打开 + 失败诊断 + 落盘前等待
 # ---------------------------------------------------------------------------
@@ -502,3 +580,219 @@ class TestSettleBeforeSnapshot:
                 raise RuntimeError("page closed")
 
         asyncio.run(_settle_before_snapshot(BrokenPage()))  # 不该抛
+
+
+class TestEnsureOverlayPath:
+    """浮层状态机:按祖先链开/关触发按钮,返回新的 opened 栈。"""
+
+    @staticmethod
+    def _page():
+        from app.services.page_object_runner import ensure_overlay_path  # noqa: F401
+
+        class FakeKeyboard:
+            def __init__(self, log):
+                self._log = log
+
+            async def press(self, key):
+                self._log.append(("press", key))
+
+        class FakePage:
+            def __init__(self):
+                self.log: list = []
+                self.keyboard = FakeKeyboard(self.log)
+
+            async def wait_for_timeout(self, ms):
+                self.log.append(("wait", ms))
+
+        return FakePage()
+
+    @staticmethod
+    def _tree():
+        from app.services.element_tree import build_element_tree
+
+        def el(key, name, **extra):
+            node = {
+                "key": key,
+                "name": name,
+                "type": "button" if "btn" in key else "input",
+                "locators": [{"strategy": "text", "value": name, "stability": 80}],
+                "probePath": [],
+                "probeTrigger": "",
+            }
+            node.update(extra)
+            return node
+
+        return build_element_tree([
+            el("btn_add", "新增"),
+            el("btn_adv", "高级设置", probePath=["新增"], probeTrigger="新增"),
+            el("input_deep", "深层", probePath=["新增", "高级设置"], probeTrigger="新增/高级设置"),
+            el("input_name", "名称", probePath=["新增"], probeTrigger="新增"),
+        ])
+
+    def test_cold_start_opens_ancestors(self, monkeypatch):
+        from app.services import page_object_runner as por
+        from app.services.element_tree import build_execution_index
+
+        tree = self._tree()
+        by_key, path_by_key = build_execution_index(tree)
+        page = self._page()
+        clicked: list[str] = []
+
+        async def fake_click(p, trigger):
+            clicked.append(trigger["key"])
+            return True
+
+        monkeypatch.setattr(por, "_click_trigger_button", fake_click)
+        opened = asyncio.run(
+            por.ensure_overlay_path(page, ["btn_add", "btn_adv"], [], by_key, path_by_key)
+        )
+        assert opened == ["btn_add", "btn_adv"]
+        assert clicked == ["btn_add", "btn_adv"]
+
+    def test_sibling_switch_closes_then_opens(self, monkeypatch):
+        from app.services import page_object_runner as por
+        from app.services.element_tree import build_execution_index
+
+        tree = self._tree()
+        by_key, path_by_key = build_execution_index(tree)
+        page = self._page()
+        clicked: list[str] = []
+
+        async def fake_click(p, trigger):
+            clicked.append(trigger["key"])
+            return True
+
+        monkeypatch.setattr(por, "_click_trigger_button", fake_click)
+        # 已开 ["btn_add"] 的弹窗,目标是同层的 input_name(祖先也是 btn_add)
+        opened = asyncio.run(
+            por.ensure_overlay_path(page, ["btn_add"], ["btn_add"], by_key, path_by_key)
+        )
+        assert opened == ["btn_add"]
+        assert clicked == []  # LCA 保留,不重复点
+
+    def test_close_to_root_presses_escape(self, monkeypatch):
+        from app.services import page_object_runner as por
+        from app.services.element_tree import build_execution_index
+
+        tree = self._tree()
+        by_key, path_by_key = build_execution_index(tree)
+        page = self._page()
+        monkeypatch.setattr(por, "_click_trigger_button", lambda *a, **k: _async_true())
+        opened = asyncio.run(
+            por.ensure_overlay_path(page, [], ["btn_add"], by_key, path_by_key)
+        )
+        assert opened == []
+        assert any(entry[0] == "press" and entry[1] == "Escape" for entry in page.log)
+
+    def test_missing_trigger_still_tracks_stack(self, monkeypatch):
+        from app.services import page_object_runner as por
+
+        page = self._page()
+        monkeypatch.setattr(por, "_click_trigger_button", lambda *a, **k: _async_true())
+        opened = asyncio.run(
+            por.ensure_overlay_path(page, ["ghost"], [], {"ghost": {"key": "ghost"}}, {"ghost": []})
+        )
+        # 找不到触发元素也入栈,后续子层定位交给自愈
+        assert opened == ["ghost"]
+
+
+async def _async_true():
+    return True
+
+
+class TestExecuteUsesOverlayPath:
+    def test_execute_builds_execution_index_and_opens_overlay(self, monkeypatch):
+        """_execute_in_browser 在子元素步骤前调用 ensure_overlay_path。"""
+        from app.services import page_object_runner as por
+
+        calls = {"index": 0, "overlay": []}
+        tree = TestEnsureOverlayPath._tree()
+
+        def fake_index(elements):
+            from app.services.element_tree import build_execution_index
+
+            calls["index"] += 1
+            return build_execution_index(elements)
+
+        async def fake_overlay(page, desired, opened, by_key, path_by_key):
+            calls["overlay"].append(list(desired))
+            return list(desired)
+
+        async def fake_resolve(container, element):
+            return {
+                "kind": "locator",
+                "locator": None,
+                "index": 0,
+                "strategy": "text",
+                "value": element.get("name") or "",
+            }
+
+        async def fake_perform(resolved, step, page=None):
+            return None
+
+        class FakePage:
+            url = "http://a.com/#/list"
+
+            async def goto(self, *a, **k):
+                return None
+
+            frames: list = []
+
+        class FakeBrowser:
+            async def new_context(self, **kwargs):
+                return self
+
+            async def new_page(self):
+                return FakePage()
+
+            async def close(self):
+                return None
+
+        class FakePW:
+            chromium = type("C", (), {"launch": staticmethod(lambda **k: _async_browser())})()
+
+        async def _async_browser():
+            return FakeBrowser()
+
+        async def fake_pw():
+            return FakePW()
+
+        monkeypatch.setattr(por, "build_execution_index", fake_index)
+        monkeypatch.setattr(por, "ensure_overlay_path", fake_overlay)
+        monkeypatch.setattr(por, "resolve_target", fake_resolve)
+        monkeypatch.setattr(por, "_perform", fake_perform)
+        monkeypatch.setattr(por, "_wait_for_page_ready", lambda page: _async_none())
+
+        import playwright.async_api as pw_mod
+
+        monkeypatch.setattr(pw_mod, "async_playwright", lambda: _AsyncCM(FakePW()))
+
+        steps = [
+            {"element": "input_name", "action": "fill", "value": "x"},
+        ]
+        trace: list = []
+        heal: list = []
+        ok = asyncio.run(
+            por._execute_in_browser(
+                "http://a.com/#/list", tree, steps, None, trace, heal, None
+            )
+        )
+        assert ok is True
+        assert calls["index"] >= 1
+        assert calls["overlay"] == [["btn_add"]]
+        assert trace and trace[0]["status"] == "passed"
+
+
+async def _async_none():
+    return None
+
+
+class _AsyncCM:
+    def __init__(self, value):
+        self._value = value
+
+    async def __aenter__(self):
+        return self._value
+
+    async def __aexit__(self, *args):
+        return False

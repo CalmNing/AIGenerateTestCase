@@ -2,13 +2,15 @@
 
 端点:
   POST /ui-execution/run               发起执行(建记录 + 后台任务)
+  POST /ui-execution/compile           预编译 NL 步骤 → PageObject 绑定(纯预览)
+  POST /ui-execution/bindings          保存修正后的绑定到用例
   GET  /ui-execution/tasks/{task_id}   查询任务状态(前端轮询)
   POST /ui-execution/tasks/{task_id}/stop  停止执行(仅发起人)
   GET  /ui-execution/records           某用例的历史执行记录
 """
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -25,7 +27,12 @@ from app.services.browser_agent import (
     get_ui_task,
     launch_ui_execution,
 )
-from app.services.ui_steps import build_target_url, normalize_ui_steps, normalize_url, normalize_url
+from app.services.ui_step_binder import (
+    compile_ui_binding,
+    normalize_incoming_binding,
+    validate_binding_element_keys,
+)
+from app.services.ui_steps import build_target_url, normalize_ui_steps, normalize_url
 from db.models import TestCase, UIExecutionRecord
 from utils.base_response import Response
 
@@ -46,26 +53,48 @@ class RunRequest(BaseModel):
     login_company: str = ""
     # 步数预算:0/空 回退后端默认 MAX_STEPS;超过 MAX_STEPS_LIMIT 由后端裁剪
     max_steps: int = 0
+    # 前端当前选中的环境(解析 {{var}});None 时后端回退默认/任意环境
+    environment_id: Optional[int] = None
+    # 前端修正后的绑定计划;非空时覆盖用例上的 ui_binding 并优先生效
+    ui_binding: Optional[dict] = None
+    # auto: 有绑定且含 L1/L2 → hybrid;agent: 纯 browser-use;hybrid: 强制混合
+    execution_mode: str = "auto"
+    # 未结构化预期是否做 LLM 终判(默认跳过)
+    final_judgement: bool = False
+
+
+class CompileRequest(BaseModel):
+    testcase_id: int
+    site_origin: str = ""
+    page_path: str = ""
+    environment_id: Optional[int] = None
+
+
+class SaveBindingRequest(BaseModel):
+    testcase_id: int
+    ui_binding: dict
 
 
 # ---------------------------------------------------------------------------
 # 参数与鉴权助手
 # ---------------------------------------------------------------------------
 
-def _substitute(text: str, db: Session) -> str:
-    """对输入做 {{var}} 变量替换(默认环境参数)。"""
-    return substitute_variables(text or "", build_param_map(db, None, []), set())
+def _substitute(text: str, db: Session, environment_id: Optional[int] = None) -> str:
+    """对输入做 {{var}} 变量替换(指定环境,缺省回退默认环境)。"""
+    return substitute_variables(text or "", build_param_map(db, environment_id, []), set())
 
 
 _LEFTOVER_VAR = re.compile(r"\{\{([^}]+)\}\}")
 
 
-def _resolve_or_400(text: str, db: Session, field: str) -> str:
-    """解析 {{var}} 变量(默认环境参数);解析后仍残留占位符 = 变量未定义,400 快速失败。
+def _resolve_or_400(
+    text: str, db: Session, field: str, environment_id: Optional[int] = None
+) -> str:
+    """解析 {{var}} 变量(指定环境);解析后仍残留占位符 = 变量未定义,400 快速失败。
 
     URL 字段额外做 normalize_url:web_url 带尾斜杠 + path 以 / 开头会拼出双斜杠。
     """
-    resolved = normalize_url(_substitute(text, db))
+    resolved = normalize_url(_substitute(text, db, environment_id))
     leftover = sorted(set(_LEFTOVER_VAR.findall(resolved)))
     if leftover:
         raise HTTPException(
@@ -110,7 +139,9 @@ def _build_login_overrides(body: RunRequest, db: Session) -> dict:
     不写入任务状态(避免经 /tasks 泄露凭据)。
     """
     return {
-        "login_url": normalize_url(_resolve_or_400(body.login_url, db, "登录入口").strip()),
+        "login_url": normalize_url(
+            _resolve_or_400(body.login_url, db, "登录入口", body.environment_id).strip()
+        ),
         "login_method": (body.login_method or "").strip(),
         "username": body.login_username or "",
         "password": body.login_password or "",
@@ -125,43 +156,134 @@ def _resolve_max_steps(requested: int) -> int:
     return min(requested, MAX_STEPS_LIMIT)
 
 
+def _has_bound_levels(binding: Optional[dict]) -> bool:
+    """绑定里是否存在可确定性执行的 L1/L2 步或结构化断言。"""
+    if not isinstance(binding, dict):
+        return False
+    for group in ("steps", "asserts"):
+        for item in binding.get(group) or []:
+            if isinstance(item, dict) and item.get("level") in ("L1", "L2"):
+                return True
+    return False
+
+
+def _resolve_execution_mode(requested: str, binding: Optional[dict]) -> str:
+    """把请求的 execution_mode 解析为落库值: agent | hybrid。"""
+    mode = (requested or "auto").strip().lower()
+    if mode == "agent":
+        return "agent"
+    if mode == "hybrid":
+        return "hybrid" if binding else "agent"
+    return "hybrid" if _has_bound_levels(binding) else "agent"
+
+
+def _validate_and_attach_binding(db: Session, testcase: TestCase, raw: Optional[dict]) -> Optional[dict]:
+    """校验并归一化绑定;返回可落库的 binding(dict)或 None。"""
+    if not raw:
+        return None
+    binding = normalize_incoming_binding(raw)
+    po_id = binding.get("page_object_id")
+    if po_id:
+        from db.models import PageObject
+        po = db.get(PageObject, int(po_id))
+        if po is None:
+            raise HTTPException(status_code=400, detail="绑定中的页面对象不存在")
+        errors = validate_binding_element_keys(binding, po)
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors[:5]))
+    testcase.ui_binding = binding
+    db.add(testcase)
+    return binding
+
+
 # ---------------------------------------------------------------------------
 # 端点
 # ---------------------------------------------------------------------------
+
+@router.post("/compile", response_model=Response)
+async def compile_binding(body: CompileRequest, db: SessionDep, user: CurrentUser):
+    """预编译 NL 步骤 → PageObject 绑定。纯预览,不写库;前端可修正后再 run/save。"""
+    testcase = _require_owned_testcase(db, user, body.testcase_id)
+    _validate_ui_case(testcase)
+
+    site_origin = _resolve_or_400(body.site_origin, db, "站点地址", body.environment_id).strip()
+    page_path = _resolve_or_400(body.page_path, db, "页面路径", body.environment_id).strip()
+
+    result = await compile_ui_binding(
+        db,
+        site_origin=site_origin,
+        page_path=page_path,
+        testcase_steps=testcase.steps or [],
+        expected_results=testcase.expected_results or [],
+        user_id=user.user_id,
+    )
+    return Response(data=result.model_dump())
+
+
+@router.post("/bindings", response_model=Response)
+def save_binding(body: SaveBindingRequest, db: SessionDep, user: CurrentUser):
+    """保存前端修正后的绑定到用例(仅校验 element_key 归属)。"""
+    testcase = _require_owned_testcase(db, user, body.testcase_id)
+    binding = _validate_and_attach_binding(db, testcase, body.ui_binding or {})
+    db.commit()
+    return Response(data={"saved": True, "page_object_id": (binding or {}).get("page_object_id")})
+
 
 @router.post("/run", response_model=Response)
 async def run_ui_execution(body: RunRequest, db: SessionDep, user: CurrentUser):
     testcase = _require_owned_testcase(db, user, body.testcase_id)
     _validate_ui_case(testcase)
 
-    site_origin = _resolve_or_400(body.site_origin, db, "站点地址").strip()
+    site_origin = _resolve_or_400(body.site_origin, db, "站点地址", body.environment_id).strip()
     if not site_origin:
         raise HTTPException(status_code=400, detail="站点地址不能为空")
-    target_url = normalize_url(
-        build_target_url(site_origin, _resolve_or_400(body.page_path, db, "页面路径").strip())
-    )
+    page_path = _resolve_or_400(body.page_path, db, "页面路径", body.environment_id).strip()
+    target_url = normalize_url(build_target_url(site_origin, page_path))
+
+    # 绑定:请求体优先(修正后),否则用用例上已保存的
+    binding: Optional[dict] = None
+    if body.ui_binding:
+        binding = _validate_and_attach_binding(db, testcase, body.ui_binding)
+    elif getattr(testcase, "ui_binding", None):
+        binding = testcase.ui_binding
+
+    execution_mode = _resolve_execution_mode(body.execution_mode, binding)
+    page_object_id = (binding or {}).get("page_object_id") if binding else None
+    # binding_snapshot 存完整绑定结构(单元素列表),执行期只读
+    binding_snapshot: List[dict] = [binding] if binding else []
 
     record = UIExecutionRecord(
-        testcase_id=testcase.id,
+        testcase_id=testcase.id if testcase.id is not None else 0,
         user_id=user.user_id,
         target_url=target_url,
         status="RUNNING",
+        execution_mode=execution_mode,
+        page_object_id=int(page_object_id) if page_object_id is not None else None,
+        binding_snapshot=binding_snapshot,
     )
     db.add(record)
     db.commit()
     db.refresh(record)
+    if record.id is None:
+        raise HTTPException(status_code=500, detail="执行记录创建失败")
 
     # 凭据只经内存传给 runner,不落库、不写入任务状态(避免经 /tasks 泄露)
     login_overrides = _build_login_overrides(body, db)
     max_steps = _resolve_max_steps(body.max_steps)
     task_id = launch_ui_execution(
-        db, record.id, login_overrides=login_overrides, max_steps=max_steps
+        db,
+        record.id,
+        login_overrides=login_overrides,
+        max_steps=max_steps,
+        environment_id=body.environment_id,
+        final_judgement=body.final_judgement,
     )
     logger.info(
         f"[UIExec] 用户 {user.username} 发起执行 record={record.id} url={target_url} "
-        f"max_steps={max_steps} login_url={login_overrides['login_url'] or '(全局参数)'}"
+        f"mode={execution_mode} max_steps={max_steps} "
+        f"login_url={login_overrides['login_url'] or '(全局参数)'}"
     )
-    return Response(data={"task_id": task_id, "record_id": record.id})
+    return Response(data={"task_id": task_id, "record_id": record.id, "execution_mode": execution_mode})
 
 
 @router.get("/tasks/{task_id}", response_model=Response)
@@ -197,6 +319,6 @@ def list_ui_execution_records(
     records = db.exec(
         select(UIExecutionRecord)
         .where(UIExecutionRecord.testcase_id == testcase_id)
-        .order_by(UIExecutionRecord.id.desc())
+        .order_by(UIExecutionRecord.id.desc())  # type: ignore[arg-type]
     ).all()
     return Response(data=records)

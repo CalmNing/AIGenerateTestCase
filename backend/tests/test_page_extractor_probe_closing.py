@@ -85,4 +85,7 @@ class TestProbeResolvesFramePerCall:
         """触发文案先收集成列表再逐个探,而不是按 frame 快照嵌套遍历。"""
         src = inspect.getsource(page_extractor.extract_elements)
         assert "pending" in src
-        assert "for text in pending" in src
+        # 逐个探测逻辑已下沉到 _probe_recursive,extract 侧仍先收集 pending
+        assert "_probe_recursive" in src
+        recursive_src = inspect.getsource(page_extractor._probe_recursive)
+        assert "for text in pending" in recursive_src or "for text in pending" in src

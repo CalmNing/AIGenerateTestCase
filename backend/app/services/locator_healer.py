@@ -165,6 +165,14 @@ def _primary_value(element: dict) -> str:
     return locators[0].get("value", "") if locators else ""
 
 
+def _looks_like_tree(elements: list) -> bool:
+    """列表里是否存在嵌套 children(树形态)。"""
+    return any(
+        isinstance(e, dict) and isinstance(e.get("children"), list) and e.get("children")
+        for e in elements or []
+    )
+
+
 def merge_elements(
     old_elements: list[dict],
     new_elements: list[dict],
@@ -174,7 +182,53 @@ def merge_elements(
 
     匹配优先级:key → 主定位器值 → 指纹相似度(≥threshold)。未匹配的新元素直接采用,
     未匹配的旧元素视为页面已移除而丢弃。
+
+    兼容树/扁平两种输入:
+      - 任一侧含嵌套 children 时,先扫平再匹配,再以 new 的树形结构为骨架回填
+        (结构跟随本次抽取;旧树里本次没抽到的分支丢弃);
+      - 两侧皆扁平时保持原扁平合并行为。
     """
+    from app.services.element_tree import build_element_tree, flatten_elements
+
+    old_is_tree = _looks_like_tree(old_elements)
+    new_is_tree = _looks_like_tree(new_elements)
+    if not old_is_tree and not new_is_tree:
+        return _merge_flat(old_elements, new_elements, threshold)
+
+    old_flat = flatten_elements(old_elements if old_is_tree else old_elements)
+    new_flat = flatten_elements(new_elements if new_is_tree else new_elements)
+    # 先按扁平规则合并(保留 old 的用户字段),得到 key → merged 元素
+    merged_flat = _merge_flat(old_flat, new_flat, threshold)
+    by_key = {e.get("key"): e for e in merged_flat if isinstance(e, dict) and e.get("key")}
+
+    # 以 new 树为骨架重建:结构是本次抽取的,节点数据用 merged(含 old 用户编辑)
+    def _rebuild(nodes: list) -> list:
+        out: list = []
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            key = node.get("key")
+            source = by_key.get(key) if key else None
+            clone = dict(source if source is not None else node)
+            # probePath/children 结构来自 new
+            clone["probePath"] = list(node.get("probePath") or clone.get("probePath") or [])
+            if node.get("probeTrigger") is not None:
+                clone["probeTrigger"] = node.get("probeTrigger")
+            children = node.get("children") or []
+            clone["children"] = _rebuild(children)
+            out.append(clone)
+        return out
+
+    new_tree = new_elements if new_is_tree else build_element_tree(new_flat)
+    return _rebuild(new_tree)
+
+
+def _merge_flat(
+    old_elements: list[dict],
+    new_elements: list[dict],
+    threshold: float = 0.8,
+) -> list[dict]:
+    """扁平合并(原 merge_elements 主体)。"""
     old = [e for e in (old_elements or []) if isinstance(e, dict)]
     used: set = set()
     merged: list[dict] = []

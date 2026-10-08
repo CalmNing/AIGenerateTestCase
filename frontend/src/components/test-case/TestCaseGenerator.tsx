@@ -1,13 +1,78 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Button, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal, Progress, Steps } from 'antd';
+import { Button, Checkbox, Input, Select, Spin, Tag, Tooltip, message as antMessage, Modal, Progress, Steps } from 'antd';
 import {
   ThunderboltOutlined, MessageOutlined, BulbOutlined, ApiOutlined,
   FileTextOutlined, EditOutlined, ExperimentOutlined, UploadOutlined,
-  CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined,
+  CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined, FolderOpenOutlined,
 } from '@ant-design/icons';
 import { Session, Module, ApiProject, ApiEndpoint } from '../../types';
 import HistoryPromptSidebar from '../HistoryPromptSidebar';
 import './TestCaseGenerator.css';
+
+const FEISHU_URL_RE = /https?:\/\/[a-zA-Z0-9-]+\.feishu\.cn\/(?:wiki|docx)\/[\w-]+/i;
+
+const extractFeishuSections = (content: string): { label: string; value: string }[] => {
+  const sections = new Map<string, { label: string; value: string }>();
+  content.split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return;
+
+    const markdown = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+    const numbered = line.match(/^([一二三四五六七八九十百]+[、.．]\s*.+|\d+(?:\.\d+)*(?:[、.．]|\s+)\s*.+)$/);
+    const chapter = line.match(/^第[一二三四五六七八九十百\d]+(?:章|节|部分)\s*.+$/);
+    if (!markdown && !numbered && !chapter) return;
+
+    const value = line;
+    const level = markdown ? markdown[1].length :
+      (/^[一二三四五六七八九十百]+[、.．]/.test(line) || /^第[一二三四五六七八九十百\d]+(?:章|部分)/.test(line)
+        ? 1
+        : (line.match(/^\d+(?:\.\d+)*/)?.[0].match(/\./g)?.length || 0) + 2);
+    sections.set(value, { label: `${'　'.repeat(Math.max(0, level - 1))}${value}`, value });
+  });
+  return Array.from(sections.values());
+};
+
+const getFeishuHeading = (line: string): { level: number; title: string } | null => {
+  const value = line.trim();
+  const markdown = value.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+  if (markdown) return { level: markdown[1].length, title: markdown[2].trim() };
+
+  const chineseNumber = value.match(/^([一二三四五六七八九十百]+)[、.．]\s*(.+?)\s*$/);
+  if (chineseNumber) return { level: 1, title: chineseNumber[2].trim() };
+
+  const arabicNumber = value.match(/^(\d+(?:\.\d+)*)(?:[、.．]|\s+)\s*(.+?)\s*$/);
+  if (arabicNumber) return { level: arabicNumber[1].split('.').length + 1, title: arabicNumber[2].trim() };
+
+  const chapter = value.match(/^第[一二三四五六七八九十百\d]+(章|节|部分)\s*(.+?)\s*$/);
+  if (chapter) return { level: chapter[1] === '节' ? 2 : 1, title: chapter[2].trim() };
+  return null;
+};
+
+const extractPreviewSection = (content: string, selectedHeading: string): string => {
+  if (!selectedHeading) return content;
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex(line => line.trim() === selectedHeading.trim());
+  if (start < 0) return content;
+
+  const level = getFeishuHeading(lines[start])?.level;
+  if (level === undefined) return content;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const heading = getFeishuHeading(lines[index]);
+    if (heading && heading.level <= level) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n').trim();
+};
+
+const PIPELINE_STAGES = [
+  { stage: 1, label: '需求拆分' },
+  { stage: 2, label: '测试点生成' },
+  { stage: 3, label: '用例设计' },
+  { stage: 4, label: '用例优化' },
+] as const;
 
 interface TestCaseGeneratorProps {
   selectedSession: Session | null;
@@ -46,6 +111,12 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [feishuSection, setFeishuSection] = useState('');
+  const [feishuSections, setFeishuSections] = useState<{ label: string; value: string }[]>([]);
+  const [loadingFeishuSections, setLoadingFeishuSections] = useState(false);
+  const [loadedFeishuUrl, setLoadedFeishuUrl] = useState('');
+  const [feishuPreviewContent, setFeishuPreviewContent] = useState('');
+  const [feishuPreviewVisible, setFeishuPreviewVisible] = useState(false);
   const [apiProjects, setApiProjects] = useState<ApiProject[]>([]);
   const [apiEndpoints, setApiEndpoints] = useState<ApiEndpoint[]>([]);
   const [loadingApis, setLoadingApis] = useState(false);
@@ -65,8 +136,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     error: string | null;
   } | null>(null);
   const [pipelinePolling, setPipelinePolling] = useState(false);
-  // 生成模式：auto=4阶段全跑；manual=只跑需求拆分+测试点，用例在「用例结构」面板手动批量生成
-  const [pipelineMode, setPipelineMode] = useState<'auto' | 'manual'>('auto');
+  // Pipeline 阶段按顺序依赖，复选框始终表示从第 1 阶段执行到所选阶段。
+  const [selectedStages, setSelectedStages] = useState<number[]>([1, 2, 3, 4]);
 
   // 更新指定接口的 override 字段
   const updateOverride = useCallback((eid: number, field: string, value: any) => {
@@ -115,6 +186,12 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   useEffect(() => {
     loadApiProjects();
   }, [loadApiProjects]);
+
+  const handleStageToggle = (stage: number, checked: boolean) => {
+    setSelectedStages(previous => checked
+      ? PIPELINE_STAGES.filter(item => item.stage <= stage).map(item => item.stage)
+      : previous.filter(item => item < stage));
+  };
 
   const handleSelectPrompt = (content: string) => {
     onRequirementChange(content);
@@ -183,8 +260,59 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     return () => clearInterval(pollInterval);
   }, [pipelineTaskId, pipelinePolling, selectedSession?.id]);
 
+  const handleRequirementInputChange = (value: string) => {
+    const nextUrl = value.match(FEISHU_URL_RE)?.[0] || '';
+    if (loadedFeishuUrl && nextUrl !== loadedFeishuUrl) {
+      setFeishuSections([]);
+      setFeishuSection('');
+      setFeishuPreviewContent('');
+      setFeishuPreviewVisible(false);
+      setLoadedFeishuUrl('');
+    }
+    onRequirementChange(value);
+  };
+
+  const handleLoadFeishuSections = async () => {
+    const url = requirement.match(FEISHU_URL_RE)?.[0];
+    if (!url) {
+      antMessage.warning('请先在需求描述中填写飞书文档链接');
+      return;
+    }
+
+    setLoadingFeishuSections(true);
+    try {
+      const { documentApi } = await import('../../services/api');
+      const res = await documentApi.getFeishuContent(url);
+      if (res.code !== 200 || !res.data?.text) {
+        throw new Error(res.message || '读取飞书文档失败');
+      }
+      const sections = extractFeishuSections(res.data.text);
+      setFeishuSections(sections);
+      setFeishuPreviewContent(res.data.text);
+      setFeishuPreviewVisible(true);
+      setLoadedFeishuUrl(url);
+      setFeishuSection('');
+      if (!sections.length) {
+        antMessage.info('已解析文档，但未识别到编号或 Markdown 标题');
+      }
+    } catch (e: any) {
+      console.error('Load Feishu sections failed:', e);
+      antMessage.error('读取飞书目录失败：' + (e?.response?.data?.message || e?.message || '未知错误'));
+    } finally {
+      setLoadingFeishuSections(false);
+    }
+  };
+
   const handleDeepGenerate = async () => {
     if (!selectedSession || (!requirement.trim() && !selectedFile)) return;
+    if (selectedStages.length === 0) {
+      antMessage.warning('请至少选择一个生成阶段');
+      return;
+    }
+    if (feishuSection.trim() && !/https?:\/\/[a-zA-Z0-9-]+\.feishu\.cn\/(?:wiki|docx)\/[\w-]+/i.test(requirement)) {
+      antMessage.warning('填写飞书目录标题时，请在需求描述中提供对应的飞书文档链接');
+      return;
+    }
 
     setPipelinePolling(true);
     setPipelineStatus({
@@ -205,7 +333,9 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
         apiEndpointOverrides: apiEndpointOverrides,
         moduleId: selectedModule,
         file: selectedFile,
-        pipelineMode,
+        pipelineMode: selectedStages.length === 4 ? 'auto' : 'manual',
+        stopAfterStage: Math.max(...selectedStages) as 1 | 2 | 3 | 4,
+        feishuSection,
       });
       if (res.code === 200 && res.data?.task_id) {
         setPipelineTaskId(res.data.task_id);
@@ -319,6 +449,8 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const methodColorMap: Record<string, string> = {
     GET: 'green', POST: 'blue', PUT: 'orange', DELETE: 'red', PATCH: 'purple',
   };
+
+  const previewContent = extractPreviewSection(feishuPreviewContent, feishuSection);
 
   return (
     <div className="tcg-container">
@@ -514,54 +646,61 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                     ref={textAreaRef}
                     placeholder="请输入需求描述... 已关联的 API 接口将作为参考，生成包含可执行 api_call 步骤的测试用例。"
                     value={requirement}
-                    onChange={(e) => onRequirementChange(e.target.value)}
+                    onChange={(e) => handleRequirementInputChange(e.target.value)}
                     className="tcg-textarea"
                   />
                 </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'flex-start' }}>
+                  <Select
+                    showSearch
+                    allowClear
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={feishuSection || undefined}
+                    placeholder="从飞书文档选择目录（可不选）"
+                    options={feishuSections.map(section => ({ label: section.label, value: section.value }))}
+                    optionFilterProp="label"
+                    onChange={(value) => setFeishuSection(value || '')}
+                    disabled={pipelinePolling || loading || loadingFeishuSections}
+                    notFoundContent={feishuSections.length ? '无匹配目录' : '请先读取目录'}
+                  />
+                  <Button
+                    icon={<FolderOpenOutlined />}
+                    onClick={handleLoadFeishuSections}
+                    loading={loadingFeishuSections}
+                    disabled={pipelinePolling || loading}
+                  >
+                    解析并预览
+                  </Button>
+                </div>
               </div>
 
-              {/* 生成模式：auto 全跑 / manual 只到测试点 */}
               <div className="tcg-mode-switch">
                 <span className="tcg-mode-switch-label">
                   <ExperimentOutlined style={{ color: 'var(--color-primary)' }} />
-                  生成模式
+                  生成阶段
                 </span>
-                <div className="tcg-mode-toggle" role="tablist" aria-label="生成模式">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={pipelineMode === 'auto'}
-                    className={`tcg-mode-btn ${pipelineMode === 'auto' ? 'is-active' : ''}`}
-                    onClick={() => setPipelineMode('auto')}
-                    disabled={pipelinePolling || loading}
-                  >
-                    <ThunderboltOutlined />
-                    完整生成（4阶段）
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={pipelineMode === 'manual'}
-                    className={`tcg-mode-btn ${pipelineMode === 'manual' ? 'is-active' : ''}`}
-                    onClick={() => setPipelineMode('manual')}
-                    disabled={pipelinePolling || loading}
-                  >
-                    <EditOutlined />
-                    手动模式（仅需求+测试点）
-                  </button>
+                <div className="tcg-stage-checkboxes">
+                  {PIPELINE_STAGES.map(({ stage, label }) => (
+                    <Checkbox
+                      key={stage}
+                      checked={selectedStages.includes(stage)}
+                      onChange={(event) => handleStageToggle(stage, event.target.checked)}
+                      disabled={pipelinePolling || loading || (stage > 1 && !selectedStages.includes(stage - 1))}
+                    >
+                      {label}
+                    </Checkbox>
+                  ))}
                 </div>
-                {pipelineMode === 'manual' && (
-                  <Tooltip title="手动模式只产出需求点与测试点，用例请在右侧「用例结构」面板点击「批量生成用例」">
-                    <Tag color="blue" style={{ margin: 0 }}>用例稍后生成</Tag>
-                  </Tooltip>
-                )}
+                <Tag color={selectedStages.length === 4 ? 'green' : 'blue'} style={{ margin: 0 }}>
+                  {selectedStages.length ? `执行至阶段 ${Math.max(...selectedStages)}` : '未选择阶段'}
+                </Tag>
               </div>
 
               {/* Generate Button */}
               <button
                 className={`tcg-generate-btn ${loading || pipelinePolling ? 'is-loading' : ''}`}
                 onClick={handleGenerateWithPreview}
-                disabled={(!requirement.trim() && !selectedFile) || loading || pipelinePolling}
+                disabled={(!requirement.trim() && !selectedFile) || selectedStages.length === 0 || loading || pipelinePolling}
               >
                 {loading || pipelinePolling ? (
                   <>
@@ -571,7 +710,11 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                 ) : (
                   <>
                     <ExperimentOutlined />
-                    {pipelineMode === 'manual' ? '深度生成（手动模式）' : '深度生成（4阶段）'}
+                    {selectedStages.length === 0
+                      ? '请选择生成阶段'
+                      : selectedStages.length < 4
+                        ? `深度生成（执行至阶段 ${Math.max(...selectedStages)}）`
+                        : '深度生成（4阶段）'}
                   </>
                 )}
               </button>
@@ -654,6 +797,61 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
             </div>
           </div>
         )}
+
+        {/* Feishu parsed document preview */}
+        <Modal
+          title="飞书文档解析预览"
+          open={feishuPreviewVisible}
+          onCancel={() => setFeishuPreviewVisible(false)}
+          width={900}
+          footer={[
+            <Button key="close" onClick={() => setFeishuPreviewVisible(false)}>
+              关闭
+            </Button>,
+            <Button key="use-section" type="primary" onClick={() => setFeishuPreviewVisible(false)}>
+              使用所选目录
+            </Button>,
+          ]}
+        >
+          <div style={{ marginBottom: 12, color: 'var(--color-text-secondary)', fontSize: 13 }}>
+            {feishuSection
+              ? `当前预览目录：${feishuSection}，显示 ${previewContent.length.toLocaleString()} / ${feishuPreviewContent.length.toLocaleString()} 个字符。`
+              : `已解析 ${feishuPreviewContent.length.toLocaleString()} 个字符，识别到 ${feishuSections.length} 个目录。`}
+            此操作仅读取文档，不会生成用例。
+          </div>
+          {feishuSections.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <span style={{ flexShrink: 0, fontWeight: 500 }}>生成目录</span>
+              <Select
+                showSearch
+                allowClear
+                style={{ flex: 1 }}
+                value={feishuSection || undefined}
+                placeholder="可选：选择章节作为生成范围"
+                options={feishuSections.map(section => ({ label: section.label, value: section.value }))}
+                optionFilterProp="label"
+                onChange={(value) => setFeishuSection(value || '')}
+              />
+            </div>
+          )}
+          <pre style={{
+            margin: 0,
+            padding: 14,
+            maxHeight: '55vh',
+            overflow: 'auto',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+            border: '1px solid var(--color-border-secondary)',
+            borderRadius: 4,
+            background: 'var(--color-bg-layout)',
+            color: 'var(--color-text)',
+            fontFamily: 'inherit',
+            fontSize: 13,
+            lineHeight: 1.6,
+          }}>
+            {previewContent}
+          </pre>
+        </Modal>
 
         {/* API Endpoint Override Editor Modal */}
         <Modal

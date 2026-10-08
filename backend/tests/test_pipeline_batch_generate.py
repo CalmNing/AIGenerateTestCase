@@ -50,7 +50,9 @@ def patched(monkeypatch, db_engine):
         return list(FAKE_TP)
 
     async def fake_design(test_points, requirement_content, **kwargs):
-        return [dict(FAKE_CASE)]
+        case = dict(FAKE_CASE)
+        case["test_point_id"] = test_points[0]["id"] if test_points else None
+        return [case] if test_points else []
 
     monkeypatch.setattr(RequirementSplitter, "analyze", staticmethod(fake_analyze))
     monkeypatch.setattr(TestPointGenerator, "generate", staticmethod(fake_generate))
@@ -107,6 +109,58 @@ def test_manual_mode_stops_after_stage2(db_session, patched):
     assert len(rps) == 1 and len(tps) == 1
     # 手动模式不产生用例
     assert db_session.exec(select(TestCase).where(TestCase.session_id == sess.id)).all() == []
+
+
+def test_stage1_mode_stops_after_requirement_split(db_session, patched):
+    sess = SessionModel(name="stage1")
+    db_session.add(sess)
+    db_session.commit()
+    db_session.refresh(sess)
+
+    runner = PipelineRunner(
+        db_session=db_session, api_key="x",
+        api_base_url="https://api.deepseek.com", api_model="deepseek-v4-flash",
+    )
+    task_id = runner._create_task()
+    asyncio.run(runner._run_pipeline(
+        task_id, sess.id, "普通功能需求", "u1",
+        module_id=None, stop_after_stage=1,
+    ))
+
+    task = get_pipeline_task(task_id)
+    assert task["status"] == "completed"
+    assert task["result"]["mode"] == "stage1"
+    assert task["result"]["requirement_points_count"] == 1
+    assert task["result"]["test_points_count"] == 0
+    assert task["result"]["test_cases_count"] == 0
+
+
+def test_stage3_mode_stops_before_optimization(db_session, patched, monkeypatch):
+    sess = SessionModel(name="stage3")
+    db_session.add(sess)
+    db_session.commit()
+    db_session.refresh(sess)
+
+    async def fail_if_optimized(*args, **kwargs):
+        raise AssertionError("optimizer should not run when stopping at stage 3")
+
+    monkeypatch.setattr(TestCaseOptimizer, "optimize", staticmethod(fail_if_optimized))
+    runner = PipelineRunner(
+        db_session=db_session, api_key="x",
+        api_base_url="https://api.deepseek.com", api_model="deepseek-v4-flash",
+    )
+    task_id = runner._create_task()
+    asyncio.run(runner._run_pipeline(
+        task_id, sess.id, "普通功能需求", "u1",
+        module_id=None, stop_after_stage=3,
+    ))
+
+    task = get_pipeline_task(task_id)
+    assert task["status"] == "completed"
+    assert task["result"]["mode"] == "stage3"
+    assert task["result"]["test_cases_count"] == 1
+    cases = db_session.exec(select(TestCase).where(TestCase.session_id == sess.id)).all()
+    assert len(cases) == 1
 
 
 def test_batch_generate_cases_creates_cases(db_session, patched):

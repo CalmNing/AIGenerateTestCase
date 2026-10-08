@@ -284,11 +284,65 @@ async def _collect_board_markdown(
     return "\n\n".join(blocks)
 
 
-async def fetch_feishu_document(text: str, mcp_configs) -> "str | None":
+
+
+class DocumentSectionNotFoundError(ValueError):
+    pass
+
+
+def _document_heading(line: str) -> tuple[int, str] | None:
+    line = line.strip()
+    markdown = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", line)
+    if markdown:
+        return len(markdown.group(1)), markdown.group(2).strip()
+
+    chinese_number = re.match(r"^([一二三四五六七八九十百]+)[、.．]\s*(.+?)\s*$", line)
+    if chinese_number:
+        return 1, chinese_number.group(2).strip()
+
+    arabic_number = re.match(r"^(\d+(?:\.\d+)*)(?:[、.．]|\s+)\s*(.+?)\s*$", line)
+    if arabic_number:
+        return arabic_number.group(1).count(".") + 2, arabic_number.group(2).strip()
+
+    chapter = re.match(r"^第[一二三四五六七八九十百\d]+(章|节|部分)\s*(.+?)\s*$", line)
+    if chapter:
+        level = {"章": 1, "部分": 1, "节": 2}[chapter.group(1)]
+        return level, chapter.group(2).strip()
+    return None
+
+
+def extract_document_section(content: str, section: str) -> str | None:
+    """Return a heading and its descendants from Feishu plain text or Markdown."""
+    target = section.strip().lstrip("#").strip()
+    if not target:
+        return content
+
+    lines = content.splitlines()
+    start = None
+    level = 0
+    for index, line in enumerate(lines):
+        heading = _document_heading(line)
+        if heading and (heading[1].casefold() == target.casefold() or line.strip().casefold() == target.casefold()):
+            start = index
+            level = heading[0]
+            break
+
+    if start is None:
+        return None
+
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        heading = _document_heading(lines[index])
+        if heading and heading[0] <= level:
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+async def fetch_feishu_document(text: str, mcp_configs, section: str | None = None) -> "str | None":
     """Read a Feishu wiki/docx link's body + embedded sheets via MCP/API.
 
-    Returns the document body with embedded sheet/table contents appended,
-    or None if nothing could be fetched.
+    When section is provided, return that heading and its nested content only.
     """
     match = FEISHU_URL_RE.search(text or "")
     if not match or not mcp_configs:
@@ -359,7 +413,13 @@ async def fetch_feishu_document(text: str, mcp_configs) -> "str | None":
             sheets_md = await _collect_sheet_markdown(tokens, app_id, app_secret)
             if sheets_md:
                 content = content + "\n\n" + sheets_md
+            if section:
+                content = extract_document_section(content, section)
+                if content is None:
+                    raise DocumentSectionNotFoundError(f"飞书文档中未找到目录：{section}")
             return content
+        except DocumentSectionNotFoundError:
+            raise
         except Exception as e:
             logger.warning("Feishu MCP prefetch failed on server %s: %s", server_name, e)
         finally:
