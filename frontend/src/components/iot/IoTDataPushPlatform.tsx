@@ -270,7 +270,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
   const [savedRequests, setSavedRequests] = useState<SavedRequest[]>([]);
   const [_saveRequestName, setSaveRequestName] = useState('');
-  const [editingRequest, setEditingRequest] = useState<SavedRequest | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [folders, setFolders] = useState<SavedRequestFolder[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<number | null | undefined>(undefined);
@@ -740,7 +739,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     };
     setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
     setActiveTabId(newTab.id);
-    setEditingRequest(null);
   };
 
   const closeTab = (tabId: string) => {
@@ -775,7 +773,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     const existingTab = tabs.find(t => t.savedRequestId === request.id);
     if (existingTab) {
       setActiveTabId(existingTab.id);
-      setEditingRequest(request);
       setSaveRequestName(request.name);
       return;
     }
@@ -793,7 +790,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     };
     setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
     setActiveTabId(newTab.id);
-    setEditingRequest(request);
     setSaveRequestName(request.name);
   };
 
@@ -901,13 +897,10 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
       setSaveLoading(true);
 
-      // If no savedRequestId yet, set editingRequest to null for create mode
-      if (currentTab?.savedRequestId) {
-        const saved = savedRequests.find(r => r.id === currentTab.savedRequestId);
-        if (saved) setEditingRequest(saved);
-      } else {
-        setEditingRequest(null);
-      }
+      // 保存目标以"当前标签页"的 savedRequestId 为准。
+      // 不能用组件级 state 判断：切换标签页后，同一次渲染里读到的仍是上一个标签页的值，
+      // 会导致保存写到错误的记录（标签页 id 一直不更新）。
+      const targetSavedId = currentTab?.savedRequestId ?? null;
 
       const payload: any = {
         name: requestName,
@@ -916,24 +909,37 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         folder_id: selectedFolderId !== undefined ? selectedFolderId : null,
       };
 
-      if (editingRequest) {
-        const response = await savedRequestApi.updateRequest(editingRequest.id, payload);
+      const applySaved = (saved: SavedRequest, created: boolean) => {
+        setSavedRequests(prev => prev.some(r => r.id === saved.id)
+          ? prev.map(r => (r.id === saved.id ? saved : r))
+          : [saved, ...prev]);
+        setTabs(prevTabs => prevTabs.map(tab =>
+          tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: saved.id }) : tab
+        ));
+        message.success(created ? '请求配置已保存' : '请求配置已更新');
+      };
+
+      if (targetSavedId != null) {
+        const response = await savedRequestApi.updateRequest(targetSavedId, payload);
         if (response.code === 200 && response.data) {
-          setSavedRequests(savedRequests.map(r => r.id === editingRequest.id ? response.data! : r));
-          setTabs(prevTabs => prevTabs.map(tab =>
-            tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: response.data!.id }) : tab
-          ));
-          message.success('请求配置已更新');
+          applySaved(response.data, false);
+        } else if (response.code === 404) {
+          // 目标记录已被删除，转为新建，避免标签页 id 指向不存在的记录
+          const createResponse = await savedRequestApi.createRequest(payload as any);
+          if (createResponse.code === 200 && createResponse.data) {
+            applySaved(createResponse.data, true);
+          } else {
+            message.error(createResponse.message || '保存请求配置失败');
+          }
+        } else {
+          message.error(response.message || '保存请求配置失败');
         }
       } else {
         const response = await savedRequestApi.createRequest(payload as any);
         if (response.code === 200 && response.data) {
-          setSavedRequests([response.data, ...savedRequests]);
-          setTabs(prevTabs => prevTabs.map(tab =>
-            tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: response.data!.id }) : tab
-          ));
-          setEditingRequest(response.data);
-          message.success('请求配置已保存');
+          applySaved(response.data, true);
+        } else {
+          message.error(response.message || '保存请求配置失败');
         }
       }
     } catch (error) {
@@ -1309,7 +1315,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                         >
                           发送
                         </Button>
-                        <Tooltip title={editingRequest ? '更新已保存的请求配置' : '保存为新请求配置'} overlayClassName="iot-tooltip">
+                        <Tooltip title={activeTab?.savedRequestId != null ? '更新已保存的请求配置' : '保存为新请求配置'} overlayClassName="iot-tooltip">
                           <Button
                             icon={<SaveOutlined />}
                             onClick={handleSaveRequest}
