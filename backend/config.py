@@ -28,6 +28,18 @@ default_config = {
     # 需同时开通权限范围 sheets:spreadsheet:read（电子表格）与 bitable:app:read（多维表格）。
     "feishu_app_id": "",
     "feishu_app_secret": "",
+    # 飞书文档内嵌图片解析（多模态描述）：
+    # 默认沿用主模型配置（deepseek-v4-flash 已实测支持图像理解）；
+    # 主模型不支持图片时会自动跳过，不影响正文预取。
+    # 如需独立视觉模型，配置 vision_model（+ 可选 vision_api_base_url / vision_api_key）。
+    "feishu_image_enabled": True,
+    # 默认 8 张：图片描述会显著加长需求文本，20 张时曾把生成输出顶到 max_tokens 上限
+    # （>=16384 截断），6~10 张是实测比较稳的区间；可按需调大。
+    "feishu_image_max": 8,
+    "feishu_image_max_chars": 300,
+    "vision_model": "",
+    "vision_api_base_url": "",
+    "vision_api_key": "",
     # prompt caching: None = 按 base_url 自动判定（DeepSeek 开启）；True/False = 强制开关
     "prompt_cache_enabled": None,
     # Mock 正向代理：监听端口与重启后是否自动恢复运行
@@ -124,6 +136,46 @@ class ConfigManager:
     def get_feishu_app_secret(self) -> str:
         """飞书应用 app_secret（同上）。"""
         return self.config.get("feishu_app_secret", "")
+
+    def get_api_base_url(self) -> str:
+        """获取 OpenAI 兼容 API 基础地址。"""
+        return self.config.get("api_base_url", "https://api.deepseek.com") or "https://api.deepseek.com"
+
+    def get_api_model(self) -> str:
+        """获取主模型名称。"""
+        return self.config.get("api_model", "deepseek-v4-flash") or "deepseek-v4-flash"
+
+    # ---- 飞书文档内嵌图片（多模态） ----
+
+    def is_feishu_image_enabled(self) -> bool:
+        """是否启用飞书文档内嵌图片解析。"""
+        return bool(self.config.get("feishu_image_enabled", True))
+
+    def get_feishu_image_max(self) -> int:
+        """单篇文档最多解析的图片数量（上限 50，控制 token 成本）。"""
+        try:
+            return min(50, max(1, int(self.config.get("feishu_image_max", 8))))
+        except (TypeError, ValueError):
+            return 8
+
+    def get_feishu_image_max_chars(self) -> int:
+        """单张图片描述的字符上限。"""
+        try:
+            return max(50, int(self.config.get("feishu_image_max_chars", 300)))
+        except (TypeError, ValueError):
+            return 300
+
+    def get_vision_model(self) -> str:
+        """独立视觉模型名称（空 = 沿用主模型）。"""
+        return (self.config.get("vision_model") or "").strip()
+
+    def get_vision_api_base_url(self) -> str:
+        """独立视觉模型的 API 地址（空 = 沿用主模型地址）。"""
+        return (self.config.get("vision_api_base_url") or "").strip()
+
+    def get_vision_api_key(self) -> str:
+        """独立视觉模型的 API Key（空 = 沿用主模型 Key）。"""
+        return (self.config.get("vision_api_key") or "").strip()
 
     def get_mock_proxy_port(self) -> int:
         """获取 Mock 正向代理监听端口"""

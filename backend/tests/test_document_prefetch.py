@@ -1,5 +1,9 @@
 """Tests for the shared document-prefetch URL regexes."""
 import asyncio
+import base64
+import io
+
+import pytest
 
 import utils.document_prefetch as dp
 from utils.document_prefetch import (
@@ -209,4 +213,355 @@ def test_discover_embedded_sheet_tokens_from_blocks(monkeypatch):
     monkeypatch.setattr(dp.httpx, "AsyncClient", lambda *a, **k: _FakeClient())
     tokens = asyncio.run(dp._discover_embedded_sheet_tokens("docX", "app_id", "app_sec"))
     assert tokens == ["NLWUsvjrfhWUgVtIXD9cpm8jnQh_5iKWZs", "appX_tblY"]
+
+# ---------------------------------------------------------------------------
+# 飞书文档内嵌图片（多模态描述）
+# ---------------------------------------------------------------------------
+
+def _text_block(block_id: str, content: str, children: list | None = None) -> dict:
+    block = {
+        "block_id": block_id,
+        "block_type": 2,
+        "text": {"elements": [{"text_run": {"content": content}}]},
+    }
+    if children:
+        block["children"] = children
+    return block
+
+
+def _patch_image_config(monkeypatch, *, enabled: bool = True,
+                        max_images: int = 20, max_chars: int = 300):
+    monkeypatch.setattr(dp, "_VISION_UNSUPPORTED_CACHE", set())
+    monkeypatch.setattr(dp.config_manager, "is_feishu_image_enabled", lambda: enabled)
+    monkeypatch.setattr(dp.config_manager, "get_feishu_image_max", lambda: max_images)
+    monkeypatch.setattr(dp.config_manager, "get_feishu_image_max_chars", lambda: max_chars)
+    monkeypatch.setattr(dp.config_manager, "get_vision_model", lambda: "")
+    monkeypatch.setattr(dp.config_manager, "get_vision_api_base_url", lambda: "")
+    monkeypatch.setattr(dp.config_manager, "get_vision_api_key", lambda: "")
+    monkeypatch.setattr(dp.config_manager, "get_api_key", lambda: "test-key")
+    monkeypatch.setattr(dp.config_manager, "get_api_base_url", lambda: "https://example.test")
+    monkeypatch.setattr(dp.config_manager, "get_api_model", lambda: "test-model")
+
+
+def test_extract_image_blocks_in_document_order():
+    items = [
+        {"block_id": "doc", "block_type": 1, "children": ["t1", "img1", "sec", "img2"]},
+        _text_block("t1", "第一段"),
+        {"block_id": "img1", "block_type": 27, "image": {"token": "tok1", "width": 100, "height": 50}},
+        _text_block("sec", "第二段", children=[]),
+        {"block_id": "img2", "block_type": 27, "image": {"token": "tok2", "width": 200, "height": 100}},
+    ]
+    records = dp._extract_image_blocks(items, "doc")
+    assert [r["index"] for r in records] == [1, 2]
+    assert [r["token"] for r in records] == ["tok1", "tok2"]
+    assert records[0]["context"].endswith("第一段")
+    assert records[1]["context"].endswith("第二段")
+    assert records[1]["width"] == 200
+
+
+def test_extract_image_blocks_without_root_uses_list_order():
+    items = [
+        {"block_id": "img1", "block_type": 27, "image": {"token": "tok1"}},
+        _text_block("t1", "后一段"),
+        {"block_id": "img2", "block_type": 27, "image": {"token": "tok2"}},
+    ]
+    records = dp._extract_image_blocks(items, "")
+    assert [r["token"] for r in records] == ["tok1", "tok2"]
+    assert records[0]["context"] == ""
+    assert records[1]["context"].endswith("后一段")
+
+
+def test_extract_image_blocks_ignores_image_without_token():
+    items = [
+        {"block_id": "img1", "block_type": 27, "image": {}},
+        {"block_id": "img2", "block_type": 27, "image": {"token": "tok2"}},
+    ]
+    assert [r["token"] for r in dp._extract_image_blocks(items)] == ["tok2"]
+
+
+def test_format_image_markdown_renders_descriptions():
+    records = [
+        {"index": 1, "width": 522, "height": 400, "context": "若有修改值，气泡弹窗支持选择",
+         "description": "弹窗：按发起值进行发起 / 按当前数据进行发起"},
+        {"index": 2, "width": 0, "height": 0, "context": "", "description": "审批流流程图"},
+        {"index": 3, "description": ""},
+    ]
+    md = dp._format_image_markdown(records)
+    assert md.startswith("## 文档图片（共 2 张")
+    assert "### 图片 1（522×400）" in md
+    assert "> 图片前的正文：" in md
+    assert "按发起值进行发起" in md
+    assert "### 图片 3" not in md
+    assert md.count("### 图片") == 2
+
+
+def test_format_image_markdown_truncates_description():
+    records = [{"index": 1, "description": "描" * 50}]
+    md = dp._format_image_markdown(records, max_chars=10)
+    assert "描" * 10 + "…" in md
+
+
+def test_format_image_markdown_empty():
+    assert dp._format_image_markdown([]) == ""
+    assert dp._format_image_markdown([{"index": 1, "description": "  "}]) == ""
+
+
+def test_encode_image_downscales_with_pillow():
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (3000, 1000), "red").save(buffer, "PNG")
+    encoded = dp._encode_image(buffer.getvalue())
+    assert encoded is not None
+    mime, b64 = encoded
+    assert mime == "image/jpeg"
+    with Image.open(io.BytesIO(base64.b64decode(b64))) as image:
+        assert max(image.size) <= dp._VISION_MAX_SIDE
+
+
+def test_encode_image_returns_none_for_non_image():
+    assert dp._encode_image(b"not an image") is None
+
+
+def test_collect_image_markdown_disabled(monkeypatch):
+    _patch_image_config(monkeypatch, enabled=False)
+    out = asyncio.run(dp._collect_image_markdown("doc", "app", "sec", {}))
+    assert out == ""
+
+
+def test_collect_image_markdown_success(monkeypatch):
+    _patch_image_config(monkeypatch)
+
+    async def fake_token(*_args, **_kwargs):
+        return "tenant-token"
+
+    async def fake_discover(*_args, **_kwargs):
+        return [
+            {"index": 1, "block_id": "b1", "token": "tok1", "width": 10, "height": 20,
+             "context": "第一段"},
+            {"index": 2, "block_id": "b2", "token": "tok2", "width": 0, "height": 0,
+             "context": ""},
+        ]
+
+    async def fake_download(_token, _tenant_token):
+        return b"\x89PNG\r\n\x1a\nfake"
+
+    def fake_encode(_data):
+        return "image/png", "ZmFrZQ=="
+
+    prompts: list[str] = []
+
+    async def fake_vision(_config, _mime, _b64, prompt):
+        prompts.append(prompt)
+        return "图片描述"
+
+    monkeypatch.setattr(dp, "_get_feishu_tenant_token", fake_token)
+    monkeypatch.setattr(dp, "_discover_image_blocks", fake_discover)
+    monkeypatch.setattr(dp, "_download_image_bytes", fake_download)
+    monkeypatch.setattr(dp, "_encode_image", fake_encode)
+    monkeypatch.setattr(dp, "_post_vision_chat", fake_vision)
+
+    out = asyncio.run(dp._collect_image_markdown(
+        "doc", "app", "sec", {"api_key": "k", "api_base_url": "https://example.test",
+                              "api_model": "vl"}))
+    assert "## 文档图片（共 2 张" in out
+    assert out.count("### 图片") == 2
+    assert "图片描述" in out
+    # 有上下文的图片应把上下文带进视觉 prompt
+    assert any("第一段" in p for p in prompts)
+
+
+def test_collect_image_markdown_respects_max_images(monkeypatch):
+    _patch_image_config(monkeypatch, max_images=1)
+
+    async def fake_token(*_args, **_kwargs):
+        return "tenant-token"
+
+    async def fake_discover(*_args, **_kwargs):
+        return [
+            {"index": 1, "token": "tok1", "width": 0, "height": 0, "context": ""},
+            {"index": 2, "token": "tok2", "width": 0, "height": 0, "context": ""},
+        ]
+
+    async def fake_download(_token, _tenant_token):
+        return b"data"
+
+    async def fake_vision(*_args, **_kwargs):
+        return "desc"
+
+    monkeypatch.setattr(dp, "_get_feishu_tenant_token", fake_token)
+    monkeypatch.setattr(dp, "_discover_image_blocks", fake_discover)
+    monkeypatch.setattr(dp, "_download_image_bytes", fake_download)
+    monkeypatch.setattr(dp, "_post_vision_chat", fake_vision)
+    monkeypatch.setattr(dp, "_encode_image", lambda _data: ("image/png", "ZmFrZQ=="))
+
+    out = asyncio.run(dp._collect_image_markdown("doc", "app", "sec", {}))
+    assert out.count("### 图片") == 1
+
+
+def test_collect_image_markdown_skips_when_vision_unavailable(monkeypatch):
+    _patch_image_config(monkeypatch)
+
+    async def fake_token(*_args, **_kwargs):
+        return "tenant-token"
+
+    async def fake_discover(*_args, **_kwargs):
+        return [{"index": 1, "token": "tok1", "width": 0, "height": 0, "context": ""}]
+
+    async def fake_download(*_args, **_kwargs):
+        return b"data"
+
+    async def fake_vision(*_args, **_kwargs):
+        raise dp._VisionUnavailable("HTTP 400")
+
+    monkeypatch.setattr(dp, "_get_feishu_tenant_token", fake_token)
+    monkeypatch.setattr(dp, "_discover_image_blocks", fake_discover)
+    monkeypatch.setattr(dp, "_download_image_bytes", fake_download)
+    monkeypatch.setattr(dp, "_post_vision_chat", fake_vision)
+    monkeypatch.setattr(dp, "_encode_image", lambda _data: ("image/png", "ZmFrZQ=="))
+
+    assert asyncio.run(dp._collect_image_markdown("doc", "app", "sec", {})) == ""
+
+def test_resolve_vision_config_priority(monkeypatch):
+    monkeypatch.setattr(dp.config_manager, "get_vision_model", lambda: "vision-model")
+    monkeypatch.setattr(dp.config_manager, "get_vision_api_base_url", lambda: "https://vision.test")
+    monkeypatch.setattr(dp.config_manager, "get_vision_api_key", lambda: "vision-key")
+    monkeypatch.setattr(dp.config_manager, "get_api_key", lambda: "main-key")
+    monkeypatch.setattr(dp.config_manager, "get_api_base_url", lambda: "https://main.test")
+    monkeypatch.setattr(dp.config_manager, "get_api_model", lambda: "main-model")
+
+    resolved = dp._resolve_vision_config({"api_key": "req-key", "api_base_url": "https://req.test",
+                                         "api_model": "req-model"})
+    assert resolved == {
+        "api_key": "vision-key",
+        "api_base_url": "https://vision.test",
+        "api_model": "vision-model",
+        "api_proxy_url": "",
+    }
+
+    # vision_* 为空时回退到调用方传入的当前模型配置
+    monkeypatch.setattr(dp.config_manager, "get_vision_model", lambda: "")
+    monkeypatch.setattr(dp.config_manager, "get_vision_api_base_url", lambda: "")
+    monkeypatch.setattr(dp.config_manager, "get_vision_api_key", lambda: "")
+    resolved = dp._resolve_vision_config({"api_key": "req-key", "api_base_url": "https://req.test",
+                                         "api_model": "req-model"})
+    assert resolved["api_key"] == "req-key"
+    assert resolved["api_model"] == "req-model"
+
+    # 都没有时回退到 config.json 主模型；无 key 则不可用
+    resolved = dp._resolve_vision_config(None)
+    assert resolved["api_key"] == "main-key"
+    assert resolved["api_model"] == "main-model"
+    monkeypatch.setattr(dp.config_manager, "get_api_key", lambda: "")
+    assert dp._resolve_vision_config(None) is None
+
+
+def test_get_feishu_image_max_capped(monkeypatch):
+    monkeypatch.setitem(dp.config_manager.config, "feishu_image_max", 9999)
+    assert dp.config_manager.get_feishu_image_max() == 50
+    monkeypatch.setitem(dp.config_manager.config, "feishu_image_max", 0)
+    assert dp.config_manager.get_feishu_image_max() == 1
+
+
+def test_collect_image_markdown_probes_only_first_image_when_vision_unsupported(monkeypatch):
+    _patch_image_config(monkeypatch)
+    downloads: list[str] = []
+    vision_calls = 0
+
+    async def fake_token(*_args, **_kwargs):
+        return "tenant-token"
+
+    async def fake_discover(*_args, **_kwargs):
+        return [
+            {"index": 1, "block_id": "b1", "token": "tok1", "width": 0, "height": 0, "context": ""},
+            {"index": 2, "block_id": "b2", "token": "tok2", "width": 0, "height": 0, "context": ""},
+            {"index": 3, "block_id": "b3", "token": "tok3", "width": 0, "height": 0, "context": ""},
+        ]
+
+    async def fake_download(token, _tenant_token):
+        downloads.append(token)
+        return b"data"
+
+    async def fake_vision(*_args, **_kwargs):
+        nonlocal vision_calls
+        vision_calls += 1
+        raise dp._VisionUnavailable("HTTP 400")
+
+    monkeypatch.setattr(dp, "_get_feishu_tenant_token", fake_token)
+    monkeypatch.setattr(dp, "_discover_image_blocks", fake_discover)
+    monkeypatch.setattr(dp, "_download_image_bytes", fake_download)
+    monkeypatch.setattr(dp, "_post_vision_chat", fake_vision)
+    monkeypatch.setattr(dp, "_encode_image", lambda _data: ("image/png", "ZmFrZQ=="))
+
+    assert asyncio.run(dp._collect_image_markdown("doc", "app", "sec", {})) == ""
+    # 文本模型场景：只下载/调用第一张图，且负缓存命中后不再重复尝试
+    assert downloads == ["tok1"]
+    assert vision_calls == 1
+    assert asyncio.run(dp._collect_image_markdown("doc", "app", "sec", {})) == ""
+    assert downloads == ["tok1"]
+    assert vision_calls == 1
+
+
+def test_collect_image_markdown_survives_single_image_failure(monkeypatch):
+    _patch_image_config(monkeypatch)
+
+    async def fake_token(*_args, **_kwargs):
+        return "tenant-token"
+
+    async def fake_discover(*_args, **_kwargs):
+        return [
+            {"index": 1, "block_id": "b1", "token": "tok1", "width": 0, "height": 0, "context": ""},
+            {"index": 2, "block_id": "b2", "token": "tok2", "width": 0, "height": 0, "context": ""},
+        ]
+
+    async def fake_download(*_args, **_kwargs):
+        return b"data"
+
+    calls = {"n": 0}
+
+    async def fake_vision(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "第一张描述"
+        raise RuntimeError("network hiccup")
+
+    monkeypatch.setattr(dp, "_get_feishu_tenant_token", fake_token)
+    monkeypatch.setattr(dp, "_discover_image_blocks", fake_discover)
+    monkeypatch.setattr(dp, "_download_image_bytes", fake_download)
+    monkeypatch.setattr(dp, "_post_vision_chat", fake_vision)
+    monkeypatch.setattr(dp, "_encode_image", lambda _data: ("image/png", "ZmFrZQ=="))
+
+    out = asyncio.run(dp._collect_image_markdown("doc", "app", "sec", {}))
+    assert "## 文档图片（共 1 张" in out
+    assert "第一张描述" in out
+
+def test_is_deepseek_endpoint():
+    assert dp._is_deepseek_endpoint("https://api.deepseek.com")
+    assert dp._is_deepseek_endpoint("https://api.deepseek.com/v1")
+    assert not dp._is_deepseek_endpoint("https://dashscope.aliyuncs.com/compatible-mode/v1")
+    assert not dp._is_deepseek_endpoint("")
+
+
+def test_vision_payload_disables_thinking_for_deepseek():
+    payload = dp._build_vision_payload(
+        {"api_model": "deepseek-v4-flash", "api_base_url": "https://api.deepseek.com"},
+        "image/jpeg", "ZmFrZQ==", "描述这张图",
+    )
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_tokens"] == dp._VISION_MAX_TOKENS
+    content = payload["messages"][0]["content"]
+    assert content[1]["image_url"]["url"] == "data:image/jpeg;base64,ZmFrZQ=="
+
+
+def test_vision_payload_keeps_thinking_for_other_providers():
+    payload = dp._build_vision_payload(
+        {"api_model": "qwen-vl-max",
+         "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+        "image/png", "ZmFrZQ==", "描述这张图",
+    )
+    assert "thinking" not in payload
+
+
+
 

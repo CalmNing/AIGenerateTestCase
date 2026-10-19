@@ -32,7 +32,11 @@ def _no_network(monkeypatch):
     async def fake_lanhu_size(requirement):
         return None
 
-    async def fake_feishu(requirement, mcp_configs):
+    async def fake_feishu(requirement, mcp_configs, vision_config=None):
+        # generate_testcases 必须把当前模型配置下传用于图片解析
+        assert isinstance(vision_config, dict)
+        assert vision_config.get("api_key") == "sk-test"
+        assert vision_config.get("api_model")
         return None
 
     monkeypatch.setattr(mu, "_structured_output_robust", fake_structured_output)

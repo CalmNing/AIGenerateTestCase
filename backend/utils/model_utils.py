@@ -297,9 +297,16 @@ async def _fetch_lanhu_page_content(url: str, page_names: list[str]) -> str:
         return ""
 
 
-async def _fetch_feishu_document_content(requirement: str, mcp_configs: list | None) -> str | None:
-    """Read Feishu wiki/docx links directly via MCP and skip agent tool loops."""
-    return await fetch_feishu_document(requirement, mcp_configs)
+async def _fetch_feishu_document_content(
+    requirement: str,
+    mcp_configs: list | None,
+    vision_config: dict | None = None,
+) -> str | None:
+    """Read Feishu wiki/docx links directly via MCP and skip agent tool loops.
+
+    vision_config 为图片解析用的多模态模型配置；为空时回退到 config.json。
+    """
+    return await fetch_feishu_document(requirement, mcp_configs, vision_config=vision_config)
 
 
 async def _structured_output_robust(
@@ -1073,9 +1080,33 @@ async def generate_testcases(
             is_lanhu = True
             logger.info(f"已解析蓝湖文档内容，共 {len(lanhu_content)} 字")
 
+    # 飞书文档内嵌图片解析需要多模态模型：默认沿用当前模型配置，
+    # 若主模型不支持图片会在首次调用后快速失败并跳过图片，不影响正文预取；
+    # 也可以用 config.json 的 vision_model / vision_api_base_url / vision_api_key 指定独立视觉模型。
+    if model_type == "ollama":
+        vision_config = None
+        if ollama_url and ollama_model:
+            ollama_vision_base = ollama_url.rstrip("/")
+            if not ollama_vision_base.endswith("/v1"):
+                ollama_vision_base += "/v1"
+            vision_config = {
+                "api_key": "ollama",
+                "api_base_url": ollama_vision_base,
+                "api_model": ollama_model,
+                "api_proxy_url": "",
+            }
+    else:
+        vision_config = {
+            "api_key": api_key,
+            "api_base_url": api_base_url,
+            "api_model": api_model,
+            "api_proxy_url": api_proxy_url,
+        }
+
     # 历史提示词只保存解析出的内容（不含历史上下文等前缀）
     if parsed_content is None:
-        feishu_content = await _fetch_feishu_document_content(requirement, mcp_configs)
+        feishu_content = await _fetch_feishu_document_content(
+            requirement, mcp_configs, vision_config)
         if feishu_content:
             parsed_content = feishu_content
             is_feishu = True

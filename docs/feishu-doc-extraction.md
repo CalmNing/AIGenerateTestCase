@@ -11,7 +11,7 @@
 | 层 | 内容 | 提取方式 |
 |----|------|----------|
 | 正文 | 标题、段落、列表、图片引用等 | MCP 工具 `docx_v1_document_rawContent` |
-| 图片 | 文档内嵌图片 | MCP 工具 `get_feishu_image_resource`（媒体 ID） |
+| 图片 | 文档内嵌图片 | MCP 工具 `docx_v1_documentBlock_list` 取 `image.token`，再 `drive_v1_media_batchGetTmpDownloadUrl` / 直连 `/drive/v1/medias/{token}/download`（需文档下载权限，见 [feishu-image-extraction.md](./feishu-image-extraction.md)） |
 | 嵌入表格 | 电子表格 / 多维表格 | **直连飞书 Sheets / Bitable API**（见下） |
 
 > ⚠️ 关键：文档正文接口（`docx_v1_document_rawContent`）返回的是**纯文本**，

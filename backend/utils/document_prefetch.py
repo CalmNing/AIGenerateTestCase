@@ -4,7 +4,7 @@ Single source of truth for the Lanhu/Feishu URL regexes and the prefetch
 logic previously duplicated in utils/model_utils.py and
 app/pipeline/pipeline_runner.py.
 
-Feishu doc extraction covers three layers:
+Feishu doc extraction covers four layers:
 1. 正文 (body)        — `docx_v1_document_rawContent` via MCP.
 2. 嵌入的表格 (sheet) — 通过飞书 docx blocks REST API（`tenant_access_token`）
                         发现嵌入块（block_type=30 sheet / 14 bitable）拿到子表 token，
@@ -12,12 +12,20 @@ Feishu doc extraction covers three layers:
                         关键：rawContent 是纯文本、**不含**嵌入表格引用，
                         lark-mcp 也未暴露 blocks 工具，故必须直连 REST API。
                         详见 docs/feishu-doc-extraction.md。
+3. 画板 (board)       — MCP 工具 `board_v1_whiteboardNode_list` 读取节点并转 Markdown。
+4. 内嵌图片 (image)   — docx blocks block_type=27 → `image.token` → 下载素材 →
+                        多模态模型转文字描述，追加到正文末尾（可选，失败静默跳过）。
+                        详见 docs/feishu-image-extraction.md。
 """
+import asyncio
+import base64
+import io
 import logging
 import re
 
 import httpx
 
+from config import config_manager
 from utils.helpers import _load_json_object
 
 logger = logging.getLogger(__name__)
@@ -47,6 +55,48 @@ _FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 
 # 飞书画板在 docx blocks 中的 block_type
 _BOARD_BLOCK_TYPE = 43
+
+# ---------------------------------------------------------------------------
+# 文档内嵌图片（docx image block）
+# ---------------------------------------------------------------------------
+# 飞书 docx 图片块 block_type=27，block["image"]["token"] 即素材 token。
+# 下载素材需要文档资源权限：应用需被加为文档协作者（可编辑），且文档
+# 「谁可以创建副本、打印和下载」允许该权限级别；否则下载返回 403。
+# 下载后交给多模态模型转成文字描述，追加到正文末尾供测试用例生成使用。
+# 详见 docs/feishu-image-extraction.md。
+_IMAGE_BLOCK_TYPE = 27
+_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+_IMAGE_RAW_MAX_BYTES = 2 * 1024 * 1024
+_IMAGE_CONTEXT_CHARS = 160
+_VISION_MAX_SIDE = 1568
+_VISION_CONCURRENCY = 3
+_VISION_TIMEOUT = 90.0
+_VISION_MAX_TOKENS = 768
+_IMAGE_MAX_PIXELS = 40_000_000
+_IMAGE_TOTAL_TIMEOUT = 90.0
+
+# 进程内负缓存：某个 (base_url, model) 已判定不支持图片后，本进程不再重复尝试。
+_VISION_UNSUPPORTED_CACHE: set = set()
+
+_VISION_PROMPT = (
+    "你是需求文档截图解析助手。请用简洁的中文描述这张图片，"
+    "重点提取对测试设计有用的信息："
+    "① 界面/页面名称与所属功能；② 关键字段、表头、按钮、状态及可见取值；"
+    "③ 若是流程图/审批流，描述节点、分支条件与箭头关系；"
+    "④ 若是弹窗/提示，写出提示文案与选项；"
+    "⑤ 若是表格，列出表头与代表性数据。"
+    "只描述图中可见内容，不要臆测，不要输出 Markdown 表格。"
+)
+
+_TEXT_BLOCK_FIELDS = (
+    "text", "heading1", "heading2", "heading3", "heading4", "heading5",
+    "heading6", "heading7", "heading8", "heading9",
+    "bullet", "ordered", "code", "quote", "todo",
+)
+
+
+class _VisionUnavailable(RuntimeError):
+    """视觉模型不可用（未配置或模型不支持图片），用于快速中止后续解析。"""
 
 
 async def _get_feishu_tenant_token(app_id: str, app_secret: str) -> "str | None":
@@ -286,6 +336,451 @@ async def _collect_board_markdown(
 
 
 
+def _block_text_content(block: dict) -> str:
+    """提取文本类 block 的纯文本（用于给图片补充上下文）。"""
+    if not isinstance(block, dict):
+        return ""
+    for field in _TEXT_BLOCK_FIELDS:
+        payload = block.get(field)
+        if not isinstance(payload, dict):
+            continue
+        elements = payload.get("elements")
+        if not isinstance(elements, list):
+            continue
+        parts = []
+        for element in elements:
+            if not isinstance(element, dict):
+                continue
+            text_run = element.get("text_run")
+            if isinstance(text_run, dict) and isinstance(text_run.get("content"), str):
+                parts.append(text_run["content"])
+        text = "".join(parts).strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_image_blocks(items: list, document_id: str = "") -> list[dict]:
+    """按文档顺序从 blocks 里提取图片块，并附带其前面最近一段正文。"""
+    blocks = [b for b in (items or []) if isinstance(b, dict)]
+    by_id = {b.get("block_id"): b for b in blocks}
+
+    ordered_ids: list = []
+    seen = set()
+
+    def walk(block_id):
+        if not block_id or block_id in seen:
+            return
+        seen.add(block_id)
+        block = by_id.get(block_id)
+        if not block:
+            return
+        ordered_ids.append(block_id)
+        for child in block.get("children") or []:
+            walk(child)
+
+    if document_id and document_id in by_id:
+        walk(document_id)
+    if not ordered_ids:
+        ordered_ids = [b.get("block_id") for b in blocks]
+
+    records: list = []
+    last_text = ""
+    index = 0
+    for block_id in ordered_ids:
+        block = by_id.get(block_id)
+        if not block:
+            continue
+        if block.get("block_type") == _IMAGE_BLOCK_TYPE:
+            image = block.get("image")
+            if not isinstance(image, dict):
+                continue
+            token = image.get("token")
+            if not token:
+                continue
+            index += 1
+            records.append({
+                "index": index,
+                "block_id": block_id,
+                "token": token,
+                "width": image.get("width") or 0,
+                "height": image.get("height") or 0,
+                "context": last_text[-_IMAGE_CONTEXT_CHARS:],
+            })
+        else:
+            text = _block_text_content(block)
+            if text:
+                last_text = text
+    return records
+
+
+async def _discover_image_blocks(document_id: str, app_id: str, app_secret: str) -> list:
+    """通过 docx blocks REST API 按文档顺序发现图片块。"""
+    tenant_token = await _get_feishu_tenant_token(app_id, app_secret)
+    if not tenant_token or not document_id:
+        return []
+    items: list = []
+    page_token = ""
+    try:
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+            while True:
+                params = {"page_size": 500}
+                if page_token:
+                    params["page_token"] = page_token
+                resp = await client.get(
+                    f"{_FEISHU_API_BASE}/docx/v1/documents/{document_id}/blocks",
+                    headers={"Authorization": f"Bearer {tenant_token}"},
+                    params=params,
+                )
+                data = resp.json()
+                if data.get("code") != 0:
+                    logger.warning("飞书 blocks 读取失败（图片检测）doc=%s: %s", document_id, data)
+                    break
+                page_data = data.get("data") or {}
+                items.extend(page_data.get("items") or [])
+                if not page_data.get("has_more"):
+                    break
+                page_token = page_data.get("page_token") or ""
+                if not page_token:
+                    break
+    except Exception as e:
+        logger.warning("飞书 blocks 读取异常（图片检测）doc=%s: %s", document_id, e)
+    return _extract_image_blocks(items, document_id)
+
+
+async def _download_image_bytes(file_token: str, tenant_token: str) -> "bytes | None":
+    """流式下载 docx 内嵌图片素材；无权限/超限时返回 None（失败原因由调用方汇总）。"""
+    if not file_token or not tenant_token:
+        return None
+    url = f"{_FEISHU_API_BASE}/drive/v1/medias/{file_token}/download"
+    try:
+        async with httpx.AsyncClient(timeout=60, verify=False) as client:
+            async with client.stream(
+                "GET", url, headers={"Authorization": f"Bearer {tenant_token}"}
+            ) as resp:
+                if resp.status_code != 200:
+                    logger.debug("飞书图片下载失败 token=%s status=%s", file_token, resp.status_code)
+                    return None
+                chunks: list = []
+                total = 0
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > _IMAGE_MAX_BYTES:
+                        logger.info("飞书图片过大已跳过 token=%s size>%s", file_token, _IMAGE_MAX_BYTES)
+                        return None
+                    chunks.append(chunk)
+        return b"".join(chunks) if chunks else None
+    except Exception as e:
+        logger.debug("飞书图片下载异常 token=%s: %s", file_token, e)
+        return None
+
+
+def _sniff_image_mime(data: bytes) -> "str | None":
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return None
+
+
+def _encode_image(data: bytes) -> "tuple[str, str] | None":
+    """把图片压缩到适合多模态模型的大小，返回 (mime, base64)。"""
+    if not data or len(data) > _IMAGE_MAX_BYTES:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            if image.width * image.height > _IMAGE_MAX_PIXELS:
+                logger.info("飞书图片像素过大已跳过 width=%s height=%s", image.width, image.height)
+                return None
+            if image.mode in ("RGBA", "LA", "P"):
+                rgba = image.convert("RGBA")
+                background = Image.new("RGB", rgba.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.split()[-1])
+                image = background
+            else:
+                image = image.convert("RGB")
+            image.thumbnail((_VISION_MAX_SIDE, _VISION_MAX_SIDE))
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=82)
+        return "image/jpeg", base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        # Pillow 缺失或图片无法解码时，小图直接按原始字节发送。
+        pass
+    mime = _sniff_image_mime(data)
+    if not mime or len(data) > _IMAGE_RAW_MAX_BYTES:
+        return None
+    return mime, base64.b64encode(data).decode("ascii")
+
+
+def _resolve_vision_config(explicit: "dict | None" = None) -> "dict | None":
+    """解析视觉模型配置：config.json 的 vision_* 优先，其次调用方传入的模型配置。"""
+    explicit = explicit or {}
+    api_key = (
+        config_manager.get_vision_api_key()
+        or explicit.get("api_key")
+        or config_manager.get_api_key()
+        or ""
+    ).strip()
+    base_url = (
+        config_manager.get_vision_api_base_url()
+        or explicit.get("api_base_url")
+        or config_manager.get_api_base_url()
+        or ""
+    ).strip()
+    model = (
+        config_manager.get_vision_model()
+        or explicit.get("api_model")
+        or config_manager.get_api_model()
+        or ""
+    ).strip()
+    if not api_key or not model:
+        return None
+    return {
+        "api_key": api_key,
+        "api_base_url": base_url or "https://api.deepseek.com",
+        "api_model": model,
+        "api_proxy_url": (explicit.get("api_proxy_url") or "").strip(),
+    }
+
+
+def _is_deepseek_endpoint(base_url: str) -> bool:
+    """判断是否 DeepSeek 端点（用于关闭 thinking，见 _build_vision_payload）。"""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(base_url or "").hostname or "").lower()
+    except Exception:
+        host = (base_url or "").lower()
+    return "deepseek" in host
+
+
+def _build_vision_payload(config: dict, mime: str, data_b64: str, prompt: str) -> dict:
+    """构造视觉请求体。
+
+    DeepSeek（deepseek-v4-flash 等）默认开启 thinking，推理 token 会占满
+    max_tokens，导致 message.content 返回空串；这里显式关闭 thinking，
+    与 utils.llm_factory.build_chat_model 的行为保持一致。
+    """
+    payload = {
+        "model": config["api_model"],
+        "temperature": 0,
+        "max_tokens": _VISION_MAX_TOKENS,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data_b64}"}},
+            ],
+        }],
+    }
+    if _is_deepseek_endpoint(config.get("api_base_url", "")):
+        payload["thinking"] = {"type": "disabled"}
+    return payload
+
+
+async def _post_vision_chat(config: dict, mime: str, data_b64: str, prompt: str) -> str:
+    """调用 OpenAI 兼容的视觉接口，返回图片描述文本。"""
+    url = config["api_base_url"].rstrip("/") + "/chat/completions"
+    payload = _build_vision_payload(config, mime, data_b64, prompt)
+    client_kwargs = {"timeout": _VISION_TIMEOUT}
+    if config.get("api_proxy_url"):
+        client_kwargs["proxy"] = config["api_proxy_url"]
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {config['api_key']}"},
+            json=payload,
+        )
+    if resp.status_code != 200:
+        logger.warning("视觉模型调用失败 status=%s body=%s", resp.status_code, resp.text[:300])
+        if resp.status_code in (400, 401, 403, 404, 422):
+            raise _VisionUnavailable(f"HTTP {resp.status_code}")
+        return ""
+    try:
+        data = resp.json()
+    except Exception:
+        return ""
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            part.get("text", "") for part in content
+            if isinstance(part, dict) and part.get("text")
+        ]
+        if "".join(parts).strip():
+            return "".join(parts).strip()
+    logger.warning(
+        "视觉模型返回空内容（finish_reason=%s, reasoning_len=%s）；"
+        "若是 DeepSeek thinking 模型，请确认已关闭 thinking",
+        choices[0].get("finish_reason"), len(message.get("reasoning_content") or ""),
+    )
+    return ""
+
+
+def _format_image_markdown(records: list, max_chars: int = 0) -> str:
+    """把图片描述渲染成可直接拼进需求的 Markdown 段落。"""
+    records = [r for r in (records or []) if (r.get("description") or "").strip()]
+    if not records:
+        return ""
+    parts = [f"## 文档图片（共 {len(records)} 张，按正文出现顺序）"]
+    for record in records:
+        description = record["description"].strip()
+        if max_chars and len(description) > max_chars:
+            description = description[:max_chars].rstrip() + "…"
+        title = f"### 图片 {record.get('index', '?')}"
+        width, height = record.get("width") or 0, record.get("height") or 0
+        if width and height:
+            title += f"（{width}×{height}）"
+        context = (record.get("context") or "").strip()
+        if context:
+            title += f"\n\n> 图片前的正文：{context[-120:]}"
+        parts.append(f"{title}\n\n{description}")
+    return "\n\n".join(parts)
+
+
+async def _collect_image_markdown(
+    document_id: str,
+    app_id: str,
+    app_secret: str,
+    vision_config: "dict | None" = None,
+) -> str:
+    """读取文档内嵌图片并转成文字描述；任何失败都静默返回空串。"""
+    if not document_id or not app_id or not app_secret:
+        return ""
+    if not config_manager.is_feishu_image_enabled():
+        return ""
+    resolved = _resolve_vision_config(vision_config)
+    if not resolved:
+        logger.info("未配置视觉模型，跳过飞书文档图片解析")
+        return ""
+    cache_key = (resolved["api_base_url"].rstrip("/"), resolved["api_model"])
+    if cache_key in _VISION_UNSUPPORTED_CACHE:
+        logger.info("视觉模型此前已判定不支持图片，跳过: %s", resolved["api_model"])
+        return ""
+    tenant_token = await _get_feishu_tenant_token(app_id, app_secret)
+    if not tenant_token:
+        return ""
+    try:
+        return await asyncio.wait_for(
+            _collect_image_markdown_impl(
+                document_id, app_id, app_secret, tenant_token, resolved, cache_key),
+            timeout=_IMAGE_TOTAL_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "飞书文档图片解析超时（>%.0fs），已跳过 doc=%s", _IMAGE_TOTAL_TIMEOUT, document_id)
+        return ""
+    except Exception as e:
+        logger.warning("飞书文档图片解析失败 doc=%s: %s", document_id, e)
+        return ""
+
+
+async def _collect_image_markdown_impl(
+    document_id: str,
+    app_id: str,
+    app_secret: str,
+    tenant_token: str,
+    resolved: dict,
+    cache_key: tuple,
+) -> str:
+    async def _describe(record, data):
+        try:
+            encoded = await asyncio.to_thread(_encode_image, data)
+            if not encoded:
+                return
+            mime, data_b64 = encoded
+            prompt = _VISION_PROMPT
+            context = (record.get("context") or "").strip()
+            if context:
+                prompt += f"\n\n这张图片在文档中的前一段文字：{context[-_IMAGE_CONTEXT_CHARS:]}"
+            description = await _post_vision_chat(resolved, mime, data_b64, prompt)
+            if description:
+                record["description"] = description
+        except _VisionUnavailable:
+            raise
+        except Exception as e:
+            logger.warning("单张图片视觉解析失败 block=%s: %s", record.get("block_id"), e)
+
+    records = await _discover_image_blocks(document_id, app_id, app_secret)
+    if not records:
+        logger.info("飞书文档未发现图片: doc=%s", document_id)
+        return ""
+    max_images = max(1, config_manager.get_feishu_image_max())
+    if len(records) > max_images:
+        logger.warning(
+            "飞书文档图片 %s 张，超过上限 %s，仅解析前 %s 张（可调 feishu_image_max）",
+            len(records), max_images, max_images,
+        )
+        records = records[:max_images]
+    logger.info(
+        "开始解析飞书文档图片: doc=%s count=%s model=%s",
+        document_id, len(records), resolved["api_model"],
+    )
+
+    # 1) 先下载并解析第一张：探测视觉模型是否支持图片；文本模型场景下
+    #    只需下载 1 张、调用 1 次即可整体跳过，不会把整篇图片都拉下来。
+    first_data = await _download_image_bytes(records[0]["token"], tenant_token)
+    if not first_data:
+        logger.warning(
+            "飞书文档图片下载失败，已跳过图片解析（应用需被加为文档协作者且允许下载）doc=%s",
+            document_id,
+        )
+        return ""
+    try:
+        await _describe(records[0], first_data)
+    except _VisionUnavailable:
+        _VISION_UNSUPPORTED_CACHE.add(cache_key)
+        logger.warning("当前模型不支持图片输入，已跳过飞书文档图片解析")
+        return ""
+
+    # 2) 并发下载其余图片；失败数量汇总成一条日志，避免逐张刷屏。
+    rest = records[1:]
+    if rest:
+        download_sem = asyncio.Semaphore(4)
+
+        async def _download(record):
+            async with download_sem:
+                return await _download_image_bytes(record["token"], tenant_token)
+
+        datas = await asyncio.gather(*[_download(r) for r in rest])
+        ready = [(r, d) for r, d in zip(rest, datas) if d]
+        if len(ready) < len(rest):
+            logger.warning(
+                "飞书文档图片下载失败 %s/%s 张（应用需被加为文档协作者且允许下载）",
+                len(rest) - len(ready), len(rest),
+            )
+        # 3) 并发解析其余图片；单张失败只跳过该张。
+        tasks = [asyncio.create_task(_describe(record, data)) for record, data in ready]
+        if tasks:
+            try:
+                await asyncio.gather(*tasks)
+            except _VisionUnavailable:
+                _VISION_UNSUPPORTED_CACHE.add(cache_key)
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                logger.warning("部分图片视觉解析失败，保留已解析结果")
+
+    markdown = _format_image_markdown(records, config_manager.get_feishu_image_max_chars())
+    if markdown:
+        parsed = sum(1 for r in records if (r.get("description") or "").strip())
+        logger.info("已解析飞书文档图片: doc=%s parsed=%s", document_id, parsed)
+    return markdown
+
+
 class DocumentSectionNotFoundError(ValueError):
     pass
 
@@ -339,10 +834,16 @@ def extract_document_section(content: str, section: str) -> str | None:
     return "\n".join(lines[start:end]).strip()
 
 
-async def fetch_feishu_document(text: str, mcp_configs, section: str | None = None) -> "str | None":
-    """Read a Feishu wiki/docx link's body + embedded sheets via MCP/API.
+async def fetch_feishu_document(
+    text: str,
+    mcp_configs,
+    section: str | None = None,
+    vision_config: "dict | None" = None,
+) -> "str | None":
+    """Read a Feishu wiki/docx link's body + embedded sheets/images via MCP/API.
 
-    When section is provided, return that heading and its nested content only.
+    When section is provided, return that heading and its nested content only
+    (images are skipped for section-scoped reads).
     """
     match = FEISHU_URL_RE.search(text or "")
     if not match or not mcp_configs:
@@ -413,6 +914,18 @@ async def fetch_feishu_document(text: str, mcp_configs, section: str | None = No
             sheets_md = await _collect_sheet_markdown(tokens, app_id, app_secret)
             if sheets_md:
                 content = content + "\n\n" + sheets_md
+
+            # 解析内嵌图片：按需求补充多模态描述（未配置视觉模型/无权限时静默跳过）。
+            # 指定 section 的读取无法判断图片归属，故不追加图片，避免混入其他章节。
+            if not section:
+                try:
+                    images_md = await _collect_image_markdown(
+                        document_id, app_id, app_secret, vision_config)
+                    if images_md:
+                        content = content + "\n\n" + images_md
+                except Exception as e:
+                    logger.warning("飞书文档图片追加失败 doc=%s: %s", document_id, e)
+
             if section:
                 content = extract_document_section(content, section)
                 if content is None:
@@ -528,14 +1041,14 @@ async def fetch_lanhu_document(text: str, mcp_configs) -> "str | None":
     return None
 
 
-async def prefetch_document(text: str, mcp_configs) -> str:
+async def prefetch_document(text: str, mcp_configs, vision_config: "dict | None" = None) -> str:
     """Replace a Feishu/Lanhu link in `text` with its fetched content.
 
     Tries Feishu first, then Lanhu. Returns the fetched content if found,
     otherwise the original text unchanged (matching pipeline_runner's
     previous behavior of returning replacement-or-original).
     """
-    feishu = await fetch_feishu_document(text, mcp_configs)
+    feishu = await fetch_feishu_document(text, mcp_configs, vision_config=vision_config)
     if feishu:
         return feishu
     lanhu = await fetch_lanhu_document(text, mcp_configs)

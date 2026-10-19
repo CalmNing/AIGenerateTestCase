@@ -734,14 +734,25 @@ class PipelineRunner:
 
     async def _prefetch_document(self, requirement_text: str, feishu_section: str | None = None) -> str:
         """预取飞书/蓝湖文档内容，替换需求文本中的链接为实际内容"""
+        # 图片解析沿用当前 pipeline 的模型配置；不支持图片的模型会自动跳过。
+        vision_config = {
+            "api_key": self.api_key,
+            "api_base_url": self.api_base_url,
+            "api_model": self.api_model,
+            "api_proxy_url": self.api_proxy_url or "",
+        }
         feishu_url = _FEISHU_URL_RE.search(requirement_text or "")
         if feishu_url and feishu_section:
             from utils.document_prefetch import fetch_feishu_document
-            content = await fetch_feishu_document(requirement_text, self.mcp_configs, section=feishu_section)
+            content = await fetch_feishu_document(
+                requirement_text, self.mcp_configs,
+                section=feishu_section, vision_config=vision_config,
+            )
             if not content:
                 raise ValueError(f"飞书文档目录读取失败：{feishu_section}")
             return content
-        return await prefetch_document(requirement_text, self.mcp_configs)
+        return await prefetch_document(
+            requirement_text, self.mcp_configs, vision_config=vision_config)
 
     async def _run_pipeline(
         self,
