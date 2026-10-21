@@ -1,17 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Form, Select, Input, Button, Tabs, Space, message, Modal, Tooltip, Radio } from 'antd';
-import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, LeftOutlined, RightOutlined, DownOutlined, QuestionCircleOutlined, EditOutlined, ApiOutlined, InboxOutlined, FolderOutlined, FolderOpenOutlined, HistoryOutlined } from '@ant-design/icons';
+import { Form, Select, TreeSelect, Input, InputNumber, Button, Space, message, Modal, Tooltip, Radio, Switch, Tag, Checkbox } from 'antd';
+import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, SyncOutlined, FormatPainterOutlined, QuestionCircleOutlined, EditOutlined, UpOutlined, DownOutlined, ApiOutlined, SwapOutlined, CloudServerOutlined, FolderAddOutlined } from '@ant-design/icons';
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
-import { savedRequestApi, savedRequestFolderApi, globalParameterApi, proxyApi } from '../../services/api';
-import { SavedRequest as SavedRequestType, SavedRequestFolder } from '../../types';
+import { savedRequestApi, savedRequestFolderApi, globalParameterApi, proxyApi, mqttApi, wsApi } from '../../services/api';
+import { SavedRequest as SavedRequestType, SavedRequestFolder, SavedRequestLayoutGroup, MqttConfig, MqttPublishResult, WsConfig, WsConnectResult } from '../../types';
 import FileUpload, { UploadedFileResult } from '../FileUpload';
 import PushLogDrawer from './PushLogDrawer';
+import IoTRequestSidebar from './IoTRequestSidebar';
 import './IoTDataPushPlatform.css';
 
 interface HeaderItem {
   key: string;
   value: string;
+  /** 是否启用（Postman 风格勾选），false 时不参与发送 */
+  enabled?: boolean;
+  /** 备注说明，仅用于展示与持久化 */
+  description?: string;
 }
 
 interface ParameterItem {
@@ -19,6 +24,10 @@ interface ParameterItem {
   value: string;
   type?: 'text' | 'file';
   file?: UploadedFileResult;
+  /** 是否启用（Postman 风格勾选），false 时不参与发送 */
+  enabled?: boolean;
+  /** 备注说明，仅用于展示与持久化 */
+  description?: string;
 }
 
 interface ExtractionRule {
@@ -207,18 +216,168 @@ const MethodBadge: React.FC<{ method: string; size?: 'sm' | 'md' }> = ({ method,
   );
 };
 
+// --- Protocol ---
+
+type PushProtocol = 'http' | 'mqtt' | 'websocket';
+
+// MQTT 徽标（已保存请求列表 / 方法位置）
+const MqttBadge: React.FC<{ size?: 'sm' | 'md' }> = ({ size = 'sm' }) => (
+  <span
+    className="iot-method-badge iot-method-badge--mqtt"
+    style={size === 'md' ? { fontSize: 12, padding: '3px 10px' } : undefined}
+  >
+    MQTT
+  </span>
+);
+
+// WebSocket 徽标
+const WsBadge: React.FC<{ size?: 'sm' | 'md' }> = ({ size = 'sm' }) => (
+  <span
+    className="iot-method-badge iot-method-badge--ws"
+    style={size === 'md' ? { fontSize: 12, padding: '3px 10px' } : undefined}
+  >
+    WS
+  </span>
+);
+
+const createDefaultWsConfig = (): WsConfig => ({
+  url: '',
+  headers: [],
+  maxMessages: 50,
+  timeoutSeconds: 10,
+  protocols: '',
+  sendMessage: '',
+});
+
+// 后端返回的 ws_config 可能缺字段（历史数据或未持久化），这里补齐默认值
+const normalizeWsConfig = (config?: WsConfig | null): WsConfig => {
+  const base = createDefaultWsConfig();
+  if (!config) return base;
+  const maxMessages = Number(config.maxMessages);
+  const timeoutSeconds = Number(config.timeoutSeconds);
+  return {
+    ...base,
+    ...config,
+    headers: Array.isArray(config.headers) ? config.headers : [],
+    maxMessages: Number.isFinite(maxMessages) && maxMessages > 0 ? Math.min(500, Math.floor(maxMessages)) : 50,
+    timeoutSeconds: Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? Math.min(60, Math.floor(timeoutSeconds)) : 10,
+    protocols: config.protocols || '',
+    sendMessage: config.sendMessage || '',
+  };
+};
+
+/** 子协议输入框（逗号分隔）转数组 */
+const parseProtocols = (value?: string): string[] | undefined => {
+  const list = (value || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : undefined;
+};
+
+/** 请求头行数组转对象，过滤空 key */
+const headersToRecord = (headers: Array<{ key: string; value: string; enabled?: boolean }>): Record<string, string> | undefined => {
+  const record: Record<string, string> = {};
+  for (const header of headers) {
+    if (header.enabled === false) continue;
+    if (header.key.trim()) record[header.key.trim()] = header.value;
+  }
+  return Object.keys(record).length > 0 ? record : undefined;
+};
+
+/** WebSocket closed_by 取值转中文说明 */
+const WS_CLOSED_BY_LABELS: Record<string, string> = {
+  server: '服务端关闭',
+  client: '客户端关闭',
+  timeout: '空闲超时',
+  max_messages: '达到最大消息数',
+  error: '连接异常',
+};
+
+const formatClosedBy = (closedBy?: string | null): string =>
+  (closedBy && WS_CLOSED_BY_LABELS[closedBy]) || closedBy || '未知';
+
+const createDefaultMqttConfig = (): MqttConfig => ({
+  broker: '',
+  port: '',
+  topic: '',
+  payload: '',
+  qos: 0,
+  retain: false,
+  client_id: '',
+  username: '',
+  password: '',
+  tls: false,
+});
+
+// 后端返回的 mqtt_config 可能缺字段，这里补齐默认值，避免受控组件拿到 undefined
+const normalizeMqttConfig = (config?: MqttConfig | null): MqttConfig => {
+  const base = createDefaultMqttConfig();
+  if (!config) return base;
+  const qos = Number(config.qos);
+  return {
+    ...base,
+    ...config,
+    port: config.port != null ? String(config.port) : '',
+    qos: qos === 1 || qos === 2 ? qos : 0,
+    retain: Boolean(config.retain),
+    tls: Boolean(config.tls),
+  };
+};
+
+/**
+ * 把 Broker 地址与端口合并成最终连接地址。
+ * - 端口留空：直接用 Broker 地址（地址里没端口时后端按协议取默认端口）
+ * - Broker 已带端口：以地址内的端口为准，忽略端口输入框
+ * - ws/wss 带路径：端口插在 host 与 path 之间，如 ws://host:8083/mqtt
+ */
+const composeBrokerAddress = (config: MqttConfig): string => {
+  const broker = (config.broker || '').trim();
+  const port = (config.port || '').trim();
+  if (!broker || !port) return broker;
+  const schemeMatch = broker.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
+  const rest = schemeMatch ? broker.slice(schemeMatch[0].length) : broker;
+  const slashIndex = rest.indexOf('/');
+  const hostPart = slashIndex >= 0 ? rest.slice(0, slashIndex) : rest;
+  const pathPart = slashIndex >= 0 ? rest.slice(slashIndex) : '';
+  if (/:\d+$/.test(hostPart)) return broker;
+  const withPort = `${hostPart}:${port}${pathPart}`;
+  return schemeMatch ? `${schemeMatch[0]}${withPort}` : withPort;
+};
+
 // --- Tab Interface ---
+
+type ConfigTabKey = 'params' | 'headers' | 'body' | 'extract' | 'mqtt' | 'ws';
+type ResponseTabKey = 'body' | 'headers' | 'messages' | 'result';
 
 interface Tab {
   id: string;
   name: string;
+  /** 协议：HTTP（默认）| MQTT | WebSocket */
+  protocol: PushProtocol;
   method: string;
   url: string;
   headers: HeaderItem[];
   parameters: ParameterItem[];
   postExtractions?: ExtractionRule[];
   body?: string;
+  /** MQTT 配置，仅 protocol === 'mqtt' 时有效 */
+  mqtt?: MqttConfig;
+  /** 最近一次 MQTT 发布结果，仅 protocol === 'mqtt' 时展示 */
+  mqttResult?: MqttPublishResult | null;
+  /** WebSocket 配置，仅 protocol === 'websocket' 时有效 */
+  ws?: WsConfig;
+  /** 最近一次 WebSocket 连接结果，仅 protocol === 'websocket' 时展示 */
+  wsResult?: WsConnectResult | null;
   savedRequestId?: number;
+  /**
+   * 该标签页保存后应归属的文件夹。
+   * - number：文件夹 id
+   * - null：未分类
+   * - undefined：尚未确定（初始标签页 / 从任意位置新建），保存时让用户选择
+   * 已保存的请求用 savedRequestId 对应的记录里的 folder_id 为准。
+   */
+  folderId?: number | null;
   hasUnsavedChanges?: boolean;
   baseline?: string;
   response?: any;
@@ -226,16 +385,19 @@ interface Tab {
 }
 
 const tabContentKey = (
-  tab: Pick<Tab, 'name' | 'method' | 'url' | 'body' | 'headers' | 'parameters' | 'postExtractions'>
+  tab: Pick<Tab, 'name' | 'protocol' | 'method' | 'url' | 'body' | 'headers' | 'parameters' | 'postExtractions' | 'mqtt' | 'ws'>
 ): string =>
   JSON.stringify([
     tab.name,
+    tab.protocol || 'http',
     tab.method,
     tab.url,
     tab.body || '',
     tab.headers || [],
     tab.parameters || [],
     tab.postExtractions || [],
+    tab.protocol === 'mqtt' ? (tab.mqtt || null) : null,
+    tab.protocol === 'websocket' ? (tab.ws || null) : null,
   ]);
 
 const markTabClean = (tab: Tab): Tab => ({
@@ -257,6 +419,80 @@ interface IoTDataPushPlatformProps {
 
 let tabCounter = 0;
 
+// HTTP 徽标（与 MQTT / WS 徽标同一套样式语言）
+const HttpBadge: React.FC<{ size?: 'sm' | 'md' }> = ({ size = 'sm' }) => (
+  <span
+    className="iot-method-badge iot-method-badge--http"
+    style={size === 'md' ? { fontSize: 12, padding: '3px 10px' } : undefined}
+  >
+    HTTP
+  </span>
+);
+
+/** 新建请求时可选的协议类型：与 Postman 的请求类型一致，创建后不可更改 */
+const NEW_REQUEST_TYPES: Array<{ value: PushProtocol; label: string; description: string }> = [
+  { value: 'http', label: 'HTTP', description: 'REST / HTTP 接口调试与数据推送' },
+  { value: 'websocket', label: 'WebSocket', description: '长连接：收发文本 / 二进制消息' },
+  { value: 'mqtt', label: 'MQTT', description: '发布 / 订阅：向 Broker 发布消息' },
+];
+
+const newRequestName = (protocol: PushProtocol): string =>
+  protocol === 'mqtt' ? '新 MQTT 请求' : protocol === 'websocket' ? '新 WebSocket 请求' : '新请求';
+
+/** 在文件夹树中按 id 查找节点（兼容后端扁平 parent_id 与嵌套 children 两种形态） */
+const findFolderById = (
+  nodes: SavedRequestFolder[],
+  id: number,
+): SavedRequestFolder | null => {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const hit = findFolderById(node.children || [], id);
+    if (hit) return hit;
+  }
+  return null;
+};
+
+/** 按名称重排指定文件夹的同级兄弟节点（递归处理整棵树） */
+const sortFolderTree = (
+  nodes: SavedRequestFolder[],
+  targetId: number,
+  direction: 'asc' | 'desc',
+): SavedRequestFolder[] => {
+  const compare = (a: SavedRequestFolder, b: SavedRequestFolder) =>
+    direction === 'asc'
+      ? a.name.localeCompare(b.name, 'zh-Hans-CN')
+      : b.name.localeCompare(a.name, 'zh-Hans-CN');
+
+  const walk = (list: SavedRequestFolder[]): SavedRequestFolder[] => {
+    const mapped = list.map((node) => ({
+      ...node,
+      children: walk(node.children || []),
+    }));
+    // 找到目标节点所在的层级：含目标则排这一层
+    if (mapped.some((node) => node.id === targetId)) {
+      return [...mapped].sort(compare);
+    }
+    return mapped;
+  };
+
+  return walk(nodes);
+};
+
+const buildNewTab = (protocol: PushProtocol, folderId?: number | null): Tab => ({
+  id: 'tab-' + Date.now() + '-' + (++tabCounter),
+  name: newRequestName(protocol),
+  protocol,
+  method: 'GET',
+  url: '',
+  headers: [{ key: 'Content-Type', value: 'application/json' }],
+  parameters: [],
+  body: '',
+  mqtt: createDefaultMqttConfig(),
+  ws: createDefaultWsConfig(),
+  folderId,
+  hasUnsavedChanges: false,
+});
+
 const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   currentEnvironmentId: propEnvironmentId,
   canManageGlobalParams = false,
@@ -265,6 +501,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const [activeTabId, setActiveTabId] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [sendLoading, setSendLoading] = useState(false);
+  const [testLoading, setTestLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [headers, setHeaders] = useState<HeaderItem[]>([{ key: 'Content-Type', value: 'application/json' }]);
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
@@ -273,27 +510,35 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [folders, setFolders] = useState<SavedRequestFolder[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<number | null | undefined>(undefined);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
-  const [creatingParentId, setCreatingParentId] = useState<number | null>(null);
-  const [editingFolderId, setEditingFolderId] = useState<number | null>(null);
-  const [editingFolderName, setEditingFolderName] = useState('');
-  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<number>>(new Set());
-  const [createLoading, setCreateLoading] = useState(false);
   const [environments, setEnvironments] = useState<Environment[]>([{ id: 'env-1', name: '默认环境', parameters: [] }]);
   const [currentEnvironmentId, setCurrentEnvironmentId] = useState<string>(() => {
     return localStorage.getItem('currentEnvironmentId') || 'env-1';
   });
   const [isGlobalParamsModalVisible, setIsGlobalParamsModalVisible] = useState(false);
   const [showPushLog, setShowPushLog] = useState(false);
+  const [isNewRequestModalVisible, setIsNewRequestModalVisible] = useState(false);
+  const [newItemMode, setNewItemMode] = useState<'type' | 'folder'>('type');
+  const [newItemFolderName, setNewItemFolderName] = useState('');
+  const [newItemFolderParent, setNewItemFolderParent] = useState<number>(0);
+  const [creatingFolder, setCreatingFolder] = useState(false);
   const [postExtractions, setPostExtractions] = useState<ExtractionRule[]>([]);
-  const [searchRequests, setSearchRequests] = useState('');
+  /** 保存请求时选择归属文件夹的弹窗：visible + 当前选中值（null = 未分类） */
+  const [saveFolderModalVisible, setSaveFolderModalVisible] = useState(false);
+  const [saveFolderChoice, setSaveFolderChoice] = useState<number | null>(null);
+  const saveFolderResolveRef = useRef<((folderId: number | null | undefined) => void) | null>(null);
 
   const jsonExtensions = useMemo(() => [json()], []);
 
   const activeTab = useMemo(() => tabs.find(t => t.id === activeTabId), [tabs, activeTabId]);
   const response = activeTab?.response || null;
   const responseTime = activeTab?.responseTime || 0;
+  const isMqtt = activeTab?.protocol === 'mqtt';
+  const isWs = activeTab?.protocol === 'websocket';
+  const mqttConfig = normalizeMqttConfig(activeTab?.mqtt);
+  const wsConfig = normalizeWsConfig(activeTab?.ws);
+  const wsResult = activeTab?.wsResult ?? null;
+  const wsMessages = wsResult?.messages ?? [];
+  const wsSucceeded = !!wsResult && wsResult.success !== false && wsResult.connected && !wsResult.error;
 
   const handleBodyChange = useCallback((value: string) => {
     form.setFieldsValue({ body: value });
@@ -302,51 +547,41 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     ));
   }, [activeTabId]);
 
-  // --- Drag Resize ---
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [leftWidth, setLeftWidth] = useState(35);
-  const [middleWidth, setMiddleWidth] = useState(40);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [rightWidth, setRightWidth] = useState(25);
-  const [isDragging, setIsDragging] = useState<'left' | 'right' | null>(null);
-  const startXRef = useRef(0);
-  const startWidthsRef = useRef({ left: 0, middle: 0, right: 0 });
+  // --- Response Split（请求区 / 响应区上下拖拽） ---
 
-  const handleMouseDown = useCallback((divider: 'left' | 'right', e: React.MouseEvent) => {
+  const mainRef = useRef<HTMLDivElement>(null);
+  const tabstripListRef = useRef<HTMLDivElement>(null);
+  const [responseSplit, setResponseSplit] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('iot.responseSplit'));
+    return Number.isFinite(saved) && saved >= 15 && saved <= 85 ? saved : 50;
+  });
+  const [responseCollapsed, setResponseCollapsed] = useState(false);
+  const [isDraggingResponse, setIsDraggingResponse] = useState(false);
+
+  const handleResponseDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    setIsDragging(divider);
-    startXRef.current = e.clientX;
-    startWidthsRef.current = { left: leftWidth, middle: middleWidth, right: rightWidth };
-  }, [leftWidth, middleWidth, rightWidth]);
+    setIsDraggingResponse(true);
+  }, []);
 
   useEffect(() => {
-    if (!isDragging) return;
-    const containerWidth = containerRef.current?.offsetWidth || window.innerWidth;
-    const minW = 15;
-    const savedRightWidth = rightCollapsed ? 0 : startWidthsRef.current.right;
+    if (!isDraggingResponse) return;
+    const rect = mainRef.current?.getBoundingClientRect();
 
     const handleMouseMove = (e: MouseEvent) => {
-      const dx = e.clientX - startXRef.current;
-      const dxPercent = (dx / containerWidth) * 100;
-
-      if (isDragging === 'left') {
-        const newLeft = Math.max(minW, Math.min(containerWidth * 0.6, startWidthsRef.current.left + dxPercent));
-        const newMiddle = 100 - newLeft - savedRightWidth;
-        if (newMiddle >= minW) {
-          setLeftWidth(newLeft);
-          setMiddleWidth(newMiddle);
-        }
-      } else {
-        const newMiddle = Math.max(minW, Math.min(containerWidth * 0.6, startWidthsRef.current.middle + dxPercent));
-        const newRight = 100 - startWidthsRef.current.left - newMiddle;
-        if (newRight >= minW || rightCollapsed) {
-          setMiddleWidth(newMiddle);
-          if (!rightCollapsed) setRightWidth(newRight);
-        }
-      }
+      if (!rect || rect.height <= 0) return;
+      const fromBottom = rect.bottom - e.clientY;
+      // 请求区至少保留 220px（标签条 + 名称行 + 地址行 + 配置区），避免把编辑器压没
+      const maxPercent = Math.max(15, Math.min(85, ((rect.height - 220) / rect.height) * 100));
+      setResponseSplit(Math.max(15, Math.min(maxPercent, (fromBottom / rect.height) * 100)));
     };
 
-    const handleMouseUp = () => setIsDragging(null);
+    const handleMouseUp = () => {
+      setIsDraggingResponse(false);
+      setResponseSplit(prev => {
+        localStorage.setItem('iot.responseSplit', String(Math.round(prev)));
+        return prev;
+      });
+    };
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
@@ -354,7 +589,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, rightCollapsed]);
+  }, [isDraggingResponse]);
 
   // --- Data Fetching ---
 
@@ -377,19 +612,19 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // Initialize default tab
   useEffect(() => {
-    const defaultTab: Tab = {
-      id: `tab-${Date.now()}-${++tabCounter}`,
-      name: '新请求',
-      method: 'GET',
-      url: '',
-      headers: [{ key: 'Content-Type', value: 'application/json' }],
-      parameters: [],
-      body: '',
-      hasUnsavedChanges: false
-    };
+    const defaultTab = buildNewTab('http');
     setTabs([markTabClean(defaultTab)]);
     setActiveTabId(defaultTab.id);
   }, []);
+
+  // 激活标签变化时滚动到可视区域，保证新增按钮不会被挤走
+  useEffect(() => {
+    if (!activeTabId) return;
+    const list = tabstripListRef.current;
+    if (!list) return;
+    const target = list.querySelector<HTMLElement>(`[data-tab-id="${activeTabId}"]`);
+    target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeTabId, tabs.length]);
 
   const getCurrentEnvironment = (): Environment => {
     return environments.find(env => env.id === currentEnvironmentId) || environments[0];
@@ -655,9 +890,22 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     updateCurrentTab({ headers: newHeaders });
   };
 
-  const handleHeaderChange = (index: number, field: 'key' | 'value', value: string) => {
+  const handleHeaderChange = (index: number, field: 'key' | 'value' | 'description', value: string) => {
     const newHeaders = [...headers];
     newHeaders[index] = { ...newHeaders[index], [field]: value };
+    setHeaders(newHeaders);
+    updateCurrentTab({ headers: newHeaders });
+  };
+
+  const handleHeaderToggle = (index: number, enabled: boolean) => {
+    const newHeaders = [...headers];
+    newHeaders[index] = { ...newHeaders[index], enabled };
+    setHeaders(newHeaders);
+    updateCurrentTab({ headers: newHeaders });
+  };
+
+  const handleHeadersToggleAll = (enabled: boolean) => {
+    const newHeaders = headers.map(header => ({ ...header, enabled }));
     setHeaders(newHeaders);
     updateCurrentTab({ headers: newHeaders });
   };
@@ -680,9 +928,22 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     updateCurrentTab({ parameters: newParameters });
   };
 
-  const handleParameterChange = (index: number, field: 'key' | 'value', value: string) => {
+  const handleParameterChange = (index: number, field: 'key' | 'value' | 'description', value: string) => {
     const newParameters = [...parameters];
     newParameters[index] = { ...newParameters[index], [field]: value };
+    setParameters(newParameters);
+    updateCurrentTab({ parameters: newParameters });
+  };
+
+  const handleParameterToggle = (index: number, enabled: boolean) => {
+    const newParameters = [...parameters];
+    newParameters[index] = { ...newParameters[index], enabled };
+    setParameters(newParameters);
+    updateCurrentTab({ parameters: newParameters });
+  };
+
+  const handleParametersToggleAll = (enabled: boolean) => {
+    const newParameters = parameters.map(param => ({ ...param, enabled }));
     setParameters(newParameters);
     updateCurrentTab({ parameters: newParameters });
   };
@@ -724,19 +985,121 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     updateCurrentTab({ postExtractions: newExtractions });
   };
 
+  // --- Protocol / MQTT / WebSocket Handlers ---
+
+  const handleMqttChange = (updates: Partial<MqttConfig>) => {
+    const tab = tabs.find(t => t.id === activeTabId);
+    const current = tab?.mqtt ? normalizeMqttConfig(tab.mqtt) : createDefaultMqttConfig();
+    updateCurrentTab({ mqtt: { ...current, ...updates } });
+  };
+
+  // --- WebSocket handlers ---
+
+  const handleWsChange = (updates: Partial<WsConfig>) => {
+    const tab = tabs.find(t => t.id === activeTabId);
+    const current = tab?.ws ? normalizeWsConfig(tab.ws) : createDefaultWsConfig();
+    updateCurrentTab({ ws: { ...current, ...updates } });
+  };
+
+  const handleWsHeaderChange = (index: number, field: 'key' | 'value' | 'description', value: string) => {
+    const current = normalizeWsConfig(activeTab?.ws);
+    const next = current.headers.map((header, i) =>
+      i === index ? { ...header, [field]: value } : header
+    );
+    handleWsChange({ headers: next });
+  };
+
+  const handleWsHeaderToggle = (index: number, enabled: boolean) => {
+    const current = normalizeWsConfig(activeTab?.ws);
+    const next = current.headers.map((header, i) =>
+      i === index ? { ...header, enabled } : header
+    );
+    handleWsChange({ headers: next });
+  };
+
+  const handleWsHeadersToggleAll = (enabled: boolean) => {
+    const current = normalizeWsConfig(activeTab?.ws);
+    handleWsChange({ headers: current.headers.map(header => ({ ...header, enabled })) });
+  };
+
+  const handleAddWsHeader = () => {
+    const current = normalizeWsConfig(activeTab?.ws);
+    handleWsChange({ headers: [...current.headers, { key: '', value: '' }] });
+  };
+
+  const handleRemoveWsHeader = (index: number) => {
+    const current = normalizeWsConfig(activeTab?.ws);
+    handleWsChange({ headers: current.headers.filter((_, i) => i !== index) });
+  };
+
+  const handleTestWsConnection = async () => {
+    const wsConfigValue = normalizeWsConfig(activeTab?.ws);
+    const url = wsConfigValue.url.trim();
+    if (!url) {
+      message.warning('请先填写 WebSocket 地址');
+      return;
+    }
+    setTestLoading(true);
+    try {
+      const res = await wsApi.testConnection({
+        url,
+        headers: headersToRecord(wsConfigValue.headers),
+        protocols: parseProtocols(wsConfigValue.protocols),
+        timeout_seconds: wsConfigValue.timeoutSeconds,
+      });
+      const result = res.data;
+      if (res.code === 200 && result?.connected) {
+        message.success(`连接成功（${result.duration_ms}ms）`);
+      } else {
+        message.error(`连接失败：${result?.message || res.message || '未知错误'}`);
+      }
+    } catch (error: any) {
+      const detail = error.response?.data?.message || error.response?.data?.detail || error.message;
+      message.error(`连接失败：${detail || '无法建立 WebSocket 连接'}`);
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const handleTestMqttConnection = async () => {
+    const mqtt = activeTab?.mqtt ? normalizeMqttConfig(activeTab.mqtt) : createDefaultMqttConfig();
+    const broker = composeBrokerAddress(mqtt);
+    if (!broker) {
+      message.warning('请先填写 Broker 地址');
+      return;
+    }
+    setTestLoading(true);
+    try {
+      const res = await mqttApi.testConnection({
+        broker,
+        client_id: mqtt.client_id?.trim() || undefined,
+        username: mqtt.username?.trim() || undefined,
+        password: mqtt.password || undefined,
+        tls: mqtt.tls || undefined,
+      });
+      const result = res.data;
+      if (res.code === 200 && result?.connected) {
+        message.success(`连接成功（${result.duration_ms}ms）${result.message ? '：' + result.message : ''}`);
+      } else {
+        message.error(`连接失败：${result?.message || res.message || '未知错误'}`);
+      }
+    } catch (error: any) {
+      const detail = error.response?.data?.message || error.response?.data?.detail || error.message;
+      message.error(`连接失败：${detail || '无法连接到 Broker'}`);
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
   // --- Tab Management ---
 
-  const addNewTab = () => {
-    const newTab: Tab = {
-      id: `tab-${Date.now()}-${++tabCounter}`,
-      name: '新请求',
-      method: 'GET',
-      url: '',
-      headers: [{ key: 'Content-Type', value: 'application/json' }],
-      parameters: [],
-      body: '',
-      hasUnsavedChanges: false
-    };
+  /**
+   * 新建标签页。folderId 只在「明确在某个文件夹下新建」时传入：
+   * 侧栏文件夹「+」→ 该文件夹；侧栏「未分类 +」→ null；
+   * 其他入口不传 → 保存时让用户选择归属文件夹（默认未分类）。
+   */
+  const addNewTab = (protocol: PushProtocol, folderId?: number | null) => {
+    const newTab = buildNewTab(protocol, folderId);
     setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
     setActiveTabId(newTab.id);
   };
@@ -776,16 +1139,38 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       setSaveRequestName(request.name);
       return;
     }
+    const protocol: PushProtocol =
+      request.protocol === 'mqtt' ? 'mqtt' : request.protocol === 'websocket' ? 'websocket' : 'http';
+    const mqttConfig = normalizeMqttConfig(request.mqtt_config);
+    // WS 配置兜底：优先用 ws_config，缺失时用顶层 url/headers 重建，保证不丢 URL
+    const wsConfig = normalizeWsConfig(
+      request.ws_config ?? {
+        url: request.url,
+        headers: (request.headers || []).map(h => ({ key: h.key, value: h.value })),
+        maxMessages: 50,
+        timeoutSeconds: 10,
+      }
+    );
     const newTab: Tab = {
       id: `tab-${Date.now()}-${++tabCounter}`,
       name: request.name,
+      protocol,
       method: request.method,
-      url: request.url,
+      // MQTT 地址落在 mqtt.broker、WS 地址落在 ws.url，HTTP 才用 url
+      url: protocol === 'http' ? request.url : '',
       headers: request.headers,
       parameters: request.parameters || [],
-      body: request.body,
+      body: protocol === 'http' ? request.body : '',
+      mqtt: mqttConfig,
+      ws: wsConfig,
+      // MQTT / WS 没有 HTTP 响应，历史遗留的 response 不带到新标签页
+      response: undefined,
+      responseTime: 0,
+      mqttResult: null,
+      wsResult: null,
       postExtractions: (request as any).post_extractions || [],
       savedRequestId: request.id,
+      folderId: request.folder_id ?? null,
       hasUnsavedChanges: false
     };
     setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
@@ -795,7 +1180,168 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- Send Request ---
 
+  // MQTT 发布：把发布结果转成响应区可展示的结构
+  const handleMqttPublish = async () => {
+    const tab = tabs.find(t => t.id === activeTabId);
+    const mqtt = tab?.mqtt ? normalizeMqttConfig(tab.mqtt) : createDefaultMqttConfig();
+    const broker = composeBrokerAddress(mqtt);
+    const topic = mqtt.topic.trim();
+
+    if (!broker) {
+      message.warning('请先填写 Broker 地址');
+      return;
+    }
+    if (!topic) {
+      message.warning('请先填写 Topic');
+      return;
+    }
+
+    const envId = canManageGlobalParams ? parseInt(currentEnvironmentId) || null : null;
+    // 本地参数按后端 build_param_map 约定传 [{key,value}]，与环境参数合并后替换 {{variable}}
+    const envParams = getCurrentEnvironment().parameters
+      .filter(param => param.key && param.value)
+      .map(param => ({ key: param.key, value: param.value }));
+
+    setSendLoading(true);
+    try {
+      const res = await mqttApi.publish({
+        broker,
+        topic,
+        payload: mqtt.payload || '',
+        qos: mqtt.qos,
+        retain: mqtt.retain,
+        client_id: mqtt.client_id?.trim() || undefined,
+        username: mqtt.username?.trim() || undefined,
+        password: mqtt.password || undefined,
+        tls: mqtt.tls || undefined,
+        environment_id: envId,
+        parameters: envParams.length > 0 ? envParams : undefined,
+      });
+
+      const result: MqttPublishResult = res.data ?? {
+        success: false,
+        broker,
+        topic,
+        qos: mqtt.qos,
+        retain: mqtt.retain,
+        payload: mqtt.payload || '',
+        duration_ms: 0,
+        error: res.message || '发布失败',
+      };
+
+      // 发布结果不回写 mqtt 配置（避免 trim 造成的"未保存"误判），只更新展示状态
+      updateCurrentTab({
+        mqttResult: result,
+        responseTime: result.duration_ms || 0,
+      });
+
+      if (res.code === 200 && result.success) {
+        message.success(`发布成功（${result.duration_ms}ms）→ ${result.topic || topic}`);
+      } else {
+        message.error(`发布失败: ${result.error || res.message || '未知错误'}`);
+      }
+    } catch (error: any) {
+      const detail = error.response?.data?.message || error.response?.data?.detail || error.message || '未知错误';
+      updateCurrentTab({
+        mqttResult: {
+          success: false,
+          broker,
+          topic,
+          qos: mqtt.qos,
+          retain: mqtt.retain,
+          payload: mqtt.payload || '',
+          duration_ms: 0,
+          error: String(detail),
+        },
+        responseTime: 0,
+      });
+      message.error(`发布失败: ${detail}`);
+    } finally {
+      setSendLoading(false);
+    }
+  };
+
+  // WebSocket 连接：连接并采集消息，结果写入标签页供消息流面板展示
+  const handleWsConnect = async () => {
+    const wsValue = normalizeWsConfig(activeTab?.ws);
+    const url = wsValue.url.trim();
+    if (!url) {
+      message.warning('请先填写 WebSocket 地址');
+      return;
+    }
+
+    const envId = canManageGlobalParams ? parseInt(currentEnvironmentId) || null : null;
+    const envParams = getCurrentEnvironment().parameters
+      .filter(param => param.key && param.value)
+      .map(param => ({ key: param.key, value: param.value }));
+
+    setSendLoading(true);
+    const startedAt = Date.now();
+    try {
+      const res = await wsApi.connect({
+        url,
+        headers: headersToRecord(wsValue.headers),
+        environment_id: envId,
+        parameters: envParams.length > 0 ? envParams : undefined,
+        max_messages: wsValue.maxMessages,
+        timeout_seconds: wsValue.timeoutSeconds,
+        protocols: parseProtocols(wsValue.protocols),
+        send_message: wsValue.sendMessage?.trim() || undefined,
+      });
+
+      const result: WsConnectResult = res.data ?? {
+        success: false,
+        url,
+        connected: false,
+        messages: [],
+        received: 0,
+        duration_ms: Date.now() - startedAt,
+        closed_by: 'error',
+        error: res.message || '连接失败',
+      };
+
+      updateCurrentTab({ wsResult: result, responseTime: result.duration_ms || 0 });
+
+      if (res.code === 200 && result.success !== false && result.connected) {
+        message.success(`连接成功，收到 ${result.received} 条消息（${result.duration_ms}ms）`);
+      } else if (res.code === 200 && result.connected) {
+        // 连接成功但被服务端关闭 / 超时，属于正常结束
+        message.info(`连接已结束（${result.closed_by}），收到 ${result.received} 条消息`);
+      } else {
+        message.error(`连接失败: ${result.error || res.message || '未知错误'}`);
+      }
+    } catch (error: any) {
+      const detail = error.response?.data?.message || error.response?.data?.detail || error.message || '未知错误';
+      updateCurrentTab({
+        wsResult: {
+          success: false,
+          url,
+          connected: false,
+          messages: [],
+          received: 0,
+          duration_ms: Date.now() - startedAt,
+          closed_by: 'error',
+          error: String(detail),
+        },
+        responseTime: 0,
+      });
+      message.error(`连接失败: ${detail}`);
+    } finally {
+      setSendLoading(false);
+    }
+  };
+
   const handleSendRequest = async () => {
+    // MQTT 分支：无 URL/请求体概念，走独立发布流程
+    if (activeTab?.protocol === 'mqtt') {
+      await handleMqttPublish();
+      return;
+    }
+    // WebSocket 分支：连接并采集消息
+    if (activeTab?.protocol === 'websocket') {
+      await handleWsConnect();
+      return;
+    }
     try {
       const values = await form.validateFields();
       const { method, url, body } = values;
@@ -804,18 +1350,18 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       const startTime = Date.now();
 
       const processedHeaders = headers.reduce((acc, header) => {
-        if (header.key && header.value) acc[header.key] = header.value;
+        if (header.enabled !== false && header.key && header.value) acc[header.key] = header.value;
         return acc;
       }, {} as Record<string, string>);
 
       const processedParams = parameters.reduce((acc, param) => {
-        if (param.key && param.value) acc[param.key] = param.value;
+        if (param.enabled !== false && param.key && param.value) acc[param.key] = param.value;
         return acc;
       }, {} as Record<string, string>);
 
       const fileParams: Array<{ key: string; fileId: string; fileName: string }> = [];
       for (const param of parameters) {
-        if (param.type === 'file' && param.key && param.file) {
+        if (param.enabled !== false && param.type === 'file' && param.key && param.file) {
           fileParams.push({ key: param.key, fileId: param.file.fileId, fileName: param.file.fileName });
         }
       }
@@ -887,26 +1433,82 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- Save Request ---
 
+  /**
+   * 弹出「选择保存位置」对话框，返回用户选中的文件夹 id。
+   * - number：具体文件夹
+   * - null：未分类（用户不选 / 明确选未分类）
+   * - undefined：用户取消（放弃本次保存）
+   */
+  const promptSaveFolder = (): Promise<number | null | undefined> => {
+    // 上一次未关闭的弹窗先结算，避免 Promise 悬挂
+    saveFolderResolveRef.current?.(undefined);
+    setSaveFolderChoice(null);
+    setSaveFolderModalVisible(true);
+    return new Promise<number | null | undefined>((resolve) => {
+      saveFolderResolveRef.current = resolve;
+    });
+  };
+
+  const closeSaveFolderModal = (folderId: number | null | undefined) => {
+    setSaveFolderModalVisible(false);
+    const resolve = saveFolderResolveRef.current;
+    saveFolderResolveRef.current = null;
+    if (resolve) resolve(folderId);
+  };
+
   const handleSaveRequest = async () => {
     try {
-      const values = await form.validateFields();
-      const { method, url, body } = values;
-
       const currentTab = tabs.find(t => t.id === activeTabId);
-      const requestName = currentTab?.name?.trim() || '新请求';
+      const protocol: PushProtocol =
+        currentTab?.protocol === 'mqtt' ? 'mqtt' : currentTab?.protocol === 'websocket' ? 'websocket' : 'http';
+      // MQTT / WS 请求不校验 HTTP URL 字段（表单里 URL 输入框被 Broker/Topic 或 WS URL 替代）
+      const isHttp = protocol === 'http';
+      const values = isHttp
+        ? await form.validateFields()
+        : {} as { method?: string; url?: string; body?: string };
+      const method = isHttp ? values.method : (currentTab?.method || 'GET');
+      const url = isHttp ? values.url : '';
+      const body = isHttp ? values.body : '';
 
-      setSaveLoading(true);
+      const requestName = currentTab?.name?.trim() || '新请求';
 
       // 保存目标以"当前标签页"的 savedRequestId 为准。
       // 不能用组件级 state 判断：切换标签页后，同一次渲染里读到的仍是上一个标签页的值，
       // 会导致保存写到错误的记录（标签页 id 一直不更新）。
       const targetSavedId = currentTab?.savedRequestId ?? null;
 
+      const mqttConfig = currentTab?.mqtt ? normalizeMqttConfig(currentTab.mqtt) : createDefaultMqttConfig();
+      const wsConfigValue = currentTab?.ws ? normalizeWsConfig(currentTab.ws) : createDefaultWsConfig();
+
+      // —— 归属文件夹 ——
+      // 1) 已保存的请求：保留它当前所在的文件夹（侧栏可能已拖拽调整，不该被保存动作改掉）；
+      // 2) 新建的请求：用标签页创建时绑定的文件夹（文件夹上「+」新建时才有）；
+      // 3) 没有绑定（比如标签条「+」或「新建」对话框创建）：弹窗让用户选择，
+      //    不选择则落到「未分类」。这里刻意不再用侧栏当前选中的文件夹做默认值。
+      const existingSaved = targetSavedId != null ? savedRequests.find(r => r.id === targetSavedId) : undefined;
+      let folderIdForSave: number | null;
+      if (existingSaved) {
+        folderIdForSave = existingSaved.folder_id ?? null;
+      } else if (currentTab?.folderId !== undefined) {
+        folderIdForSave = currentTab.folderId;
+      } else {
+        const pickedFolderId = await promptSaveFolder();
+        // undefined = 用户关闭了弹窗，视为取消本次保存
+        if (pickedFolderId === undefined) return;
+        folderIdForSave = pickedFolderId;
+      }
+
+      setSaveLoading(true);
+
       const payload: any = {
         name: requestName,
         method, url, headers, parameters, body,
         post_extractions: postExtractions,
-        folder_id: selectedFolderId !== undefined ? selectedFolderId : null,
+        folder_id: folderIdForSave,
+        protocol,
+        // HTTP / MQTT 请求不写 ws_config，避免污染历史数据
+        mqtt_config: isMqtt ? mqttConfig : null,
+        ws_config: protocol === 'websocket' ? wsConfigValue : null,
       };
 
       const applySaved = (saved: SavedRequest, created: boolean) => {
@@ -914,7 +1516,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           ? prev.map(r => (r.id === saved.id ? saved : r))
           : [saved, ...prev]);
         setTabs(prevTabs => prevTabs.map(tab =>
-          tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, method, url, headers, parameters, body, postExtractions, savedRequestId: saved.id }) : tab
+          tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, protocol, method, url, headers, parameters, body, postExtractions, mqtt: mqttConfig, ws: wsConfigValue, savedRequestId: saved.id, folderId: folderIdForSave }) : tab
         ));
         message.success(created ? '请求配置已保存' : '请求配置已更新');
       };
@@ -946,8 +1548,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       console.error('Save request failed:', error);
       message.error('保存请求配置失败');
     } finally {
-      const apiFolderId = selectedFolderId === null ? -1 : selectedFolderId;
-      fetchSavedRequests(apiFolderId);
+      // 侧栏树需要全量数据才能正确分组，保存后统一拉全量，避免分组错乱
+      fetchSavedRequests();
       setSaveLoading(false);
     }
   };
@@ -990,7 +1592,12 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         headers: record.headers,
         parameters: record.parameters,
         body: record.body,
-        post_extractions: (record as any).post_extractions
+        post_extractions: (record as any).post_extractions,
+        // 副本跟随原请求归属：原请求在哪个文件夹，副本就落在哪个文件夹（未分类则同为未分类）
+        folder_id: record.folder_id ?? null,
+        protocol: record.protocol === 'mqtt' ? 'mqtt' : record.protocol === 'websocket' ? 'websocket' : 'http',
+        mqtt_config: record.protocol === 'mqtt' ? normalizeMqttConfig(record.mqtt_config) : null,
+        ws_config: record.protocol === 'websocket' ? normalizeWsConfig(record.ws_config) : null,
       } as any);
       if (response.code === 200 && response.data) {
         setSavedRequests([response.data, ...savedRequests]);
@@ -1006,50 +1613,44 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- Folder Handlers ---
 
+  // 侧栏树一次性取全量请求，这里只保留选中态（新建请求归属该文件夹）
   const handleSelectFolder = (folderId: number | null | undefined) => {
     setSelectedFolderId(folderId);
-    // undefined → all, null → uncategorized (-1), number → specific folder
-    const apiFolderId = folderId === null ? -1 : folderId;
-    fetchSavedRequests(apiFolderId);
   };
 
-  const handleCreateFolder = async (parentId?: number | null) => {
-    if (!newFolderName.trim()) return;
-    setCreateLoading(true);
+  const handleCreateFolder = async (name: string, parentId: number | null): Promise<boolean> => {
+    if (!name.trim()) return false;
     try {
-      const payload: any = { name: newFolderName.trim() };
+      const payload: any = { name: name.trim() };
       if (parentId) payload.parent_id = parentId;
       const response = await savedRequestFolderApi.createFolder(payload);
       if (response.code === 200 && response.data) {
-        setNewFolderName('');
-        setShowNewFolderInput(false);
-        setCreatingParentId(null);
-        if (parentId) {
-          setExpandedFolderIds(prev => new Set(prev).add(parentId));
-        }
         fetchFolders();
         message.success('文件夹已创建');
+        return true;
       }
+      return false;
     } catch (error) {
       console.error('Create folder failed:', error);
       message.error('创建文件夹失败');
-    } finally {
-      setCreateLoading(false);
+      return false;
     }
   };
 
-  const handleRenameFolder = async (folderId: number) => {
-    if (!editingFolderName.trim()) return;
+  const handleRenameFolder = async (folderId: number, name: string): Promise<boolean> => {
+    if (!name.trim()) return false;
     try {
-      const response = await savedRequestFolderApi.updateFolder(folderId, { name: editingFolderName.trim() });
+      const response = await savedRequestFolderApi.updateFolder(folderId, { name: name.trim() });
       if (response.code === 200 && response.data) {
-        setEditingFolderId(null);
         fetchFolders();
         message.success('文件夹已重命名');
+        return true;
       }
+      return false;
     } catch (error) {
       console.error('Rename folder failed:', error);
       message.error('重命名文件夹失败');
+      return false;
     }
   };
 
@@ -1065,9 +1666,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         try {
           const response = await savedRequestFolderApi.deleteFolder(folderId);
           if (response.code === 200) {
-            if (selectedFolderId === folderId) {
-              setSelectedFolderId(undefined);
-            }
+            if (selectedFolderId === folderId) setSelectedFolderId(undefined);
             fetchFolders();
             message.success('文件夹已删除');
           } else {
@@ -1081,102 +1680,178 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     });
   };
 
-  // --- Recursive Folder Tree Renderer ---
-
-  const toggleFolderExpand = (folderId: number) => {
-    setExpandedFolderIds(prev => {
-      const next = new Set(prev);
-      if (next.has(folderId)) next.delete(folderId);
-      else next.add(folderId);
-      return next;
-    });
+  /** 重命名已保存的请求（侧栏行内编辑，直接落库） */
+  const handleRenameRequest = async (id: number, name: string): Promise<boolean> => {
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    try {
+      const response = await savedRequestApi.updateRequest(id, { name: trimmed });
+      if (response.code === 200) {
+        setSavedRequests(prev => prev.map(r => (r.id === id ? { ...r, name: trimmed } : r)));
+        // 已打开的标签页同步名称，避免侧栏与标签页不一致
+        setTabs(prev => prev.map(tab =>
+          tab.savedRequestId === id ? { ...tab, name: trimmed } : tab
+        ));
+        message.success('请求已重命名');
+        return true;
+      }
+      message.error(response.message || '重命名请求失败');
+      return false;
+    } catch (error) {
+      console.error('Rename request failed:', error);
+      message.error('重命名请求失败');
+      return false;
+    }
   };
 
-  const renderFolderTreeNodes = (nodes: SavedRequestFolder[], depth: number): React.ReactNode => {
-    return nodes.map(f => {
-      const hasChildren = f.children && f.children.length > 0;
-      const isExpanded = expandedFolderIds.has(f.id);
+  // --- Postman 风格文件夹操作 ---
 
-      return (
-        <React.Fragment key={f.id}>
-          <div
-            className={`iot-folder-item ${selectedFolderId === f.id ? 'is-active' : ''}`}
-            style={{ paddingLeft: 8 + depth * 16 }}
-          >
-            <span className="iot-folder-toggle" onClick={(e) => { e.stopPropagation(); toggleFolderExpand(f.id); }}>
-              {hasChildren ? (
-                isExpanded ? <DownOutlined style={{ fontSize: 10 }} /> : <RightOutlined style={{ fontSize: 10 }} />
-              ) : (
-                <span style={{ width: 10, display: 'inline-block' }} />
-              )}
-            </span>
-            <div
-              style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}
-              onClick={() => handleSelectFolder(f.id)}
-            >
-              {editingFolderId === f.id ? (
-                <Input
-                  size="small"
-                  value={editingFolderName}
-                  onChange={(e) => setEditingFolderName(e.target.value)}
-                  onPressEnter={() => handleRenameFolder(f.id)}
-                  onBlur={() => handleRenameFolder(f.id)}
-                  style={{ height: 22, fontSize: 12, padding: '0 6px' }}
-                  onClick={(e) => e.stopPropagation()}
-                  autoFocus
-                />
-              ) : (
-                <>
-                  <FolderOpenOutlined style={{ fontSize: 13, flexShrink: 0 }} />
-                  <span className="iot-folder-item-name">{f.name}</span>
-                </>
-              )}
-            </div>
-            <div className="iot-folder-item-actions">
-              <Button type="text" size="small" icon={<PlusOutlined />} className="iot-folder-action-btn" onClick={(e) => { e.stopPropagation(); setShowNewFolderInput(true); setCreatingParentId(f.id); setNewFolderName(''); }} />
-              <Button type="text" size="small" className="iot-folder-action-btn" onClick={(e) => { e.stopPropagation(); setEditingFolderId(f.id); setEditingFolderName(f.name); }}>重命名</Button>
-              <Button type="text" size="small" className="iot-folder-action-btn iot-folder-action-btn--danger" onClick={(e) => { e.stopPropagation(); handleDeleteFolder(f.id); }}>删除</Button>
-            </div>
-          </div>
-          {/* Inline create subfolder input */}
-          <div className={`iot-folder-create-inline iot-folder-create-inline--sub ${showNewFolderInput && creatingParentId === f.id ? 'is-visible' : ''}`}
-               style={{ paddingLeft: 8 + (depth + 1) * 16 }}>
-            <div className="iot-folder-create-label">新建子文件夹</div>
-            <div className="iot-folder-create-row">
-              <Input
-                size="small"
-                placeholder="输入文件夹名称"
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                onPressEnter={() => handleCreateFolder(f.id)}
-                className="iot-folder-create-input"
-              />
-              <Space size={4}>
-                <Button
-                  size="small"
-                  type="primary"
-                  loading={createLoading}
-                  onClick={() => handleCreateFolder(f.id)}
-                  className="iot-btn-primary"
-                  style={{ minWidth: 52, height: 28 }}
-                >
-                  确定
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); setCreatingParentId(null); }}
-                  style={{ minWidth: 52, height: 28 }}
-                >
-                  取消
-                </Button>
-              </Space>
-            </div>
-          </div>
-          {/* Children */}
-          {hasChildren && isExpanded && renderFolderTreeNodes(f.children, depth + 1)}
-        </React.Fragment>
-      );
+  /** 新建请求：在指定文件夹内直接新建一个 HTTP 标签页，并将其作为保存归属 */
+  const handleAddRequestInFolder = (folderId: number | null) => {
+    setSelectedFolderId(folderId);
+    addNewTab('http', folderId);
+  };
+
+  /** 创建副本：复制文件夹（含层级关系），名称追加「副本」 */
+  const handleDuplicateFolder = async (folderId: number) => {
+    const source = findFolderById(folders, folderId);
+    if (!source) return;
+    try {
+      setLoading(true);
+      const response = await savedRequestFolderApi.createFolder({
+        name: `${source.name} 副本`,
+        parent_id: source.parent_id ?? null,
+      });
+      if (response.code === 200) {
+        await fetchFolders();
+        message.success('文件夹已复制');
+      } else {
+        message.error(response.message || '复制文件夹失败');
+      }
+    } catch (error) {
+      console.error('Duplicate folder failed:', error);
+      message.error('复制文件夹失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** 排序：按名称重排同级文件夹（本地排序，不改后端数据） */
+  const handleSortFolder = (folderId: number, direction: 'asc' | 'desc') => {
+    setFolders((prev) => sortFolderTree(prev, folderId, direction));
+  };
+
+  /**
+   * 拖拽后保存布局：把受影响父级的完整顺序提交后端，再重拉侧栏数据。
+   * 这里不做乐观更新——后端按列表下标写回 sort_order 并同步归属，
+   * 重拉一次即可拿到权威顺序，同时把「拖进别的文件夹」的结果同步到请求列表。
+   */
+  const handleSaveLayout = async (groups: SavedRequestLayoutGroup[]): Promise<boolean> => {
+    if (groups.length === 0) return true;
+    try {
+      setLoading(true);
+      const response = await savedRequestFolderApi.saveLayout(groups);
+      if (response.code !== 200) {
+        message.error(response.message || '保存排序失败');
+        return false;
+      }
+      await Promise.all([fetchFolders(), fetchSavedRequests()]);
+      return true;
+    } catch (error) {
+      console.error('Save layout failed:', error);
+      message.error('保存排序失败');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- 新建（请求类型 / 文件夹，与 Postman 的 New 对话框一致） ---
+
+  /** 上级文件夹可选列表：兼容后端返回嵌套 children 或扁平 parent_id 两种形态 */
+  const flatFolderOptions = useMemo(() => {
+    const out: Array<{ id: number; label: string }> = [];
+    const hasNested = folders.some(folder => (folder.children || []).length > 0);
+    if (hasNested) {
+      const walk = (nodes: SavedRequestFolder[], depth: number) => {
+        nodes.forEach(node => {
+          out.push({ id: node.id, label: '　'.repeat(depth) + node.name });
+          if (node.children && node.children.length > 0) walk(node.children, depth + 1);
+        });
+      };
+      walk(folders, 0);
+    } else {
+      const byParent = new Map<number | null, SavedRequestFolder[]>();
+      folders.forEach(folder => {
+        const key = folder.parent_id ?? null;
+        byParent.set(key, [...(byParent.get(key) || []), folder]);
+      });
+      const walk = (parentId: number | null, depth: number) => {
+        (byParent.get(parentId) || []).forEach(node => {
+          out.push({ id: node.id, label: '　'.repeat(depth) + node.name });
+          walk(node.id, depth + 1);
+        });
+      };
+      walk(null, 0);
+      folders.forEach(folder => {
+        if (!out.some(item => item.id === folder.id)) out.push({ id: folder.id, label: folder.name });
+      });
+    }
+    return out;
+  }, [folders]);
+
+  /** 保存请求弹窗的文件夹选择树（未分类由「清空选择」表达，这里只列真实文件夹） */
+  const saveFolderTreeData = useMemo(() => {
+    type FolderTreeNode = { title: string; value: number; key: number; children: FolderTreeNode[] };
+    const hasNested = folders.some(folder => (folder.children || []).length > 0);
+    if (hasNested) {
+      const walk = (nodes: SavedRequestFolder[]): FolderTreeNode[] =>
+        nodes.map(folder => ({
+          title: folder.name,
+          value: folder.id,
+          key: folder.id,
+          children: walk(folder.children || []),
+        }));
+      return walk(folders);
+    }
+    const byParent = new Map<number | null, SavedRequestFolder[]>();
+    folders.forEach(folder => {
+      const key = folder.parent_id ?? null;
+      byParent.set(key, [...(byParent.get(key) || []), folder]);
     });
+    const walk = (parentId: number | null): FolderTreeNode[] =>
+      (byParent.get(parentId) || []).map(folder => ({
+        title: folder.name,
+        value: folder.id,
+        key: folder.id,
+        children: walk(folder.id),
+      }));
+    return walk(null);
+  }, [folders]);
+
+  const openNewItemModal = () => {
+    setNewItemMode('type');
+    setNewItemFolderName('');
+    setNewItemFolderParent(0);
+    setIsNewRequestModalVisible(true);
+  };
+
+  const closeNewItemModal = () => {
+    setIsNewRequestModalVisible(false);
+    setNewItemMode('type');
+    setNewItemFolderName('');
+  };
+
+  const handleCreateFolderFromModal = async () => {
+    const name = newItemFolderName.trim();
+    if (!name) {
+      message.warning('请输入文件夹名称');
+      return;
+    }
+    setCreatingFolder(true);
+    const created = await handleCreateFolder(name, newItemFolderParent > 0 ? newItemFolderParent : null);
+    setCreatingFolder(false);
+    if (created) closeNewItemModal();
   };
 
   // --- Response Status Helper ---
@@ -1198,263 +1873,724 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     }
   }, [response?.data]);
 
-  // --- Saved Requests Filtered ---
-  const filteredSavedRequests = useMemo(() =>
-    savedRequests.filter(r => !searchRequests || r.name.toLowerCase().includes(searchRequests.toLowerCase())),
-    [savedRequests, searchRequests]
-  );
+  // --- Postman 风格展示态（仅影响渲染，不改动既有数据流） ---
+
+  const [configTabs, setConfigTabs] = useState<Record<string, ConfigTabKey>>({});
+  const [responseTabs, setResponseTabs] = useState<Record<string, ResponseTabKey>>({});
+
+  const defaultConfigTab = (protocol?: PushProtocol): ConfigTabKey =>
+    protocol === 'mqtt' ? 'mqtt' : protocol === 'websocket' ? 'ws' : 'params';
+
+  const currentConfigTab: ConfigTabKey = activeTabId
+    ? (configTabs[activeTabId] || defaultConfigTab(activeTab?.protocol))
+    : 'params';
+
+  const setCurrentConfigTab = (key: ConfigTabKey) => {
+    if (!activeTabId) return;
+    setConfigTabs(prev => ({ ...prev, [activeTabId]: key }));
+  };
+
+  const currentResponseTab: ResponseTabKey = activeTabId ? (responseTabs[activeTabId] || 'body') : 'body';
+
+  const setCurrentResponseTab = (key: ResponseTabKey) => {
+    if (!activeTabId) return;
+    setResponseTabs(prev => ({ ...prev, [activeTabId]: key }));
+  };
+
+  const responseText = useMemo(() => {
+    if (!response) return '';
+    if (typeof response.data === 'string') return response.data;
+    try {
+      return JSON.stringify(response.data, null, 2);
+    } catch {
+      return String(response.data ?? '');
+    }
+  }, [response]);
+
+  const responseSize = useMemo(() => new Blob([responseText]).size, [responseText]);
+
+  const responseHeaders = useMemo<Record<string, string>>(() => {
+    const raw = (response as { headers?: unknown } | null)?.headers;
+    if (!raw || typeof raw !== 'object') return {};
+    const out: Record<string, string> = {};
+    Object.entries(raw as Record<string, unknown>).forEach(([key, value]) => {
+      if (value == null) return;
+      out[key] = Array.isArray(value) ? value.join(', ') : String(value);
+    });
+    return out;
+  }, [response]);
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  };
+
+  const handleCopyResponse = () => {
+    const payload = isMqtt ? activeTab?.mqttResult : isWs ? activeTab?.wsResult : response;
+    if (payload == null) return;
+    navigator.clipboard.writeText(typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2));
+    message.success('已复制到剪贴板');
+  };
+
+  const renderResponseHeaders = () => {
+    const entries = Object.entries(responseHeaders);
+    if (entries.length === 0) {
+      return (
+        <div className="iot-response-empty">
+          <span className="iot-response-empty-text">未返回响应头</span>
+        </div>
+      );
+    }
+    return (
+      <div className="iot-response-headers-table">
+        {entries.map(([key, value]) => (
+          <div className="iot-response-headers-row" key={key}>
+            <span className="iot-response-headers-key">{key}</span>
+            <span className="iot-response-headers-value">{value}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const configTabItems = (): Array<{ key: ConfigTabKey; label: string }> => {
+    if (isMqtt) {
+      return [
+        { key: 'mqtt', label: '连接配置' },
+        { key: 'body', label: 'Payload' },
+      ];
+    }
+    if (isWs) {
+      return [
+        { key: 'ws', label: '连接配置' },
+        { key: 'headers', label: '请求头' + (wsConfig.headers.length ? ' (' + wsConfig.headers.length + ')' : '') },
+      ];
+    }
+    const items: Array<{ key: ConfigTabKey; label: string }> = [
+      { key: 'params', label: '参数' + (parameters.length ? ' (' + parameters.length + ')' : '') },
+      { key: 'headers', label: '请求头' + (headers.length ? ' (' + headers.length + ')' : '') },
+      { key: 'body', label: '请求体' },
+    ];
+    if (canManageGlobalParams) {
+      items.push({ key: 'extract', label: '后置提取' + (postExtractions.length ? ' (' + postExtractions.length + ')' : '') });
+    }
+    return items;
+  };
+
+  const renderKvTable = (opts: {
+    items: Array<{ key: string; value: string; enabled?: boolean; description?: string }>;
+    onChange: (index: number, field: 'key' | 'value' | 'description', value: string) => void;
+    onRemove: (index: number) => void;
+    onAdd: () => void;
+    onToggle?: (index: number, enabled: boolean) => void;
+    onToggleAll?: (enabled: boolean) => void;
+    addLabel: string;
+    keyPlaceholder?: string;
+    valuePlaceholder?: string;
+    withEnabled?: boolean;
+    withDescription?: boolean;
+    keyWidth?: number;
+    renderLeading?: (item: { key: string; value: string; enabled?: boolean; description?: string }, index: number) => React.ReactNode;
+    renderValue?: (item: { key: string; value: string; enabled?: boolean; description?: string }, index: number) => React.ReactNode;
+  }) => {
+    const withEnabled = opts.withEnabled !== false;
+    const withDescription = opts.withDescription !== false;
+    const allEnabled = opts.items.length > 0 && opts.items.every(item => item.enabled !== false);
+    const tableClass = 'iot-kv-table'
+      + (withEnabled ? '' : ' iot-kv-table--no-enabled')
+      + (withDescription ? '' : ' iot-kv-table--no-desc');
+    return (
+      <div className={tableClass}>
+        <div className="iot-kv-table-head">
+          {withEnabled && (
+            <Checkbox
+              checked={allEnabled}
+              indeterminate={!allEnabled && opts.items.some(item => item.enabled !== false)}
+              onChange={(e) => opts.onToggleAll && opts.onToggleAll(e.target.checked)}
+            />
+          )}
+          <span>Key</span>
+          <span>Value</span>
+          {withDescription && <span>描述</span>}
+          <span />
+        </div>
+        {opts.items.length === 0 && (
+          <div className="iot-kv-table-empty">暂无内容，点击下方按钮添加</div>
+        )}
+        {opts.items.map((item, index) => (
+          <div className={'iot-kv-table-row' + (item.enabled === false ? ' is-disabled' : '')} key={index}>
+            {withEnabled && (
+              <Checkbox
+                checked={item.enabled !== false}
+                onChange={(e) => opts.onToggle && opts.onToggle(index, e.target.checked)}
+              />
+            )}
+            <Space size={6} style={{ width: '100%', minWidth: 0, overflow: 'hidden' }}>
+              {opts.renderLeading && opts.renderLeading(item, index)}
+              <Input
+                size="small"
+                placeholder={opts.keyPlaceholder || 'Key'}
+                value={item.key}
+                onChange={(e) => opts.onChange(index, 'key', e.target.value)}
+                style={{ width: opts.keyWidth || 180, flex: 1, minWidth: 0 }}
+              />
+            </Space>
+            <div className="iot-kv-table-value">
+              {opts.renderValue ? opts.renderValue(item, index) : (
+                <Input
+                  size="small"
+                  placeholder={opts.valuePlaceholder || 'Value'}
+                  value={item.value}
+                  onChange={(e) => opts.onChange(index, 'value', e.target.value)}
+                />
+              )}
+            </div>
+            {withDescription && (
+              <Input
+                size="small"
+                placeholder="备注（可选）"
+                value={item.description || ''}
+                onChange={(e) => opts.onChange(index, 'description', e.target.value)}
+              />
+            )}
+            <Button size="small" icon={<MinusOutlined />} className="iot-delete-btn" onClick={() => opts.onRemove(index)} />
+          </div>
+        ))}
+        <Button type="dashed" icon={<PlusOutlined />} onClick={opts.onAdd} className="iot-add-btn" block>
+          {opts.addLabel}
+        </Button>
+      </div>
+    );
+  };
 
   // --- Render ---
 
   return (
     <div className="iot-container">
-      {/* Toolbar */}
-      <div className="iot-toolbar">
-        <span className="iot-toolbar-title">
-          <ApiOutlined style={{ fontSize: 16 }} />
-          IoT 数据推送平台
-        </span>
-        <Space>
-          <Button
-            icon={<HistoryOutlined />}
-            onClick={() => setShowPushLog(true)}
-          >
-            请求记录
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={addNewTab}
-            className="iot-btn-primary"
-          >
-            新增请求
-          </Button>
-        </Space>
-      </div>
+      <div className="iot-workspace">
+        <IoTRequestSidebar
+          folders={folders}
+          requests={savedRequests}
+          loading={loading}
+          selectedFolderId={selectedFolderId}
+          activeSavedRequestId={activeTab?.savedRequestId}
+          onSelectFolder={handleSelectFolder}
+          onOpenRequest={createTabFromSavedRequest}
+          onCopyRequest={handleCopySavedRequest}
+          onDeleteRequest={handleDeleteSavedRequest}
+          onCreateFolder={handleCreateFolder}
+          onRenameFolder={handleRenameFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onRefresh={() => { fetchSavedRequests(); fetchFolders(); }}
+          onOpenPushLog={() => setShowPushLog(true)}
+          onOpenNewItem={openNewItemModal}
+          onAddRequest={handleAddRequestInFolder}
+          onRenameRequest={handleRenameRequest}
+          onDuplicateFolder={handleDuplicateFolder}
+          onSortFolder={handleSortFolder}
+          onSaveLayout={handleSaveLayout}
+        />
 
-      {/* Three-panel Layout */}
-      <div ref={containerRef} className="iot-layout">
-        {/* Left Panel: Request Config */}
-        <div
-          className={`iot-panel iot-panel-left ${sendLoading ? 'is-sending' : ''}`}
-          style={{ width: `${rightCollapsed ? leftWidth + rightWidth / 2 : leftWidth}%` }}
-        >
-          <Tabs
-            activeKey={activeTabId}
-            onChange={setActiveTabId}
-            size="small"
-            className="iot-tabs"
-            style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-            items={tabs.map(tab => ({
-              key: tab.id,
-              label: (
-                <Space size={4}>
-                  <span className={tab.hasUnsavedChanges ? 'iot-tab-unsaved' : ''}>{tab.name}</span>
+        <div ref={mainRef} className="iot-main">
+          {/* 请求标签条 */}
+          <div className="iot-tabstrip">
+            <div ref={tabstripListRef} className="iot-tabstrip-list">
+              {tabs.map(tab => (
+                <div
+                  key={tab.id}
+                  data-tab-id={tab.id}
+                  className={'iot-tab' + (tab.id === activeTabId ? ' is-active' : '')}
+                  onClick={() => setActiveTabId(tab.id)}
+                  title={tab.name}
+                >
+                  {tab.protocol === 'mqtt' ? <MqttBadge /> : tab.protocol === 'websocket' ? <WsBadge /> : <MethodBadge method={tab.method} />}
+                  <span className={'iot-tab-name' + (tab.hasUnsavedChanges ? ' iot-tab-unsaved' : '')}>{tab.name}</span>
                   <button
                     className="iot-tab-close"
                     onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
                   >
                     &times;
                   </button>
-                </Space>
-              ),
-              children: (
-                <div style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                  {/* Editable Request Name */}
-                  <div className="iot-request-name-bar">
-                    <input
-                      className="iot-request-name-input"
-                      value={activeTab?.name || ''}
-                      onChange={(e) => {
-                        const newName = e.target.value;
-                        setTabs(prevTabs => prevTabs.map(tab =>
-                          tab.id === activeTabId ? applyTabChange(tab, { name: newName }) : tab
-                        ));
-                        setSaveRequestName(newName);
-                      }}
-                      placeholder="未命名请求"
-                    />
-                    {activeTab?.hasUnsavedChanges && <span className="iot-unsaved-dot" title="有未保存的更改" />}
-                  </div>
+                </div>
+              ))}
+              <Tooltip title="新建 HTTP 请求" overlayClassName="iot-tooltip" placement="bottom">
+                <button
+                  type="button"
+                  className="iot-tabstrip-add"
+                  onClick={() => addNewTab('http')}
+                  aria-label="新建 HTTP 请求"
+                >
+                  <PlusOutlined />
+                </button>
+              </Tooltip>
+            </div>
+          </div>
 
-                  <Form form={form} layout="vertical" size="middle" className="iot-form" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                    {/* URL Bar + Actions */}
-                    <div className="iot-url-bar">
-                      <Space.Compact style={{ flex: 1, minWidth: 0 }}>
-                        <Form.Item name="method" noStyle>
-                          <Select
-                            style={{ width: 110 }}
-                            className="iot-method-select"
-                            onChange={(value: string) => updateCurrentTab({ method: value })}
-                          >
-                            {methods.map(m => (
-                              <Select.Option key={m} value={m}>
-                                <MethodBadge method={m} size="md" />
-                              </Select.Option>
-                            ))}
-                          </Select>
-                        </Form.Item>
-                        <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
-                          <Input
-                            placeholder="请输入请求 URL，支持 {{variable}} 变量"
-                            className="iot-url-input"
-                            onChange={(e) => updateCurrentTab({ url: e.target.value })}
-                          />
-                        </Form.Item>
-                        <Form.Item name="body" hidden>
-                          <Input />
-                        </Form.Item>
-                      </Space.Compact>
-                      <div className="iot-url-actions">
+          {/* 请求名 + 协议 + 保存 */}
+          <div className="iot-request-header">
+            <Tooltip title="请求类型在新建时选定，创建后不可更改" overlayClassName="iot-tooltip">
+              <span className="iot-request-protocol">
+                {isMqtt ? <MqttBadge size="md" /> : isWs ? <WsBadge size="md" /> : <HttpBadge size="md" />}
+              </span>
+            </Tooltip>
+            <input
+              className="iot-request-name-input"
+              value={activeTab?.name || ''}
+              onChange={(e) => {
+                const newName = e.target.value;
+                setTabs(prevTabs => prevTabs.map(tab =>
+                  tab.id === activeTabId ? applyTabChange(tab, { name: newName }) : tab
+                ));
+                setSaveRequestName(newName);
+              }}
+              placeholder="未命名请求"
+            />
+            {activeTab?.hasUnsavedChanges && <span className="iot-unsaved-dot" title="有未保存的更改" />}
+            <Tooltip
+              title={activeTab?.savedRequestId != null ? '更新已保存的请求配置' : '保存为新请求配置'}
+              overlayClassName="iot-tooltip"
+            >
+              <Button icon={<SaveOutlined />} onClick={handleSaveRequest} loading={saveLoading} className="iot-btn-save">
+                保存
+              </Button>
+            </Tooltip>
+          </div>
+
+          <Form form={form} layout="vertical" size="middle" className="iot-form" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+            <div className={`iot-url-bar${isMqtt ? ' iot-url-bar--mqtt' : ''}`}>
+              {isMqtt ? (
+                <div className="iot-mqtt-address-bar">
+                  <div className="iot-mqtt-address-row">
+                    <Input
+                      value={mqttConfig.broker}
+                      className="iot-broker-input"
+                      placeholder="mqtt://host:1883"
+                      onChange={(e) => handleMqttChange({ broker: e.target.value })}
+                      addonBefore={<span className="iot-mqtt-addon">Broker</span>}
+                    />
+                    <Input
+                      value={mqttConfig.port || ''}
+                      className="iot-port-input"
+                      placeholder="1883"
+                      title="端口：留空则使用地址中的端口，或按协议默认（1883/8883/8083/8084）"
+                      onChange={(e) => handleMqttChange({ port: e.target.value.replace(/[^0-9]/g, '') })}
+                      addonBefore={<span className="iot-mqtt-addon">端口</span>}
+                    />
+                  </div>
+                  <Input
+                    value={mqttConfig.topic}
+                    className="iot-topic-input"
+                    placeholder="Topic，如 iot/device/1/data，支持 {{variable}}"
+                    onChange={(e) => handleMqttChange({ topic: e.target.value })}
+                    addonBefore={<span className="iot-mqtt-addon">Topic</span>}
+                  />
+                </div>
+              ) : isWs ? (
+                <div className="iot-ws-address-bar">
+                  <Input
+                    value={wsConfig.url}
+                    className="iot-ws-url-input"
+                    placeholder="ws://host:port/path?id=xxx&token=xxx，支持 {{variable}}"
+                    onChange={(e) => handleWsChange({ url: e.target.value })}
+                    onPressEnter={handleSendRequest}
+                    addonBefore={<span className="iot-mqtt-addon">WS</span>}
+                  />
+                </div>
+              ) : (
+                <Space.Compact style={{ flex: 1, minWidth: 0 }}>
+                  <Form.Item name="method" noStyle>
+                    <Select
+                      style={{ width: 110 }}
+                      className="iot-method-select"
+                      onChange={(value: string) => updateCurrentTab({ method: value })}
+                    >
+                      {methods.map(m => (
+                        <Select.Option key={m} value={m}>
+                          <MethodBadge method={m} size="md" />
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                  <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
+                    <Input
+                      placeholder="请输入请求 URL，支持 {{variable}} 变量"
+                      className="iot-url-input"
+                      onChange={(e) => updateCurrentTab({ url: e.target.value })}
+                    />
+                  </Form.Item>
+                </Space.Compact>
+              )}
+              <Form.Item name="body" hidden>
+                <Input />
+              </Form.Item>
+              <div className="iot-url-actions">
+                {isMqtt && (
+                  <Tooltip title="测试与 Broker 的连通性" overlayClassName="iot-tooltip">
+                    <Button
+                      icon={<SyncOutlined />}
+                      onClick={handleTestMqttConnection}
+                      loading={testLoading}
+                      className="iot-btn-test-connection"
+                    >
+                      测试连接
+                    </Button>
+                  </Tooltip>
+                )}
+                {isWs && (
+                  <Tooltip title="测试 WebSocket 握手连通性" overlayClassName="iot-tooltip">
+                    <Button
+                      icon={<SyncOutlined />}
+                      onClick={handleTestWsConnection}
+                      loading={testLoading}
+                      className="iot-btn-test-connection"
+                    >
+                      测试连接
+                    </Button>
+                  </Tooltip>
+                )}
+                <Button
+                  type="primary"
+                  className={`iot-btn-send ${sendLoading ? 'is-loading' : ''}`}
+                  icon={<SendOutlined />}
+                  onClick={handleSendRequest}
+                  loading={sendLoading}
+                >
+                  {isMqtt ? '发布' : isWs ? '连接' : '发送'}
+                </Button>
+              </div>
+            </div>
+
+            <div className="iot-config-area">
+              <div className="iot-config-tabs">
+                {configTabItems().map(item => (
+                  <button
+                    key={item.key}
+                    className={'iot-config-tab' + (currentConfigTab === item.key ? ' is-active' : '')}
+                    onClick={() => setCurrentConfigTab(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <div className="iot-config-body">
+                {isMqtt ? (
+                  currentConfigTab === 'body' ? (
+                    <div className="iot-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                      <div className="iot-panel-header">
+                        <span className="iot-panel-header-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {isMqtt ? 'Payload' : '请求体'}
+                          {isMqtt && <Tag className="iot-mqtt-payload-tag" color="purple">MQTT</Tag>}
+                        </span>
                         <Button
-                          type="primary"
-                          className={`iot-btn-send ${sendLoading ? 'is-loading' : ''}`}
-                          icon={<SendOutlined />}
-                          onClick={handleSendRequest}
-                          loading={sendLoading}
+                          type="text"
+                          icon={<FormatPainterOutlined />}
+                          className="iot-format-btn"
+                          onClick={() => {
+                            const currentBody = isMqtt ? mqttConfig.payload : form.getFieldValue('body');
+                            if (currentBody) {
+                              try {
+                                const formatted = formatJsonWithComments(currentBody);
+                                if (isMqtt) {
+                                  handleMqttChange({ payload: formatted });
+                                } else {
+                                  form.setFieldsValue({ body: formatted });
+                                  updateCurrentTab({ body: formatted });
+                                }
+                                message.success('JSON 格式化成功');
+                              } catch {
+                                message.error('JSON 格式不正确');
+                              }
+                            }
+                          }}
+                          size="small"
                         >
-                          发送
+                          格式化
                         </Button>
-                        <Tooltip title={activeTab?.savedRequestId != null ? '更新已保存的请求配置' : '保存为新请求配置'} overlayClassName="iot-tooltip">
-                          <Button
-                            icon={<SaveOutlined />}
-                            onClick={handleSaveRequest}
-                            loading={saveLoading}
-                            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}
-                          />
-                        </Tooltip>
+                      </div>
+                      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} className="iot-codemirror">
+                        <CodeMirror
+                          value={isMqtt ? mqttConfig.payload : (form.getFieldValue('body') || '')}
+                          height="100%"
+                          extensions={jsonExtensions}
+                          onChange={isMqtt
+                            ? (value: string) => handleMqttChange({ payload: value })
+                            : handleBodyChange}
+                          placeholder={isMqtt ? '请输入要发布的 Payload（JSON 或纯文本），支持 {{variable}} 变量' : '请输入请求体（JSON 格式）'}
+                          basicSetup={{
+                            lineNumbers: true,
+                            foldGutter: true,
+                            highlightActiveLine: true,
+                          }}
+                        />
                       </div>
                     </div>
-
-                    {/* Scrollable Config Sections */}
-                    <div style={{ flex: 1, overflow: 'auto', padding: '0 14px 14px' }}>
-
-                    {/* Headers */}
-                    <Form.Item label="请求头" style={{ marginBottom: 12 }}>
-                      <div className="iot-kv-section">
-                        {headers.map((header, index) => (
-                          <div className="iot-kv-row" key={index}>
-                            <Input
-                              placeholder="Key"
-                              value={header.key}
-                              onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
-                              style={{ width: 180 }}
-                            />
-                            <Input
-                              placeholder="Value"
-                              value={header.value}
-                              onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
-                              style={{ flex: 1 }}
-                            />
-                            <Button
-                              icon={<MinusOutlined />}
-                              className="iot-delete-btn"
-                              onClick={() => handleRemoveHeader(index)}
-                            />
-                          </div>
-                        ))}
-                        <Button
-                          type="dashed"
-                          icon={<PlusOutlined />}
-                          onClick={handleAddHeader}
-                          className="iot-add-btn"
-                          block
-                        >
-                          添加请求头
-                        </Button>
+                  ) : (
+                    <div className="iot-mqtt-config">
+                      <div className="iot-mqtt-config-title">MQTT 连接配置</div>
+                      <div className="iot-mqtt-field iot-mqtt-field--full">
+                        <span className="iot-mqtt-label">QoS</span>
+                        <Select
+                          value={mqttConfig.qos}
+                          className="iot-mqtt-qos"
+                          onChange={(value) => handleMqttChange({ qos: value as 0 | 1 | 2 })}
+                          options={[
+                            { value: 0, label: '0 · 最多一次' },
+                            { value: 1, label: '1 · 至少一次' },
+                            { value: 2, label: '2 · 恰好一次' },
+                          ]}
+                        />
                       </div>
-                    </Form.Item>
-
-                    {/* Parameters */}
-                    <Form.Item label="请求参数" style={{ marginBottom: canManageGlobalParams ? 12 : 0 }}>
-                      <div className="iot-kv-section">
-                        {parameters.map((param, index) => (
-                          <div key={index} style={{ marginBottom: 6, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                            <div className="iot-param-type">
+                      <div className="iot-mqtt-field iot-mqtt-field--full">
+                        <span className="iot-mqtt-label">Retain</span>
+                        <div className="iot-mqtt-switch-group">
+                          <Switch
+                            checked={mqttConfig.retain}
+                            size="small"
+                            onChange={(checked) => handleMqttChange({ retain: checked })}
+                          />
+                          <span className="iot-mqtt-switch-hint">保留最后一条消息</span>
+                        </div>
+                      </div>
+                      <div className="iot-mqtt-field iot-mqtt-field--full">
+                        <span className="iot-mqtt-label">TLS</span>
+                        <div className="iot-mqtt-switch-group">
+                          <Switch
+                            checked={mqttConfig.tls}
+                            size="small"
+                            onChange={(checked) => handleMqttChange({ tls: checked })}
+                          />
+                          <span className="iot-mqtt-switch-hint">加密连接（8883 / wss）</span>
+                        </div>
+                      </div>
+                      <div className="iot-mqtt-field iot-mqtt-field--full">
+                        <span className="iot-mqtt-label">Client ID</span>
+                        <Input
+                          value={mqttConfig.client_id}
+                          placeholder="留空则由 Broker 自动分配"
+                          onChange={(e) => handleMqttChange({ client_id: e.target.value })}
+                        />
+                      </div>
+                      <div className="iot-mqtt-field iot-mqtt-field--full">
+                        <span className="iot-mqtt-label">Username</span>
+                        <Input
+                          value={mqttConfig.username}
+                          placeholder="可选"
+                          onChange={(e) => handleMqttChange({ username: e.target.value })}
+                        />
+                      </div>
+                      <div className="iot-mqtt-field iot-mqtt-field--full">
+                        <span className="iot-mqtt-label">Password</span>
+                        <Input.Password
+                          value={mqttConfig.password}
+                          placeholder="可选"
+                          onChange={(e) => handleMqttChange({ password: e.target.value })}
+                        />
+                      </div>
+                      <div className="iot-mqtt-hint">
+                        Payload 在「Payload」分页编辑，支持 {'{{variable}}'} 变量替换
+                      </div>
+                    </div>
+                  )
+                ) : isWs ? (
+                  currentConfigTab === 'headers' ? (
+                    <div className="iot-config-section">
+                      {renderKvTable({
+                        items: wsConfig.headers,
+                        onChange: handleWsHeaderChange,
+                        onRemove: handleRemoveWsHeader,
+                        onAdd: handleAddWsHeader,
+                        onToggle: handleWsHeaderToggle,
+                        onToggleAll: handleWsHeadersToggleAll,
+                        addLabel: '添加请求头',
+                      })}
+                    </div>
+                  ) : (
+                    <div className="iot-ws-config">
+                      <div className="iot-ws-config-title">WebSocket 连接配置</div>
+                      <div className="iot-ws-field iot-ws-field--full">
+                        <span className="iot-ws-label">最大消息数</span>
+                        <InputNumber
+                          min={1}
+                          max={500}
+                          precision={0}
+                          value={wsConfig.maxMessages}
+                          onChange={(value) => handleWsChange({ maxMessages: typeof value === 'number' ? value : 50 })}
+                        />
+                      </div>
+                      <div className="iot-ws-field iot-ws-field--full">
+                        <span className="iot-ws-label">空闲超时</span>
+                        <InputNumber
+                          min={1}
+                          max={60}
+                          precision={0}
+                          value={wsConfig.timeoutSeconds}
+                          onChange={(value) => handleWsChange({ timeoutSeconds: typeof value === 'number' ? value : 10 })}
+                          addonAfter="秒"
+                        />
+                      </div>
+                      <div className="iot-ws-field iot-ws-field--full">
+                        <span className="iot-ws-label">子协议</span>
+                        <Input
+                          value={wsConfig.protocols || ''}
+                          placeholder="可选，多个用英文逗号分隔，如 graphql-ws,json"
+                          onChange={(e) => handleWsChange({ protocols: e.target.value })}
+                        />
+                      </div>
+                      <div className="iot-ws-field iot-ws-field--full iot-ws-field--textarea">
+                        <span className="iot-ws-label">首发消息</span>
+                        <Input.TextArea
+                          rows={2}
+                          value={wsConfig.sendMessage || ''}
+                          placeholder="连接成功后先发送一条文本消息（可选）"
+                          onChange={(e) => handleWsChange({ sendMessage: e.target.value })}
+                        />
+                      </div>
+                      <div className="iot-ws-hint">
+                        收到的消息在响应区「消息流」查看，支持 {'{{variable}}'} 变量替换
+                      </div>
+                    </div>
+                  )
+                ) : (
+                  <>
+                    {currentConfigTab === 'params' && (
+                      <div className="iot-config-section">
+                        {renderKvTable({
+                          items: parameters,
+                          onChange: handleParameterChange,
+                          onRemove: handleRemoveParameter,
+                          onAdd: handleAddParameter,
+                          onToggle: handleParameterToggle,
+                          onToggleAll: handleParametersToggleAll,
+                          addLabel: '添加参数',
+                          keyPlaceholder: '参数名',
+                          valuePlaceholder: '参数值',
+                          renderLeading: (item, index) => {
+                            const param = item as ParameterItem;
+                            return (
                               <Radio.Group
                                 value={param.type || 'text'}
                                 size="small"
                                 optionType="button"
                                 buttonStyle="solid"
-                                options={[
-                                  { label: '文本', value: 'text' },
-                                  { label: '文件', value: 'file' },
-                                ]}
+                                options={[{ label: '文本', value: 'text' }, { label: '文件', value: 'file' }]}
                                 onChange={(e) => handleParameterTypeChange(index, e.target.value as 'text' | 'file')}
                               />
-                            </div>
-                            <Input
-                              placeholder="参数名"
-                              value={param.key}
-                              onChange={(e) => handleParameterChange(index, 'key', e.target.value)}
-                              style={{ width: 140 }}
-                            />
-                            {param.type === 'file' ? (
-                              <div style={{ flex: 1, minWidth: 200 }}>
-                                <FileUpload
-                                  value={param.file ? [param.file] : []}
-                                  onChange={(files) => handleParameterFileChange(index, files[0])}
-                                  maxSize={50}
-                                  onUploadSuccess={(result) => {
-                                    const newParams = [...parameters];
-                                    newParams[index] = { ...newParams[index], file: result, value: result.fileId };
-                                    setParameters(newParams);
-                                  }}
-                                  baseUrl={getCurrentEnvironment().parameters.find(p => p.key === 'baseUrl')?.value}
-                                  accessToken={getCurrentEnvironment().parameters.find(p => p.key === 'access-token')?.value}
+                            );
+                          },
+                          renderValue: (item, index) => {
+                            const param = item as ParameterItem;
+                            if (param.type !== 'file') {
+                              return (
+                                <Input
+                                  size="small"
+                                  placeholder="参数值"
+                                  value={param.value}
+                                  onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
                                 />
-                              </div>
-                            ) : (
-                              <Input
-                                placeholder="参数值"
-                                value={param.value}
-                                onChange={(e) => handleParameterChange(index, 'value', e.target.value)}
-                                style={{ flex: 1, minWidth: 150 }}
+                              );
+                            }
+                            return (
+                              <FileUpload
+                                value={param.file ? [param.file] : []}
+                                onChange={(files) => handleParameterFileChange(index, files[0])}
+                                maxSize={50}
+                                onUploadSuccess={(result) => {
+                                  const newParams = [...parameters];
+                                  newParams[index] = { ...newParams[index], file: result, value: result.fileId };
+                                  setParameters(newParams);
+                                }}
+                                baseUrl={getCurrentEnvironment().parameters.find(p => p.key === 'baseUrl')?.value}
+                                accessToken={getCurrentEnvironment().parameters.find(p => p.key === 'access-token')?.value}
                               />
-                            )}
-                            <Button
-                              icon={<MinusOutlined />}
-                              className="iot-delete-btn"
-                              onClick={() => handleRemoveParameter(index)}
-                            />
-                          </div>
-                        ))}
+                            );
+                          },
+                        })}
+                      </div>
+                    )}
+                    {currentConfigTab === 'headers' && (
+                      <div className="iot-config-section">
+                        {renderKvTable({
+                          items: headers,
+                          onChange: handleHeaderChange,
+                          onRemove: handleRemoveHeader,
+                          onAdd: handleAddHeader,
+                          onToggle: handleHeaderToggle,
+                          onToggleAll: handleHeadersToggleAll,
+                          addLabel: '添加请求头',
+                        })}
+                      </div>
+                    )}
+                    {currentConfigTab === 'body' && (
+                    <div className="iot-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                      <div className="iot-panel-header">
+                        <span className="iot-panel-header-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {isMqtt ? 'Payload' : '请求体'}
+                          {isMqtt && <Tag className="iot-mqtt-payload-tag" color="purple">MQTT</Tag>}
+                        </span>
                         <Button
-                          type="dashed"
-                          icon={<PlusOutlined />}
-                          onClick={handleAddParameter}
-                          className="iot-add-btn"
-                          block
+                          type="text"
+                          icon={<FormatPainterOutlined />}
+                          className="iot-format-btn"
+                          onClick={() => {
+                            const currentBody = isMqtt ? mqttConfig.payload : form.getFieldValue('body');
+                            if (currentBody) {
+                              try {
+                                const formatted = formatJsonWithComments(currentBody);
+                                if (isMqtt) {
+                                  handleMqttChange({ payload: formatted });
+                                } else {
+                                  form.setFieldsValue({ body: formatted });
+                                  updateCurrentTab({ body: formatted });
+                                }
+                                message.success('JSON 格式化成功');
+                              } catch {
+                                message.error('JSON 格式不正确');
+                              }
+                            }
+                          }}
+                          size="small"
                         >
-                          添加参数
+                          格式化
                         </Button>
                       </div>
-                    </Form.Item>
-
-                    {/* Post Extractions */}
-                    {canManageGlobalParams && (
-                      <Form.Item
-                        label={
-                          <Space size={4}>
-                            <span>后置提取</span>
-                            <Tooltip
-                              title={
-                                <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-                                  <div>从响应 JSON 中提取值并保存到当前环境变量</div>
-                                  <div style={{ marginTop: 4, fontWeight: 600 }}>JSONPath 语法示例：</div>
-                                  <div><code>$.data.token</code> — 提取 data.token</div>
-                                  <div><code>$.data.list[0].id</code> — 提取数组第一项的 id</div>
-                                  <div><code>$..name</code> — 递归查找所有 name 字段</div>
-                                </div>
-                              }
-                              overlayClassName="iot-tooltip"
-                            >
-                              <QuestionCircleOutlined style={{ color: 'var(--color-text-tertiary)', fontSize: 13 }} />
-                            </Tooltip>
-                          </Space>
-                        }
-                        style={{ marginBottom: 0 }}
-                      >
+                      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} className="iot-codemirror">
+                        <CodeMirror
+                          value={isMqtt ? mqttConfig.payload : (form.getFieldValue('body') || '')}
+                          height="100%"
+                          extensions={jsonExtensions}
+                          onChange={isMqtt
+                            ? (value: string) => handleMqttChange({ payload: value })
+                            : handleBodyChange}
+                          placeholder={isMqtt ? '请输入要发布的 Payload（JSON 或纯文本），支持 {{variable}} 变量' : '请输入请求体（JSON 格式）'}
+                          basicSetup={{
+                            lineNumbers: true,
+                            foldGutter: true,
+                            highlightActiveLine: true,
+                          }}
+                        />
+                      </div>
+                    </div>
+                    )}
+                    {currentConfigTab === 'extract' && canManageGlobalParams && (
+                      <div className="iot-config-section">
+                        <div className="iot-config-section-hint">
+                          从响应 JSON 中提取值并保存到当前环境变量
+                          <Tooltip
+                            title={
+                              <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+                                <div>从响应 JSON 中提取值并保存到当前环境变量</div>
+                                <div style={{ marginTop: 4, fontWeight: 600 }}>JSONPath 语法示例：</div>
+                                <div><code>$.data.token</code> — 提取 data.token</div>
+                                <div><code>$.data.list[0].id</code> — 提取数组第一项的 id</div>
+                                <div><code>$..name</code> — 递归查找所有 name 字段</div>
+                              </div>
+                            }
+                            overlayClassName="iot-tooltip"
+                          >
+                            <QuestionCircleOutlined style={{ color: 'var(--color-text-tertiary)', fontSize: 13 }} />
+                          </Tooltip>
+                        </div>
                         {postExtractions.length === 0 ? (
                           <div className="iot-extraction-empty">
                             暂无提取规则
@@ -1463,317 +2599,404 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                             </Button>
                           </div>
                         ) : (
-                          <div className="iot-kv-section">
-                            {postExtractions.map((rule, index) => (
-                              <div className="iot-kv-row" key={index}>
-                                <Input
-                                  placeholder="变量名"
-                                  value={rule.variable}
-                                  onChange={(e) => handleExtractionChange(index, 'variable', e.target.value)}
-                                  style={{ width: 140 }}
-                                />
-                                <Input
-                                  placeholder="JSONPath，如 $.data.token"
-                                  value={rule.jsonpath}
-                                  onChange={(e) => handleExtractionChange(index, 'jsonpath', e.target.value)}
-                                  style={{ flex: 1 }}
-                                />
-                                <Button
-                                  icon={<MinusOutlined />}
-                                  className="iot-delete-btn"
-                                  onClick={() => handleRemoveExtraction(index)}
-                                />
-                              </div>
-                            ))}
-                            <Button
-                              type="dashed"
-                              icon={<PlusOutlined />}
-                              onClick={handleAddExtraction}
-                              className="iot-add-btn"
-                              block
-                            >
-                              添加提取规则
-                            </Button>
-                          </div>
+                          renderKvTable({
+                            items: postExtractions.map(rule => ({ key: rule.variable, value: rule.jsonpath })),
+                            onChange: (index, field, value) => {
+                              if (field === 'key') handleExtractionChange(index, 'variable', value);
+                              else if (field === 'value') handleExtractionChange(index, 'jsonpath', value);
+                            },
+                            onRemove: handleRemoveExtraction,
+                            onAdd: handleAddExtraction,
+                            addLabel: '添加提取规则',
+                            keyPlaceholder: '变量名',
+                            valuePlaceholder: 'JSONPath，如 $.data.token',
+                            withEnabled: false,
+                            withDescription: false,
+                          })
                         )}
-                      </Form.Item>
+                      </div>
                     )}
-                    </div>
-                  </Form>
-                </div>
-              )
-            }))}
-          />
-        </div>
-
-        {/* Left Drag Handle */}
-        {!rightCollapsed && (
-          <div
-            className={`iot-drag-handle ${isDragging === 'left' ? 'is-active' : ''}`}
-            onMouseDown={(e) => handleMouseDown('left', e)}
-          />
-        )}
-
-        {/* Middle Panel: Request Body + Response */}
-        <div
-          className="iot-panel-middle"
-          style={{ width: rightCollapsed ? `${middleWidth + rightWidth / 2}%` : `${middleWidth}%` }}
-        >
-          {/* Request Body */}
-          <div className="iot-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <div className="iot-panel-header">
-              <span className="iot-panel-header-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                请求体
-              </span>
-              <Button
-                type="text"
-                icon={<FormatPainterOutlined />}
-                className="iot-format-btn"
-                onClick={() => {
-                  const currentBody = form.getFieldValue('body');
-                  if (currentBody) {
-                    try {
-                      const formatted = formatJsonWithComments(currentBody);
-                      form.setFieldsValue({ body: formatted });
-                      updateCurrentTab({ body: formatted });
-                      message.success('JSON 格式化成功');
-                    } catch {
-                      message.error('JSON 格式不正确');
-                    }
-                  }
-                }}
-                size="small"
-              >
-                格式化
-              </Button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} className="iot-codemirror">
-              <CodeMirror
-                value={form.getFieldValue('body') || ''}
-                height="100%"
-                extensions={jsonExtensions}
-                onChange={handleBodyChange}
-                placeholder="请输入请求体（JSON 格式）"
-                basicSetup={{
-                  lineNumbers: true,
-                  foldGutter: true,
-                  highlightActiveLine: true,
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Response */}
-          <div className="iot-response-container">
-            {response ? (
-              <>
-                <div className="iot-response-header">
-                  <div className="iot-response-status">
-                    <span className="iot-panel-header-title">响应结果</span>
-                    <span className={`iot-response-status-code ${getStatusClass(response.status)}`}>
-                      {response.status} {response.statusText}
-                    </span>
-                    <span className="iot-response-time">
-                      耗时: <strong>{responseTime}ms</strong>
-                    </span>
-                  </div>
-                  <Button
-                    icon={<CopyOutlined />}
-                    className="iot-copy-btn"
-                    onClick={() => {
-                      navigator.clipboard.writeText(JSON.stringify(response.data, null, 2));
-                      message.success('响应结果已复制到剪贴板');
-                    }}
-                    size="small"
-                  >
-                    复制
-                  </Button>
-                </div>
-                <div className="iot-response-body">
-                  {responseHtml ? (
-                    <pre
-                      className="iot-response-pre"
-                      dangerouslySetInnerHTML={{ __html: responseHtml }}
-                    />
-                  ) : (
-                    <pre className="iot-response-pre">
-                      {typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2)}
-                    </pre>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="iot-response-empty">
-                <SendOutlined className="iot-response-empty-icon" />
-                <span className="iot-response-empty-text">点击发送按钮查看响应结果</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Drag Handle */}
-        {!rightCollapsed && (
-          <div
-            className={`iot-drag-handle ${isDragging === 'right' ? 'is-active' : ''}`}
-            onMouseDown={(e) => handleMouseDown('right', e)}
-          />
-        )}
-
-        {/* Right Panel: Saved Requests */}
-        <div
-          className={`iot-panel iot-panel-right ${rightCollapsed ? 'is-collapsed' : ''}`}
-          style={{
-            width: rightCollapsed ? 0 : `${rightWidth}%`,
-            minWidth: rightCollapsed ? 0 : 200,
-            overflow: 'hidden',
-            transition: rightCollapsed ? 'width 0.25s ease, min-width 0.25s ease' : undefined,
-          }}
-        >
-          {rightCollapsed && (
-            <Tooltip title="展开保存的请求" placement="left" overlayClassName="iot-tooltip">
-              <button className="iot-collapse-btn" onClick={() => setRightCollapsed(false)}>
-                <LeftOutlined style={{ fontSize: 12 }} />
-              </button>
-            </Tooltip>
-          )}
-
-          {!rightCollapsed && (
-            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <div className="iot-panel-header">
-                <span className="iot-panel-header-title">保存的请求</span>
-                <Space size={4}>
-                  <Button
-                    icon={<SyncOutlined />}
-                    className="iot-refresh-btn"
-                    onClick={() => { fetchSavedRequests(selectedFolderId); fetchFolders(); }}
-                    size="small"
-                    loading={loading}
-                  />
-                  <Tooltip title="收起" overlayClassName="iot-tooltip">
-                    <Button
-                      type="text"
-                      icon={<RightOutlined />}
-                      onClick={() => setRightCollapsed(true)}
-                      size="small"
-                      style={{ color: 'var(--color-text-tertiary)' }}
-                    />
-                  </Tooltip>
-                </Space>
-              </div>
-
-              {/* Folder Navigation — Tree */}
-              <div style={{ padding: '8px 12px 4px', borderBottom: '1px solid var(--color-border)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', flex: 1 }}>文件夹</span>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<PlusOutlined />}
-                    onClick={() => { setShowNewFolderInput(true); setCreatingParentId(null); setNewFolderName(''); }}
-                    style={{ color: 'var(--color-text-tertiary)' }}
-                  />
-                </div>
-                <div className={`iot-folder-create-inline ${showNewFolderInput && creatingParentId === null ? 'is-visible' : ''}`}>
-                  <div className="iot-folder-create-label">新建根文件夹</div>
-                  <div className="iot-folder-create-row">
-                    <Input
-                      size="small"
-                      placeholder="输入文件夹名称"
-                      value={newFolderName}
-                      onChange={(e) => setNewFolderName(e.target.value)}
-                      onPressEnter={() => handleCreateFolder(null)}
-                      className="iot-folder-create-input"
-                    />
-                    <Space size={4}>
-                      <Button
-                        size="small"
-                        type="primary"
-                        loading={createLoading}
-                        onClick={() => handleCreateFolder(null)}
-                        className="iot-btn-primary"
-                        style={{ minWidth: 52, height: 28 }}
-                      >
-                        确定
-                      </Button>
-                      <Button
-                        size="small"
-                        onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); setCreatingParentId(null); }}
-                        style={{ minWidth: 52, height: 28 }}
-                      >
-                        取消
-                      </Button>
-                    </Space>
-                  </div>
-                </div>
-                <div className="iot-folder-list">
-                  <div
-                    className={`iot-folder-item ${selectedFolderId === undefined ? 'is-active' : ''}`}
-                    onClick={() => handleSelectFolder(undefined)}
-                  >
-                    <FolderOutlined style={{ fontSize: 13 }} />
-                    <span>全部请求</span>
-                  </div>
-                  <div
-                    className={`iot-folder-item ${selectedFolderId === null ? 'is-active' : ''}`}
-                    onClick={() => handleSelectFolder(null)}
-                  >
-                    <InboxOutlined style={{ fontSize: 13 }} />
-                    <span>未分类</span>
-                  </div>
-                  {renderFolderTreeNodes(folders, 0)}
-                </div>
-              </div>
-
-              {/* Search */}
-              <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border)' }}>
-                <Input.Search
-                  placeholder="搜索名称..."
-                  allowClear
-                  size="small"
-                  className="iot-search-input"
-                  onChange={(e) => setSearchRequests(e.target.value)}
-                  onSearch={(val) => setSearchRequests(val)}
-                />
-              </div>
-
-              {/* Saved Request List */}
-              <div className="iot-saved-list">
-                {filteredSavedRequests.length === 0 ? (
-                  <div className="iot-saved-empty">
-                    <InboxOutlined style={{ fontSize: 24, opacity: 0.3 }} />
-                    <span>{selectedFolderId === null ? '未分类中没有保存的请求' : '暂无保存的请求'}</span>
-                  </div>
-                ) : (
-                  filteredSavedRequests.map(record => (
-                    <div key={record.id} className="iot-saved-card">
-                      <div className="iot-saved-card-main" onClick={() => createTabFromSavedRequest(record)}>
-                        <MethodBadge method={record.method} />
-                        <div className="iot-saved-card-info">
-                          <span className="iot-saved-card-name">{record.name}</span>
-                          {record.url && <span className="iot-saved-card-url">{record.url}</span>}
-                        </div>
-                      </div>
-                      <div className="iot-saved-card-actions">
-                        <button className="iot-saved-item-action iot-saved-item-action--info" onClick={() => handleCopySavedRequest(record)}>复制</button>
-                        <button className="iot-saved-item-action iot-saved-item-action--danger" onClick={() => handleDeleteSavedRequest(record.id)}>删除</button>
-                      </div>
-                    </div>
-                  ))
+                  </>
                 )}
               </div>
             </div>
-          )}
-        </div>
+          </Form>
 
-        {/* Collapsed expand button */}
-        {rightCollapsed && (
-          <Tooltip title="展开保存的请求" placement="left" overlayClassName="iot-tooltip">
-            <button className="iot-collapse-btn" onClick={() => setRightCollapsed(false)}>
-              <LeftOutlined style={{ fontSize: 12 }} />
-            </button>
-          </Tooltip>
-        )}
+          {/* 请求区 / 响应区上下拖拽分割 */}
+          {!responseCollapsed && (
+            <div
+              className={'iot-split-handle' + (isDraggingResponse ? ' is-active' : '')}
+              onMouseDown={handleResponseDragStart}
+              title="拖拽调整响应区高度"
+            />
+          )}
+
+          {/* 响应面板 */}
+          <div
+            className={'iot-response-panel' + (responseCollapsed ? ' is-collapsed' : '')}
+            style={{ flex: responseCollapsed ? '0 0 34px' : '0 0 ' + responseSplit + '%' }}
+          >
+            <div
+              className={'iot-response-tabsbar' + (responseCollapsed ? ' is-collapsed' : '')}
+              onClick={responseCollapsed ? (e) => {
+                // 折叠态整条可点展开，但点在条内的按钮（如「复制」）上时不展开
+                if ((e.target as HTMLElement).closest('button')) return;
+                setResponseCollapsed(false);
+              } : undefined}
+              title={responseCollapsed ? '点击展开响应区' : undefined}
+            >
+              <div className="iot-response-tabs">
+                {isMqtt ? (
+                  <span className="iot-response-tab is-active">发布结果</span>
+                ) : isWs ? (
+                  <>
+                    <button
+                      className={'iot-response-tab' + (currentResponseTab !== 'result' ? ' is-active' : '')}
+                      onClick={() => setCurrentResponseTab('messages')}
+                    >
+                      消息流{wsMessages.length ? ' (' + wsMessages.length + ')' : ''}
+                    </button>
+                    <button
+                      className={'iot-response-tab' + (currentResponseTab === 'result' ? ' is-active' : '')}
+                      onClick={() => setCurrentResponseTab('result')}
+                    >
+                      连接结果
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className={'iot-response-tab' + (currentResponseTab !== 'headers' ? ' is-active' : '')}
+                      onClick={() => setCurrentResponseTab('body')}
+                    >
+                      响应体
+                    </button>
+                    <button
+                      className={'iot-response-tab' + (currentResponseTab === 'headers' ? ' is-active' : '')}
+                      onClick={() => setCurrentResponseTab('headers')}
+                    >
+                      响应头
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="iot-response-meta">
+                {isMqtt && activeTab?.mqttResult && (
+                  <>
+                    <span className={'iot-response-status-code ' + (activeTab.mqttResult.success ? 'is-success' : 'is-error')}>
+                      {activeTab.mqttResult.success ? '发布成功' : '发布失败'}
+                    </span>
+                    <span className="iot-response-time">耗时: <strong>{activeTab.mqttResult.duration_ms}ms</strong></span>
+                  </>
+                )}
+                {isWs && wsResult && (
+                  <>
+                    <span className={'iot-response-status-code ' + (wsSucceeded ? 'is-success' : 'is-error')}>
+                      {wsSucceeded ? '连接成功' : '连接失败'}
+                    </span>
+                    <span className="iot-response-time">耗时: <strong>{wsResult.duration_ms}ms</strong></span>
+                    <span className="iot-response-time">消息: <strong>{wsResult.received} 条</strong></span>
+                  </>
+                )}
+                {!isMqtt && !isWs && response && (
+                  <>
+                    <span className={'iot-response-status-code ' + getStatusClass(response.status)}>
+                      {response.status} {response.statusText}
+                    </span>
+                    <span className="iot-response-time">耗时: <strong>{responseTime}ms</strong></span>
+                    <span className="iot-response-time">大小: <strong>{formatBytes(responseSize)}</strong></span>
+                  </>
+                )}
+                <Button
+                  icon={<CopyOutlined />}
+                  className="iot-copy-btn"
+                  size="small"
+                  onClick={handleCopyResponse}
+                  disabled={isMqtt ? !activeTab?.mqttResult : isWs ? !wsResult : !response}
+                >
+                  复制
+                </Button>
+                <Tooltip title={responseCollapsed ? '展开响应区' : '折叠响应区'} overlayClassName="iot-tooltip">
+                  <Button
+                    type="text"
+                    size="small"
+                    className="iot-response-toggle"
+                    icon={responseCollapsed ? <UpOutlined /> : <DownOutlined />}
+                    onClick={() => setResponseCollapsed(prev => !prev)}
+                  />
+                </Tooltip>
+              </div>
+            </div>
+
+            {!responseCollapsed && (
+              isWs && currentResponseTab !== 'result' ? (
+                <div className="iot-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <div className="iot-panel-header">
+                    <span className="iot-panel-header-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      消息流（{wsMessages.length} 条）
+                      {wsResult?.closed_by && (
+                        <Tag className="iot-ws-closed-tag" color="cyan">{formatClosedBy(wsResult.closed_by)}</Tag>
+                      )}
+                    </span>
+                    {sendLoading && <span className="iot-ws-hint">连接中…</span>}
+                  </div>
+                  <div className="iot-ws-message-list">
+                    {wsMessages.length === 0 ? (
+                      <div className="iot-ws-empty">点击连接后此处显示收到的消息</div>
+                    ) : (
+                      wsMessages.map(msg => (
+                        <div className="iot-ws-message" key={msg.seq}>
+                          <div className="iot-ws-message-head">
+                            <span className="iot-ws-message-seq">#{msg.seq}</span>
+                            <span>{Number.isFinite(msg.ts) ? `${msg.ts.toFixed(2)}s` : '-'}</span>
+                            <span>{msg.size}B</span>
+                          </div>
+                          <div className="iot-ws-message-content">
+                            {msg.type === 'binary' ? (
+                              <>
+                                <span className="iot-ws-message-binary">&lt;binary {msg.size} bytes&gt;</span>
+                                {msg.base64 && (
+                                  <details className="iot-ws-message-base64">
+                                    <summary>展开 base64</summary>
+                                    <pre>{msg.base64}</pre>
+                                  </details>
+                                )}
+                              </>
+                            ) : msg.content}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : (
+
+                <div className="iot-response-container">
+                  {isMqtt ? (
+                    activeTab?.mqttResult ? (
+                      <>
+                        <div className="iot-response-body">
+                          <div className="iot-mqtt-result">
+                            <div className="iot-mqtt-result-row">
+                              <span className="iot-mqtt-result-label">Broker</span>
+                              <span className="iot-mqtt-result-value">{activeTab.mqttResult.broker}</span>
+                            </div>
+                            <div className="iot-mqtt-result-row">
+                              <span className="iot-mqtt-result-label">Topic</span>
+                              <span className="iot-mqtt-result-value">{activeTab.mqttResult.topic}</span>
+                            </div>
+                            <div className="iot-mqtt-result-row">
+                              <span className="iot-mqtt-result-label">QoS</span>
+                              <span className="iot-mqtt-result-value">{activeTab.mqttResult.qos}</span>
+                            </div>
+                            <div className="iot-mqtt-result-row">
+                              <span className="iot-mqtt-result-label">Retain</span>
+                              <span className="iot-mqtt-result-value">{activeTab.mqttResult.retain ? '是' : '否'}</span>
+                            </div>
+                            {activeTab.mqttResult.error && (
+                              <div className="iot-mqtt-result-row">
+                                <span className="iot-mqtt-result-label">错误</span>
+                                <span className="iot-mqtt-result-value iot-mqtt-result-error">{activeTab.mqttResult.error}</span>
+                              </div>
+                            )}
+                            <pre className="iot-response-pre iot-mqtt-result-payload">
+                              {activeTab.mqttResult.payload || '(空 Payload)'}
+                            </pre>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="iot-response-empty">
+                        <SendOutlined className="iot-response-empty-icon" />
+                        <span className="iot-response-empty-text">点击发布按钮查看发布结果</span>
+                      </div>
+                    )
+                  ) : isWs ? (
+                    wsResult ? (
+                      <>
+                        <div className="iot-response-body">
+                          <div className="iot-ws-result">
+                            <div className="iot-ws-result-row">
+                              <span className="iot-ws-result-label">地址</span>
+                              <span className="iot-ws-result-value">{wsResult.url}</span>
+                            </div>
+                            <div className="iot-ws-result-row">
+                              <span className="iot-ws-result-label">状态</span>
+                              <span className={`iot-ws-result-value ${wsSucceeded ? 'is-success' : 'is-error'}`}>
+                                {wsSucceeded ? '连接成功' : '连接失败'}
+                              </span>
+                            </div>
+                            <div className="iot-ws-result-row">
+                              <span className="iot-ws-result-label">收到消息</span>
+                              <span className="iot-ws-result-value">{wsResult.received} 条</span>
+                            </div>
+                            <div className="iot-ws-result-row">
+                              <span className="iot-ws-result-label">耗时</span>
+                              <span className="iot-ws-result-value">{wsResult.duration_ms}ms</span>
+                            </div>
+                            <div className="iot-ws-result-row">
+                              <span className="iot-ws-result-label">关闭原因</span>
+                              <span className="iot-ws-result-value">{formatClosedBy(wsResult.closed_by)}</span>
+                            </div>
+                            {wsResult.error && (
+                              <div className="iot-ws-result-row">
+                                <span className="iot-ws-result-label">错误</span>
+                                <span className="iot-ws-result-value iot-ws-result-error">{wsResult.error}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="iot-response-empty">
+                        <SendOutlined className="iot-response-empty-icon" />
+                        <span className="iot-response-empty-text">点击连接按钮查看连接结果</span>
+                      </div>
+                    )
+                  ) : response ? (
+                    <>
+                        <div className="iot-response-body">
+                        {currentResponseTab === 'headers' ? (
+                          renderResponseHeaders()
+                        ) : responseHtml ? (
+                          <pre
+                            className="iot-response-pre"
+                            dangerouslySetInnerHTML={{ __html: responseHtml }}
+                          />
+                        ) : (
+                          <pre className="iot-response-pre">
+                            {typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="iot-response-empty">
+                      <SendOutlined className="iot-response-empty-icon" />
+                      <span className="iot-response-empty-text">点击发送按钮查看响应结果</span>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* 保存请求：选择归属文件夹（不选 = 未分类） */}
+      <Modal
+        title="保存请求"
+        open={saveFolderModalVisible}
+        onCancel={() => closeSaveFolderModal(undefined)}
+        width={460}
+        className="iot-modal iot-save-folder-modal"
+        maskClosable={false}
+        footer={[
+          <Button key="cancel" onClick={() => closeSaveFolderModal(undefined)}>
+            取消
+          </Button>,
+          <Button key="uncategorized" onClick={() => closeSaveFolderModal(null)}>
+            不选择（未分类）
+          </Button>,
+          <Button key="ok" type="primary" className="iot-btn-primary" onClick={() => closeSaveFolderModal(saveFolderChoice)}>
+            保存
+          </Button>,
+        ]}
+      >
+        <p className="iot-new-request-hint">
+          当前请求还没有归属文件夹，请选择要保存到哪个文件夹；不选择则保存到「未分类」。
+        </p>
+        <TreeSelect
+          style={{ width: '100%' }}
+          value={saveFolderChoice ?? undefined}
+          onChange={(value) => setSaveFolderChoice(typeof value === 'number' ? value : null)}
+          treeData={saveFolderTreeData}
+          treeDefaultExpandAll
+          allowClear
+          placeholder="不选择则保存到「未分类」"
+          showSearch
+          treeNodeFilterProp="title"
+        />
+      </Modal>
+
+      {/* 新建：请求类型 + 文件夹（与 Postman 的 New 对话框一致） */}
+      <Modal
+        title="新建"
+        open={isNewRequestModalVisible}
+        onCancel={closeNewItemModal}
+        footer={null}
+        width={660}
+        className="iot-modal iot-new-request-modal"
+      >
+        {newItemMode === 'type' ? (
+          <>
+            <p className="iot-new-request-hint">选择请求类型（创建后类型不可更改），或新建文件夹</p>
+            <div className="iot-type-grid">
+              {NEW_REQUEST_TYPES.map(item => (
+                <button
+                  key={item.value}
+                  type="button"
+                  className={'iot-type-card iot-type-card--' + item.value}
+                  onClick={() => {
+                    addNewTab(item.value);
+                    closeNewItemModal();
+                  }}
+                >
+                  <span className={'iot-type-icon iot-type-icon--' + item.value}>
+                    {item.value === 'http' ? <ApiOutlined /> : item.value === 'websocket' ? <SwapOutlined /> : <CloudServerOutlined />}
+                  </span>
+                  <span className="iot-type-name">{item.label}</span>
+                  <span className="iot-type-desc">{item.description}</span>
+                </button>
+              ))}
+              <button
+                type="button"
+                className="iot-type-card iot-type-card--folder"
+                onClick={() => setNewItemMode('folder')}
+              >
+                <span className="iot-type-icon iot-type-icon--folder">
+                  <FolderAddOutlined />
+                </span>
+                <span className="iot-type-name">文件夹</span>
+                <span className="iot-type-desc">把相关请求归类管理（Collection）</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <button type="button" className="iot-new-folder-back" onClick={() => setNewItemMode('type')}>
+              ← 返回类型选择
+            </button>
+            <div className="iot-new-folder-form">
+              <div className="iot-new-folder-field">
+                <span className="iot-new-folder-label">名称</span>
+                <Input
+                  autoFocus
+                  placeholder="文件夹名称"
+                  value={newItemFolderName}
+                  onChange={(e) => setNewItemFolderName(e.target.value)}
+                  onPressEnter={handleCreateFolderFromModal}
+                />
+              </div>
+              <div className="iot-new-folder-field">
+                <span className="iot-new-folder-label">上级文件夹</span>
+                <Select
+                  value={newItemFolderParent}
+                  onChange={(value) => setNewItemFolderParent(value)}
+                  style={{ width: '100%' }}
+                  options={[{ value: 0, label: '根目录' }, ...flatFolderOptions.map(item => ({ value: item.id, label: item.label }))]}
+                />
+              </div>
+              <div className="iot-new-folder-actions">
+                <Button onClick={closeNewItemModal}>取消</Button>
+                <Button type="primary" className="iot-btn-primary" loading={creatingFolder} onClick={handleCreateFolderFromModal}>
+                  创建
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </Modal>
 
       {/* Global Params Modal */}
       <Modal

@@ -184,6 +184,101 @@ export interface HistoryPrompt {
   updated_at: string;
 }
 
+// MQTT 发布配置（IoT 数据推送平台）
+export interface MqttConfig {
+  broker: string;
+  /** Broker 端口（留空则使用地址中的端口，或按协议默认 1883/8883/8083/8084） */
+  port?: string;
+  topic: string;
+  payload: string;
+  qos: 0 | 1 | 2;
+  retain: boolean;
+  client_id?: string;
+  username?: string;
+  password?: string;
+  tls?: boolean;
+}
+
+// MQTT 发布请求体（POST /api/mqtt/publish）
+export interface MqttPublishRequest {
+  broker: string;
+  topic: string;
+  payload: string;
+  qos: 0 | 1 | 2;
+  retain: boolean;
+  client_id?: string;
+  username?: string;
+  password?: string;
+  tls?: boolean;
+  environment_id?: number | null;
+  /** 本地参数（与环境参数合并，优先级更高），后端按 [{key,value}] 解析 */
+  parameters?: Array<{ key: string; value: string }>;
+}
+
+// MQTT 发布结果
+export interface MqttPublishResult {
+  success: boolean;
+  broker: string;
+  topic: string;
+  qos: number;
+  retain: boolean;
+  payload: string;
+  duration_ms: number;
+  error?: string | null;
+}
+
+// MQTT 连接测试结果（POST /api/mqtt/test-connection）
+export interface MqttTestConnectionResult {
+  connected: boolean;
+  message: string;
+  duration_ms: number;
+}
+
+// WebSocket 连接配置（IoT 数据推送平台）
+export interface WsConfig {
+  url: string;
+  /** 额外请求头（如 Authorization / Cookie） */
+  headers: Array<{ key: string; value: string }>;
+  /** 最多接收消息条数 */
+  maxMessages: number;
+  /** 空闲等待超时（秒） */
+  timeoutSeconds: number;
+  /** 子协议，多个用英文逗号分隔 */
+  protocols?: string;
+  /** 连接成功后先发送一条文本消息 */
+  sendMessage?: string;
+}
+
+// WebSocket 单条消息
+export interface WsMessage {
+  seq: number;
+  type: 'text' | 'binary';
+  size: number;
+  content: string;
+  base64?: string;
+  /** 相对连接开始的秒数 */
+  ts: number;
+}
+
+// WebSocket 连接结果（POST /api/ws/connect）
+export interface WsConnectResult {
+  success: boolean;
+  url: string;
+  connected: boolean;
+  messages: WsMessage[];
+  received: number;
+  duration_ms: number;
+  closed_by: 'server' | 'client' | 'timeout' | 'max_messages' | 'error';
+  error?: string | null;
+}
+
+// WebSocket 连通性测试结果（POST /api/ws/test-connection）
+export interface WsTestConnectionResult {
+  connected: boolean;
+  message: string;
+  duration_ms: number;
+}
+
 // 保存的请求类型
 export interface SavedRequest {
   id: number;
@@ -194,7 +289,15 @@ export interface SavedRequest {
   parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
   body?: string;
   post_extractions?: Array<{ variable: string; jsonpath: string }>;
+  /** 协议：http（默认）| mqtt | websocket */
+  protocol?: 'http' | 'mqtt' | 'websocket';
+  /** MQTT 配置（protocol 为 mqtt 时有效） */
+  mqtt_config?: MqttConfig | null;
+  /** WebSocket 配置（protocol 为 websocket 时有效） */
+  ws_config?: WsConfig | null;
   folder_id?: number | null;
+  /** 所属文件夹内的排序序号（拖拽排序，越小越靠前；为空表示未拖拽过） */
+  sort_order?: number | null;
   user_id?: string;
   created_at: string;
   updated_at: string;
@@ -205,6 +308,8 @@ export interface SavedRequestFolder {
   id: number;
   name: string;
   parent_id?: number | null;
+  /** 同级文件夹的排序序号（拖拽排序，越小越靠前；为空表示未拖拽过） */
+  sort_order?: number | null;
   user_id?: string;
   children: SavedRequestFolder[];
   created_at: string;
@@ -220,6 +325,16 @@ export interface GlobalParameter {
   user_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * 侧栏拖拽布局：一个父级（parent_id 为 null 表示根层）下全部子项的完整顺序。
+ * 「拖进别的文件夹」与「同级换位置」共用这一个结构。
+ */
+export interface SavedRequestLayoutGroup {
+  parent_id: number | null;
+  folder_ids: number[];
+  request_ids: number[];
 }
 
 // UI 自动化执行记录(browser-use Agent / hybrid)
@@ -545,6 +660,13 @@ export interface PushLogItem {
   error?: string | null;
   duration_ms: number;
   environment_id?: number | null;
+  /** 推送协议：http（历史记录缺省按 http 处理）| mqtt | websocket */
+  protocol?: 'http' | 'mqtt' | 'websocket';
+  mqtt_broker?: string | null;
+  mqtt_topic?: string | null;
+  mqtt_qos?: number | null;
+  mqtt_retain?: boolean | null;
+  mqtt_client_id?: string | null;
   user_id?: string | null;
   created_at: string;
   updated_at: string;

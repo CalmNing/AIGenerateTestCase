@@ -1315,7 +1315,7 @@ const App: React.FC = () => {
       ) : currentPlatform === 'iot-mock' ? (
         <div>
           <SubPlatformHeader
-            title="测试工具平台"
+            title="IoT 数据推送平台"
             onBackToHome={navigateToHome}
             environmentName={getCurrentEnvironment()?.name}
             onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}

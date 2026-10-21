@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Button, Drawer, Empty, Input, Modal, Popconfirm, Select, Space, Table,
+  Button, Drawer, Empty, Input, Modal, Popconfirm, Segmented, Select, Space, Table,
   Tabs, Tag, Tooltip, Descriptions, message,
 } from 'antd';
 import {
@@ -15,6 +15,16 @@ const LOG_PAGE_SIZE = 20;
 const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
   .map((m) => ({ value: m, label: m }));
 
+const PROTOCOL_OPTIONS = [
+  { value: 'all', label: '全部协议' },
+  { value: 'http', label: 'HTTP' },
+  { value: 'mqtt', label: 'MQTT' },
+  { value: 'websocket', label: 'WebSocket' },
+];
+
+const isMqttLog = (log: PushLogItem): boolean => log.protocol === 'mqtt';
+const isWsLog = (log: PushLogItem): boolean => log.protocol === 'websocket';
+
 const MethodTag: React.FC<{ method: string }> = ({ method }) => {
   const colorMap: Record<string, string> = {
     GET: 'green', POST: 'blue', PUT: 'orange', PATCH: 'purple', DELETE: 'red',
@@ -22,8 +32,19 @@ const MethodTag: React.FC<{ method: string }> = ({ method }) => {
   return <Tag color={colorMap[method?.toUpperCase()] || 'default'}>{method}</Tag>;
 };
 
+// MQTT 记录用 MQTT 标签替代 HTTP 方法标签
+const ProtocolTag: React.FC<{ log: PushLogItem }> = ({ log }) => {
+  if (isMqttLog(log)) return <Tag color="purple">MQTT</Tag>;
+  if (isWsLog(log)) return <Tag color="cyan">WS</Tag>;
+  return <MethodTag method={log.request_method} />;
+};
+
 const StatusTag: React.FC<{ log: PushLogItem }> = ({ log }) => {
   if (log.error) return <Tag color="red">失败</Tag>;
+  // MQTT 发布没有 HTTP 状态码，只区分成功/失败
+  if (log.protocol === 'mqtt') return <Tag color="green">发布成功</Tag>;
+  // WebSocket 连接同样没有 HTTP 状态码
+  if (log.protocol === 'websocket') return <Tag color="green">连接完成</Tag>;
   const c = log.response_status;
   return (
     <Tag color={c >= 200 && c < 400 ? 'green' : c >= 400 && c < 500 ? 'orange' : c >= 500 ? 'red' : 'default'}>
@@ -86,6 +107,77 @@ export function buildCurlCommand(log: PushLogItem, useParsed = true): string {
   return lines.join(' \\\n');
 }
 
+/**
+ * 解析 MQTT broker 地址，兼容 mqtt://host:1883、mqtts://host、host:1883 等写法。
+ */
+function parseBroker(broker?: string | null): { host: string; port: string } {
+  const raw = (broker || '').trim();
+  if (!raw) return { host: '', port: '1883' };
+  const withoutScheme = raw.replace(/^[a-zA-Z]+:\/\//, '');
+  const slash = withoutScheme.indexOf('/');
+  const hostPort = slash >= 0 ? withoutScheme.slice(0, slash) : withoutScheme;
+  const tlsDefault = /^(mqtts|ssl|tls):\/\//i.test(raw);
+  const idx = hostPort.lastIndexOf(':');
+  if (idx > 0 && /^\d+$/.test(hostPort.slice(idx + 1))) {
+    return { host: hostPort.slice(0, idx), port: hostPort.slice(idx + 1) };
+  }
+  return { host: hostPort, port: tlsDefault ? '8883' : '1883' };
+}
+
+// 部分后端版本可能回传 MQTT 认证信息，这里做可选兼容，避免类型断言
+type MqttLogExtra = PushLogItem & {
+  mqtt_username?: string | null;
+  mqtt_password?: string | null;
+};
+
+/**
+ * 由 MQTT 推送记录生成可直接执行的 mosquitto_pub 命令。
+ */
+export function buildMosquittoCommand(log: PushLogItem): string {
+  const extra = log as MqttLogExtra;
+  const { host, port } = parseBroker(log.mqtt_broker);
+  const topic = log.mqtt_topic || '';
+  const payload = log.final_body ?? log.request_body ?? '';
+  const qos = log.mqtt_qos ?? 0;
+
+  const lines: string[] = [
+    `mosquitto_pub -h ${shellSingleQuote(host)} -p ${port}`,
+    `  -t ${shellSingleQuote(topic)}`,
+    `  -q ${qos}`,
+  ];
+  if (log.mqtt_retain) lines.push('  -r');
+  if (log.mqtt_client_id) lines.push(`  -i ${shellSingleQuote(log.mqtt_client_id)}`);
+  if (extra.mqtt_username) lines.push(`  -u ${shellSingleQuote(extra.mqtt_username)}`);
+  if (extra.mqtt_password) lines.push(`  -P ${shellSingleQuote(extra.mqtt_password)}`);
+  lines.push(`  -m ${shellSingleQuote(String(payload))}`);
+  return lines.join(' \\\n');
+}
+
+/**
+ * 由 WebSocket 推送记录生成可直接执行的 websocat 命令。
+ * 默认基于解析后（变量替换完成）的 URL，请求头通过 -H 传递。
+ */
+export function buildWebsocatCommand(log: PushLogItem, useParsed = true): string {
+  const url = (useParsed ? log.final_url : log.source_url)
+    || log.final_url
+    || log.source_url
+    || '';
+  const headers = (useParsed ? log.final_headers : log.request_headers) || {};
+  const lines: string[] = ['websocat ' + shellSingleQuote(url)];
+  for (const [k, v] of Object.entries(headers)) {
+    if (!k) continue;
+    lines.push('  -H ' + shellSingleQuote(k + ': ' + (v ?? '')));
+  }
+  return lines.join(' \\\n');
+}
+
+/** 按协议选择复制命令：MQTT → mosquitto_pub，WebSocket → websocat，HTTP → cURL */
+export function buildPushCommand(log: PushLogItem, useParsed = true): string {
+  if (isMqttLog(log)) return buildMosquittoCommand(log);
+  if (isWsLog(log)) return buildWebsocatCommand(log, useParsed);
+  return buildCurlCommand(log, useParsed);
+}
+
 async function copyText(text: string, tip: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
@@ -106,12 +198,13 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [method, setMethod] = useState<string | undefined>(undefined);
+  const [protocol, setProtocol] = useState<'http' | 'mqtt' | 'websocket' | 'all'>('all');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [detailLog, setDetailLog] = useState<PushLogItem | null>(null);
   const [detailTab, setDetailTab] = useState('parsed');
-  const queryRef = useRef({ page, method, search });
-  queryRef.current = { page, method, search };
+  const queryRef = useRef({ page, method, search, protocol });
+  queryRef.current = { page, method, search, protocol };
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -120,8 +213,10 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
       const res = await pushLogApi.getLogs({
         page: q.page,
         page_size: LOG_PAGE_SIZE,
-        method: q.method,
+        // MQTT / WebSocket 记录没有 HTTP 方法，切到对应协议时不再叠加方法过滤
+        method: q.protocol === 'mqtt' || q.protocol === 'websocket' ? undefined : q.method,
         search: q.search.trim() || undefined,
+        protocol: q.protocol === 'all' ? undefined : q.protocol,
       });
       if (res.code === 200) {
         setLogs(res.data || []);
@@ -138,7 +233,7 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
 
   useEffect(() => {
     if (open) fetchLogs();
-  }, [open, page, method, search, fetchLogs]);
+  }, [open, page, method, protocol, search, fetchLogs]);
 
   const handleClear = async () => {
     try {
@@ -175,7 +270,14 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
   };
 
   const copyCurl = (log: PushLogItem, useParsed = true) =>
-    copyText(buildCurlCommand(log, useParsed), 'cURL 已复制到剪贴板，可直接分享');
+    copyText(
+      buildPushCommand(log, useParsed),
+      isMqttLog(log)
+        ? 'mosquitto_pub 命令已复制到剪贴板，可直接分享'
+        : isWsLog(log)
+          ? 'websocat 命令已复制到剪贴板，可直接分享'
+          : 'cURL 已复制到剪贴板，可直接分享',
+    );
 
   const renderKvPre = (title: string, obj?: Record<string, string> | null) => (
     <div style={{ marginBottom: 12 }}>
@@ -201,16 +303,30 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
 
   const columns = [
     {
-      title: '方法', dataIndex: 'request_method', key: 'method', width: 80,
-      render: (m: string) => <MethodTag method={m} />,
+      title: '协议/方法', dataIndex: 'request_method', key: 'method', width: 90,
+      render: (_: string, record: PushLogItem) => <ProtocolTag log={record} />,
     },
     {
-      title: '请求 URL（解析后）', dataIndex: 'final_url', key: 'url', ellipsis: true,
-      render: (v: string, record: PushLogItem) => (
-        <Tooltip title={v || record.source_url}>
-          <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v || record.source_url}</span>
-        </Tooltip>
-      ),
+      title: '目标（解析后）', dataIndex: 'final_url', key: 'url', ellipsis: true,
+      render: (v: string, record: PushLogItem) => {
+        if (isMqttLog(record)) {
+          const broker = record.mqtt_broker || '';
+          const topic = record.mqtt_topic || '';
+          return (
+            <Tooltip title={`${broker} → ${topic}`}>
+              <div className="iot-log-protocol-cell">
+                <span className="iot-log-mqtt-target">{broker || '(未记录 Broker)'}</span>
+                <span className="iot-log-mqtt-topic">{topic || '(未记录 Topic)'}</span>
+              </div>
+            </Tooltip>
+          );
+        }
+        return (
+          <Tooltip title={v || record.source_url}>
+            <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v || record.source_url}</span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: '结果', key: 'result', width: 90,
@@ -234,14 +350,23 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
       render: (_: unknown, record: PushLogItem) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => openDetail(record)}>详情</Button>
-          <Tooltip title="复制为 cURL（解析后请求）" overlayClassName="iot-tooltip">
+          <Tooltip
+            title={
+              isMqttLog(record)
+                ? '复制为 mosquitto_pub 命令'
+                : isWsLog(record)
+                  ? '复制为 websocat 命令'
+                  : '复制为 cURL（解析后请求）'
+            }
+            overlayClassName="iot-tooltip"
+          >
             <Button
               type="link"
               size="small"
               icon={<CopyOutlined />}
               onClick={() => copyCurl(record, true)}
             >
-              cURL
+              {isMqttLog(record) || isWsLog(record) ? '命令' : 'cURL'}
             </Button>
           </Tooltip>
           <Popconfirm title="删除这条记录？" onConfirm={() => handleDelete(record.id)}>
@@ -252,7 +377,50 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
     },
   ];
 
+  // MQTT 记录：只展示 Broker/Topic/QoS/Retain/ClientID/Payload，隐藏 HTTP 专属块
+  const mqttRequestTab = (log: PushLogItem, parsed: boolean) => {
+    const payload = parsed ? (log.final_body ?? log.request_body) : log.request_body;
+    return (
+      <div>
+        <Descriptions bordered size="small" column={2} style={{ marginBottom: 12 }}>
+          <Descriptions.Item label="Broker" span={2}>
+            <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{log.mqtt_broker || '(空)'}</span>
+          </Descriptions.Item>
+          <Descriptions.Item label="Topic" span={2}>
+            <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{log.mqtt_topic || '(空)'}</span>
+          </Descriptions.Item>
+          <Descriptions.Item label="QoS">{log.mqtt_qos ?? 0}</Descriptions.Item>
+          <Descriptions.Item label="Retain">{log.mqtt_retain ? '是' : '否'}</Descriptions.Item>
+          <Descriptions.Item label="Client ID" span={2}>
+            <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{log.mqtt_client_id || '(自动分配)'}</span>
+          </Descriptions.Item>
+        </Descriptions>
+        {renderBodyPre('Payload', payload)}
+      </div>
+    );
+  };
+
+  // WebSocket 记录：URL / 请求头 / 最后一条消息，没有 HTTP 响应
+  const wsRequestTab = (log: PushLogItem, parsed: boolean) => {
+    const url = parsed ? log.final_url : log.source_url;
+    const headers = parsed ? log.final_headers : log.request_headers;
+    return (
+      <div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>WebSocket URL</div>
+          <pre className="iot-log-pre" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            {url || '(空)'}
+          </pre>
+        </div>
+        {renderKvPre('请求头', headers)}
+        {renderBodyPre('最后一条消息', log.final_body)}
+      </div>
+    );
+  };
+
   const requestTab = (log: PushLogItem, parsed: boolean) => {
+    if (isMqttLog(log)) return mqttRequestTab(log, parsed);
+    if (isWsLog(log)) return wsRequestTab(log, parsed);
     const url = parsed ? log.final_url : log.source_url;
     const headers = parsed ? log.final_headers : log.request_headers;
     const params = parsed ? log.final_params : log.request_params;
@@ -291,11 +459,17 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
           <Space wrap size={10}>
+            <Segmented
+              value={protocol}
+              options={PROTOCOL_OPTIONS}
+              onChange={(v) => { setProtocol(v as 'http' | 'mqtt' | 'websocket' | 'all'); setPage(1); }}
+            />
             <Select
               value={method}
               allowClear
               placeholder="方法"
               style={{ width: 96 }}
+              disabled={protocol === 'mqtt' || protocol === 'websocket'}
               options={METHOD_OPTIONS}
               onChange={(v) => { setMethod(v); setPage(1); }}
             />
@@ -342,9 +516,11 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
         title={
           detailLog && (
             <Space size={8} wrap>
-              <MethodTag method={detailLog.request_method} />
+              <ProtocolTag log={detailLog} />
               <span style={{ fontFamily: 'monospace', fontSize: 13 }}>
-                {detailLog.final_url || detailLog.source_url}
+                {isMqttLog(detailLog)
+                  ? `${detailLog.mqtt_broker || '-'} → ${detailLog.mqtt_topic || '-'}`
+                  : (detailLog.final_url || detailLog.source_url)}
               </span>
             </Space>
           )
@@ -362,7 +538,7 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
                 className="iot-btn-primary"
                 onClick={() => copyCurl(detailLog, detailTab === 'parsed')}
               >
-                复制为 cURL
+                {isMqttLog(detailLog) ? '复制为 mosquitto_pub' : isWsLog(detailLog) ? '复制为 websocat' : '复制为 cURL'}
               </Button>
               <Button
                 onClick={() => copyText(
@@ -385,7 +561,11 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
               </Descriptions.Item>
               <Descriptions.Item label="耗时">{detailLog.duration_ms}ms</Descriptions.Item>
               <Descriptions.Item label="来源">
-                {detailLog.mocked ? <Tag color="gold">Mock</Tag> : <Tag color="blue">真实转发</Tag>}
+                {isMqttLog(detailLog)
+                  ? <Tag color="purple">MQTT 发布</Tag>
+                  : isWsLog(detailLog)
+                    ? <Tag color="cyan">WebSocket 连接</Tag>
+                    : (detailLog.mocked ? <Tag color="gold">Mock</Tag> : <Tag color="blue">真实转发</Tag>)}
               </Descriptions.Item>
               <Descriptions.Item label="时间" span={2}>
                 {formatLogTime(detailLog.created_at)}
@@ -415,7 +595,8 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
                   label: '原始请求',
                   children: requestTab(detailLog, false),
                 },
-                {
+                // MQTT / WebSocket 没有 HTTP 响应，隐藏响应 Tab（结果已在状态/错误中体现）
+                ...(isMqttLog(detailLog) || isWsLog(detailLog) ? [] : [{
                   key: 'response',
                   label: '响应',
                   children: (
@@ -432,7 +613,7 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
                       {renderBodyPre('响应体', detailLog.response_body)}
                     </div>
                   ),
-                },
+                }]),
               ]}
             />
           </>

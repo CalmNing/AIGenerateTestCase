@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -462,7 +462,7 @@ export const savedRequestApi = {
   updateRequest: (requestId: number, request: Partial<SavedRequest>): Promise<ApiResponse<SavedRequest>> => api.put(`/saved-requests/${requestId}`, request),
 
   // 删除保存的请求
-  deleteRequest: (requestId: number): Promise<ApiResponse> => api.delete(`/saved-requests/${requestId}`)
+  deleteRequest: (requestId: number): Promise<ApiResponse> => api.delete(`/saved-requests/${requestId}`),
 };
 
 // 保存的请求文件夹API
@@ -470,7 +470,11 @@ export const savedRequestFolderApi = {
   getFolders: (): Promise<ApiResponse<SavedRequestFolder[]>> => api.get('/saved-request-folders'),
   createFolder: (data: { name: string; parent_id?: number | null }): Promise<ApiResponse<SavedRequestFolder>> => api.post('/saved-request-folders', data),
   updateFolder: (folderId: number, data: Partial<SavedRequestFolder>): Promise<ApiResponse<SavedRequestFolder>> => api.put(`/saved-request-folders/${folderId}`, data),
-  deleteFolder: (folderId: number): Promise<ApiResponse> => api.delete(`/saved-request-folders/${folderId}`)
+  deleteFolder: (folderId: number): Promise<ApiResponse> => api.delete(`/saved-request-folders/${folderId}`),
+
+  // 批量保存侧栏拖拽结果（分组 = 一个父级下全部子项的完整顺序）
+  saveLayout: (groups: SavedRequestLayoutGroup[]): Promise<ApiResponse<{ updated: number }>> =>
+    api.put('/saved-request-folders/layout', groups)
 };
 
 // 全局参数（环境）API
@@ -725,6 +729,8 @@ export const pushLogApi = {
     search?: string;
     mocked?: boolean;
     failed?: boolean;
+    /** 协议过滤：http | mqtt | websocket，缺省返回全部 */
+    protocol?: 'http' | 'mqtt' | 'websocket';
   }): Promise<ApiResponse<PushLogItem[]>> => api.get('/push-logs', { params }),
 
   // 获取单条记录详情（原始 + 解析后）
@@ -735,6 +741,45 @@ export const pushLogApi = {
 
   // 清空全部记录
   clearLogs: (): Promise<ApiResponse> => api.delete('/push-logs')
+};
+
+// MQTT 发布 API（IoT 数据推送平台）
+export const mqttApi = {
+  // 发布消息到 MQTT Broker
+  publish: (data: MqttPublishRequest): Promise<ApiResponse<MqttPublishResult>> =>
+    api.post('/mqtt/publish', data),
+
+  // 测试 MQTT 连接
+  testConnection: (data: {
+    broker: string;
+    client_id?: string;
+    username?: string;
+    password?: string;
+    tls?: boolean;
+  }): Promise<ApiResponse<MqttTestConnectionResult>> => api.post('/mqtt/test-connection', data),
+};
+
+// WebSocket 连接 API（IoT 数据推送平台）
+export const wsApi = {
+  // 连接 WebSocket 并采集消息
+  connect: (data: {
+    url: string;
+    headers?: Record<string, string>;
+    environment_id?: number | null;
+    parameters?: Array<{ key: string; value: string }>;
+    max_messages?: number;
+    timeout_seconds?: number;
+    protocols?: string[];
+    send_message?: string;
+  }): Promise<ApiResponse<WsConnectResult>> => api.post('/ws/connect', data),
+
+  // 测试 WebSocket 握手连通性
+  testConnection: (data: {
+    url: string;
+    headers?: Record<string, string>;
+    protocols?: string[];
+    timeout_seconds?: number;
+  }): Promise<ApiResponse<WsTestConnectionResult>> => api.post('/ws/test-connection', data),
 };
 
 // 定时任务API

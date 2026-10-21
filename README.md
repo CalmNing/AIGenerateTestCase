@@ -24,7 +24,7 @@
 |---|---|
 | **AI 测试用例平台** | 使用 LLM (DeepSeek/Ollama) 从需求描述自动生成测试用例，4 阶段深度管线 + 接口关联 |
 | **接口场景测试工具** | OpenAPI/Swagger 导入、接口执行、场景编排、断言验证、AI 智能匹配 |
-| **IoT 数据推送平台** | HTTP 请求调试工具，多 Tab 编辑、变量替换、后置提取、全局参数管理 |
+| **IoT 数据推送平台** | HTTP / MQTT / WebSocket 请求调试工具，多 Tab 编辑、变量替换、后置提取、全局参数管理 |
 | **Mock 接口平台** | 可配置的 HTTP Mock 服务，支持参数化响应和分页模拟 |
 | **定时任务平台** | 基于 APScheduler 的定时任务引擎，支持间隔/Cron 调度、多请求串行执行 |
 
@@ -171,17 +171,34 @@ docker compose up -d --build
 
 ### 3. IoT 数据推送平台
 
-HTTP 请求调试与推送平台。
+HTTP / MQTT / WebSocket 三协议请求调试与推送平台。
 
 #### 特性
 
-- **多 Tab 编辑**：同时编辑多个 HTTP 请求
-- **三栏可拖拽布局**：请求配置 / 请求体+响应 / 已保存请求
-- **变量语法**：`{{variable}}` 引用环境变量
+- **多 Tab 编辑**：同时编辑多个请求，每个 Tab 独立选择协议（HTTP / MQTT / WebSocket）
+- **三栏可拖拽布局**：请求配置 / 请求体(Payload)或消息流 / 已保存请求
+- **变量语法**：`{{variable}}` 引用环境变量（HTTP 的 URL/头/参数/体、MQTT 的 Broker/Topic/Payload、WS 的 URL/请求头均支持）
 - **参数类型**：文本 / 文件上传
 - **请求头编辑** + 请求体 JSON 编辑器（CodeMirror）
-- **响应展示**：状态码、耗时、JSON 高亮渲染
-- **请求记录**：持久化每次推送的原始请求与变量替换后的解析结果，支持查看详情并一键复制为 cURL 分享
+- **响应展示**：状态码、耗时、JSON 高亮渲染；MQTT 展示发布结果（成功/失败、耗时、Broker/Topic/QoS/Retain）；WebSocket 展示消息流与连接结果
+- **请求记录**：持久化每次推送的原始请求与变量替换后的解析结果，支持协议筛选、查看详情并一键复制为 cURL / mosquitto_pub / websocat 分享
+
+#### MQTT 协议
+
+- **Broker 地址**：支持 `mqtt://` `tcp://` `mqtts://` `ssl://` `ws://` `wss://` 与裸 `host` / `host:port`（默认端口 1883 / 8883 / 8083 / 8084）
+- **发布参数**：Topic、Payload、QoS（0/1/2）、Retain、Client ID、Username / Password、TLS
+- **测试连接**：发布前可先探测 Broker 连通性
+- **接口**：`POST /api/mqtt/publish`、`POST /api/mqtt/test-connection`，权限 `iot:execute`
+- **依赖**：`paho-mqtt>=2.0`
+
+#### WebSocket 协议
+
+- **地址**：`ws://` / `wss://`，允许带 query（如 `ws://host:9090/api/logs?id=xxx&token=xxx`）；也接受 `http(s)://` 自动映射与裸 `host:port`
+- **连接参数**：最大消息数（1~500）、空闲超时秒数（1~60）、子协议、连接后首发消息、额外请求头
+- **消息流**：按序号展示收到的文本/二进制消息（相对时间、大小、内容），二进制消息提供 base64 折叠
+- **测试连接**：仅完成握手，不拉取消息
+- **接口**：`POST /api/ws/connect`、`POST /api/ws/test-connection`，权限 `iot:execute`
+- **依赖**：`websockets>=12`
 
 #### 后置提取
 

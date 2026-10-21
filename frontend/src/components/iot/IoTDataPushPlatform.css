@@ -10,36 +10,7 @@
   overflow: hidden;
 }
 
-/* --- Toolbar --- */
-.iot-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 12px;
-  background: var(--color-bg-elevated);
-  border-radius: var(--radius-md);
-  margin-bottom: 8px;
-  box-shadow: var(--shadow-sm);
-  flex-shrink: 0;
-}
-
-.iot-toolbar-title {
-  font-weight: 600;
-  font-size: 15px;
-  color: var(--color-text);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* --- Request Name Bar --- */
-.iot-request-name-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px 6px;
-  flex-shrink: 0;
-}
+/* --- Request Name Input / Unsaved Dot --- */
 
 .iot-request-name-input {
   flex: 1;
@@ -121,14 +92,6 @@
   padding-top: 0;
 }
 
-/* --- Three-panel Layout --- */
-.iot-layout {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  position: relative;
-}
-
 /* --- Panels --- */
 .iot-panel {
   background: var(--color-bg-elevated);
@@ -138,24 +101,6 @@
   display: flex;
   flex-direction: column;
 }
-
-.iot-panel-left {
-  min-width: 250px;
-}
-
-.iot-panel-middle {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 250px;
-}
-
-.iot-panel-right {
-  min-width: 200px;
-  flex-shrink: 0;
-  position: relative;
-}
-
 /* --- Panel Headers --- */
 .iot-panel-header {
   display: flex;
@@ -176,38 +121,6 @@
 }
 
 /* --- Tabs --- */
-.iot-tabs .ant-tabs-nav {
-  margin-bottom: 0;
-  padding: 0 8px;
-}
-
-.iot-tabs .ant-tabs-tab {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  padding: 8px 12px;
-}
-
-.iot-tabs .ant-tabs-tab:hover {
-  color: var(--color-text);
-}
-
-.iot-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
-  color: var(--color-primary) !important;
-}
-
-.iot-tabs .ant-tabs-ink-bar {
-  background: var(--color-primary);
-}
-
-.iot-tabs .ant-tabs-content {
-  height: 100%;
-}
-
-.iot-tabs .ant-tabs-tabpane {
-  height: 100%;
-  overflow: auto;
-}
-
 /* Tab close button */
 .iot-tab-close {
   font-size: 14px;
@@ -297,42 +210,28 @@
   flex-shrink: 0;
 }
 
-/* --- Drag Handle --- */
-.iot-drag-handle {
-  width: 6px;
-  cursor: col-resize;
-  background: transparent;
-  position: relative;
-  flex-shrink: 0;
-  margin: 0 2px;
-  transition: background 0.2s;
-  z-index: 10;
-  border-radius: 3px;
-}
-
-.iot-drag-handle::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 2px;
-  height: 32px;
-  border-radius: 1px;
-  background: var(--color-border);
-  transition: all 0.2s;
-}
-
-.iot-drag-handle:hover::after,
-.iot-drag-handle.is-active::after {
-  background: var(--color-primary);
-  height: 48px;
-}
-
 /* --- CodeMirror --- */
+.iot-codemirror {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 让编辑器真正撑满分页高度（@uiw/react-codemirror 的 theme 包裹层默认 auto 高度，
+   会导致 height="100%" 落空、编辑器被压成一行） */
+.iot-codemirror > div {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
 .iot-codemirror .cm-editor {
   font-size: 13px !important;
   height: 100%;
+}
+
+.iot-codemirror .cm-scroller {
+  overflow: auto;
 }
 
 .iot-codemirror .cm-editor .cm-activeLine {
@@ -443,324 +342,6 @@
   gap: 8px;
 }
 
-/* --- Right Sidebar: Folder Navigation --- */
-.iot-folder-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: 260px;
-  overflow-y: auto;
-}
-
-.iot-folder-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  transition: all 0.15s;
-}
-
-.iot-folder-item:hover {
-  background: var(--color-bg);
-  color: var(--color-text);
-}
-
-.iot-folder-item.is-active {
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
-  font-weight: 500;
-}
-
-.iot-folder-item-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.iot-folder-item-actions {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s;
-  margin-left: auto;
-}
-
-.iot-folder-item:hover .iot-folder-item-actions {
-  opacity: 1;
-}
-
-.iot-folder-action-btn {
-  font-size: 11px;
-  padding: 1px 5px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-}
-
-.iot-folder-action-btn:hover {
-  color: var(--color-primary);
-  background: var(--color-primary-bg);
-}
-
-.iot-folder-action-btn--danger:hover {
-  color: var(--color-error);
-  background: var(--color-error-bg);
-}
-
-/* Folder tree expand/collapse toggle */
-.iot-folder-toggle {
-  width: 16px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--color-text-tertiary);
-  transition: color 0.15s;
-}
-
-.iot-folder-toggle:hover {
-  color: var(--color-text);
-}
-
-/* Inline folder create form */
-.iot-folder-create-inline {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height 0.2s ease, opacity 0.2s ease, margin 0.2s ease;
-  margin-bottom: 0;
-}
-
-.iot-folder-create-inline.is-visible {
-  max-height: 80px;
-  opacity: 1;
-  margin-bottom: 6px;
-}
-
-.iot-folder-create-inline--sub.is-visible {
-  max-height: 80px;
-  opacity: 1;
-  margin-bottom: 4px;
-  margin-top: 2px;
-}
-
-.iot-folder-create-label {
-  font-size: 11px;
-  color: var(--color-text-tertiary);
-  margin-bottom: 4px;
-  padding-left: 2px;
-}
-
-.iot-folder-create-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.iot-folder-create-input {
-  flex: 1;
-  min-width: 0;
-}
-
-.iot-folder-create-input .ant-input {
-  height: 28px !important;
-  font-size: 12px;
-}
-
-/* Folder action buttons — use Ant Design Button base */
-.iot-folder-action-btn.ant-btn {
-  height: 22px;
-  padding: 0 6px;
-  font-size: 11px;
-  line-height: 1;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
-  transition: all 0.15s;
-}
-
-.iot-folder-action-btn.ant-btn:hover {
-  color: var(--color-primary);
-  background: var(--color-primary-bg);
-}
-
-.iot-folder-action-btn--danger.ant-btn:hover {
-  color: var(--color-error);
-  background: var(--color-error-bg);
-}
-
-/* --- Right Sidebar: Saved Requests --- */
-.iot-saved-list {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 8px;
-}
-
-.iot-saved-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 40px 0;
-  color: var(--color-text-disabled);
-  font-size: 13px;
-}
-
-.iot-saved-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: 4px;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  transition: all 0.15s;
-  cursor: default;
-}
-
-.iot-saved-card:hover {
-  background: var(--color-bg);
-  border-color: var(--color-border-light);
-}
-
-.iot-saved-card-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-  cursor: pointer;
-}
-
-.iot-saved-card-info {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-
-.iot-saved-card-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.iot-saved-card-url {
-  font-size: 11px;
-  color: var(--color-text-tertiary);
-  font-family: 'Consolas', 'Monaco', monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.iot-saved-card-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.iot-saved-card:hover .iot-saved-card-actions {
-  opacity: 1;
-}
-
-/* Saved request action buttons */
-.iot-saved-item-action {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 3px 10px;
-  border-radius: var(--radius-full, 999px);
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-  line-height: 1.4;
-}
-
-.iot-saved-item-action:hover {
-  background: var(--color-primary);
-  color: #fff;
-  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.25);
-}
-
-.iot-saved-item-action--success {
-  background: var(--color-success-bg);
-  color: var(--color-success);
-}
-
-.iot-saved-item-action--success:hover {
-  background: var(--color-success);
-  color: #fff;
-  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.25);
-}
-
-.iot-saved-item-action--info {
-  background: var(--color-bg);
-  color: var(--color-text-secondary);
-  border-color: var(--color-border-light);
-}
-
-.iot-saved-item-action--info:hover {
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
-  border-color: var(--color-primary-border);
-}
-
-.iot-saved-item-action--danger {
-  background: transparent;
-  color: var(--color-text-tertiary);
-  border-color: transparent;
-}
-
-.iot-saved-item-action--danger:hover {
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
-}
-
-/* --- Collapse/Expand Toggle --- */
-.iot-collapse-btn {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 20;
-  width: 22px;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-right: none;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.iot-collapse-btn:hover {
-  color: var(--color-primary);
-  border-color: var(--color-primary-border);
-}
-
 /* --- Extraction Section --- */
 .iot-extraction-empty {
   padding: 4px 8px;
@@ -820,12 +401,6 @@
   color: var(--color-primary) !important;
 }
 
-/* --- Search Input --- */
-.iot-search-input .ant-input-search-button {
-  background: var(--color-bg-elevated) !important;
-  border-color: var(--color-border) !important;
-}
-
 /* --- Sending Animation --- */
 @keyframes iot-sending-pulse {
   0% { box-shadow: var(--shadow-sm); }
@@ -835,13 +410,6 @@
 
 .iot-panel.is-sending {
   animation: iot-sending-pulse 1.5s ease-in-out infinite;
-}
-
-/* --- Responsive --- */
-@media (max-width: 1200px) {
-  .iot-panel-right:not(.is-collapsed) {
-    width: 22% !important;
-  }
 }
 
 /* --- Push Log Drawer --- */
@@ -862,4 +430,1052 @@
 
 .iot-log-pre--empty {
   color: var(--color-text-tertiary, #999);
+}
+
+/* ===== MQTT Support ===== */
+
+/* --- 固定请求类型徽标（新建时选定，创建后不可更改） --- */
+.iot-request-protocol {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.iot-method-badge--http {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  letter-spacing: 0.04em;
+}
+
+/* --- MQTT Badge --- */
+.iot-method-badge--mqtt {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  letter-spacing: 0.04em;
+}
+
+/* --- MQTT Address Bar（Broker + 端口 + Topic + 操作按钮同一行，窄屏自动换行） --- */
+.iot-url-bar--mqtt {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.iot-mqtt-address-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 560px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.iot-mqtt-address-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 320px;
+  min-width: 230px;
+}
+
+.iot-mqtt-address-row .iot-broker-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-mqtt-address-row .iot-port-input {
+  flex: 0 0 130px;
+  width: 130px;
+}
+
+/* 端口输入框内的文字不要被压缩 */
+.iot-mqtt-address-row .iot-port-input .ant-input {
+  min-width: 0;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.iot-mqtt-address-bar .iot-topic-input {
+  flex: 1 1 300px;
+  min-width: 200px;
+  width: auto;
+}
+
+.iot-url-bar--mqtt .iot-url-actions {
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.iot-mqtt-addon {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+}
+
+/* --- MQTT Config Section --- */
+.iot-mqtt-config {
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(300px, 460px));
+  justify-content: start;
+  align-items: center;
+  gap: 10px 32px;
+}
+
+.iot-mqtt-config-title {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 0;
+}
+
+/* 开关与其说明文字组成一组，左边缘与输入框列对齐 */
+.iot-mqtt-switch-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-mqtt-switch-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.iot-mqtt-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.iot-mqtt-field--switch {
+  flex: 0 0 auto;
+}
+
+.iot-mqtt-field--full {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.iot-mqtt-field--full .ant-input,
+.iot-mqtt-field--full .ant-input-affix-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 标签定宽，保证各行输入框左边缘对齐 */
+.iot-mqtt-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  width: 76px;
+  text-align: left;
+}
+
+.iot-mqtt-field .ant-input,
+.iot-mqtt-field .ant-input-affix-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-mqtt-field .iot-mqtt-qos {
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-mqtt-hint {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+/* --- MQTT Publish Result --- */
+.iot-mqtt-result {
+  padding: 12px;
+}
+
+.iot-mqtt-result-row {
+  display: flex;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--color-border-light);
+  font-size: 13px;
+}
+
+.iot-mqtt-result-label {
+  flex-shrink: 0;
+  width: 64px;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.iot-mqtt-result-value {
+  color: var(--color-text);
+  font-family: 'Consolas', 'Monaco', monospace;
+  word-break: break-all;
+}
+
+.iot-mqtt-result-error {
+  color: var(--color-danger);
+}
+
+.iot-mqtt-result-payload {
+  margin-top: 12px;
+  padding: 10px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* --- MQTT Payload Tag / Test Connection Button --- */
+.iot-mqtt-payload-tag.ant-tag {
+  margin-inline-end: 0;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+}
+
+.iot-btn-test-connection.ant-btn {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+  font-size: 13px;
+}
+
+.iot-btn-test-connection.ant-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+
+/* --- Push Log: protocol filter / MQTT cells --- */
+.iot-log-protocol-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.iot-log-mqtt-target {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iot-log-mqtt-topic {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== WebSocket Support ===== */
+
+/* --- WS Badge --- */
+.iot-method-badge--ws {
+  background: #e6fffb;
+  color: #08979c;
+  letter-spacing: 0.04em;
+}
+
+/* --- WS Address Bar (单行 URL 输入) --- */
+.iot-ws-address-bar {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-ws-address-bar .iot-ws-url-input {
+  width: 100%;
+}
+
+/* --- WS Config Section --- */
+.iot-ws-config {
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(300px, 460px));
+  justify-content: start;
+  align-items: center;
+  gap: 10px 32px;
+}
+
+.iot-ws-config-title {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 0;
+}
+
+.iot-ws-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.iot-ws-field--full {
+  margin-bottom: 0;
+}
+
+.iot-ws-field--full .ant-input,
+.iot-ws-field--full .ant-input-affix-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-ws-field .ant-input-number {
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-ws-field--textarea {
+  grid-column: 1 / -1;
+  align-items: flex-start;
+}
+
+.iot-ws-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  width: 76px;
+  text-align: left;
+}
+
+.iot-ws-field--textarea .iot-ws-label {
+  padding-top: 5px;
+}
+
+.iot-ws-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.iot-ws-config > .iot-ws-hint {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
+/* 额外请求头列表在配置卡片内改用较浅底色，与卡片背景区分 */
+.iot-ws-headers .iot-kv-section {
+  background: var(--color-bg-elevated);
+}
+
+/* --- WS Message Stream --- */
+.iot-ws-message-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--color-bg);
+}
+
+.iot-ws-message {
+  padding: 6px 8px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+}
+
+.iot-ws-message-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.iot-ws-message-seq {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.iot-ws-message-content {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.iot-ws-message-binary {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
+.iot-ws-message-base64 {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.iot-ws-message-base64 summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.iot-ws-message-base64 pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.iot-ws-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+  color: var(--color-text-disabled);
+  font-size: 13px;
+}
+
+/* --- WS Connection Result --- */
+.iot-ws-result {
+  padding: 12px;
+}
+
+.iot-ws-result-row {
+  display: flex;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--color-border-light);
+  font-size: 13px;
+}
+
+.iot-ws-result-label {
+  flex-shrink: 0;
+  width: 64px;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.iot-ws-result-value {
+  color: var(--color-text);
+  font-family: 'Consolas', 'Monaco', monospace;
+  word-break: break-all;
+}
+
+.iot-ws-result-value.is-success {
+  color: var(--color-success);
+}
+
+.iot-ws-result-value.is-error {
+  color: var(--color-danger);
+}
+
+.iot-ws-result-error {
+  color: var(--color-danger);
+}
+
+/* --- WS closed_by 标签 --- */
+.iot-ws-closed-tag.ant-tag {
+  margin-inline-end: 0;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+}
+
+/* ===== Postman 布局：左侧请求侧栏 / 顶部标签条 / 配置分页 / 底部响应面板 ===== */
+
+/* --- 容器与主列 --- */
+.iot-container {
+  padding: 8px 10px;
+  height: calc(100vh - var(--header-height) - 16px);
+}
+
+.iot-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+
+.iot-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+/* --- 请求标签条（跨整个编辑器列宽） --- */
+.iot-tabstrip {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.iot-tabstrip-list {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+
+/* --- 标签条右侧固定新增按钮（不随标签滚动，始终可见） --- */
+.iot-tabstrip-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  width: 32px;
+  min-width: 32px;
+  align-self: stretch;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.iot-tabstrip-add:hover {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.iot-tabstrip-add:active {
+  background: var(--color-primary-border);
+}
+
+
+.iot-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 10px;
+  max-width: 220px;
+  border-right: 1px solid var(--color-border-light);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.iot-tab:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+}
+
+.iot-tab.is-active {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  box-shadow: inset 0 -2px 0 var(--color-primary);
+}
+
+.iot-tab .iot-method-badge {
+  font-size: 10px;
+  padding: 0 5px;
+  flex-shrink: 0;
+}
+
+.iot-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+/* --- 请求名行（协议 / 名称 / 保存） --- */
+.iot-request-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.iot-request-header .iot-request-name-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.iot-btn-save.ant-btn {
+  flex-shrink: 0;
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.iot-btn-save.ant-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* --- 地址行 --- */
+.iot-url-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+/* --- 配置分页 --- */
+.iot-config-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.iot-config-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-light);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.iot-config-tab {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.iot-config-tab:hover {
+  color: var(--color-text);
+}
+
+.iot-config-tab.is-active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  font-weight: 500;
+}
+
+.iot-config-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+}
+
+.iot-config-body > .iot-panel {
+  flex: 1;
+  min-height: 0;
+  margin: -12px;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.iot-config-body > .iot-mqtt-config,
+.iot-config-body > .iot-ws-config {
+  flex: 0 0 auto;
+}
+
+.iot-config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.iot-config-section-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* --- Postman 风格 KV 表格 --- */
+.iot-kv-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.iot-kv-table-head,
+.iot-kv-table-row {
+  display: grid;
+  grid-template-columns: 26px minmax(150px, 1.1fr) minmax(150px, 1.5fr) minmax(110px, 0.9fr) 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.iot-kv-table--no-desc .iot-kv-table-head,
+.iot-kv-table--no-desc .iot-kv-table-row {
+  grid-template-columns: 26px minmax(140px, 1fr) minmax(180px, 1.6fr) 36px;
+}
+
+.iot-kv-table--no-enabled.iot-kv-table--no-desc .iot-kv-table-head,
+.iot-kv-table--no-enabled.iot-kv-table--no-desc .iot-kv-table-row {
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.6fr) 36px;
+}
+
+.iot-kv-table-head span {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.iot-kv-table-row.is-disabled {
+  opacity: 0.55;
+}
+
+.iot-kv-table-value {
+  min-width: 0;
+}
+
+.iot-kv-table-empty {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  padding: 4px 0;
+}
+
+/* --- 请求区 / 响应区 上下拖拽分割 --- */
+.iot-split-handle {
+  position: relative;
+  height: 6px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: transparent;
+}
+
+.iot-split-handle::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-border);
+  transition: background 0.15s;
+}
+
+.iot-split-handle:hover::after,
+.iot-split-handle.is-active::after {
+  background: var(--color-primary);
+}
+
+/* --- 响应面板 --- */
+.iot-response-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.iot-response-tabsbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.iot-response-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.iot-response-tab {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.iot-response-tab:hover {
+  color: var(--color-text);
+}
+
+.iot-response-tab.is-active {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  font-weight: 500;
+}
+
+.iot-response-tabsbar.is-collapsed {
+  cursor: pointer;
+  /* 避开应用右下角固定悬浮按钮（FloatButton），保证折叠后仍可点开 */
+  padding-right: 72px;
+}
+
+.iot-response-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.iot-response-toggle.ant-btn {
+  color: var(--color-text-tertiary);
+  padding: 0 4px;
+}
+
+.iot-response-panel .iot-response-container {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.iot-response-panel > .iot-panel {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.iot-response-headers-table {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.iot-response-headers-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 260px) 1fr;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--color-border-light);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.iot-response-headers-key {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.iot-response-headers-value {
+  color: var(--color-text);
+  word-break: break-all;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+/* --- 窄屏 --- */
+@media (max-width: 1200px) {
+  .iot-container {
+    padding: 6px 8px;
+    height: calc(100vh - var(--header-height) - 12px);
+  }
+
+  .iot-request-header,
+  .iot-url-bar {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .iot-config-body {
+    padding: 8px;
+  }
+
+  .iot-config-body > .iot-panel {
+    margin: -8px;
+  }
+
+  /* 窄屏：连接配置卡片由两列塌陷为单列，避免网格溢出 */
+  .iot-mqtt-config,
+  .iot-ws-config {
+    grid-template-columns: minmax(280px, 1fr);
+  }
+}
+
+/* ===== 新建请求：类型选择（与 Postman 一致） ===== */
+
+.iot-new-request-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.iot-type-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.iot-type-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 12px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.iot-type-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.iot-type-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  font-size: 20px;
+}
+
+.iot-type-icon--http {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.iot-type-icon--websocket {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.iot-type-icon--mqtt {
+  background: #f5f3ff;
+  color: #7c3aed;
+}
+
+.iot-type-icon--folder {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+/* 文件夹卡片与请求类型卡片区分：虚线边框 */
+.iot-type-card--folder {
+  border-style: dashed;
+}
+
+.iot-type-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.iot-type-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-tertiary);
+}
+
+.iot-new-folder-back {
+  border: none;
+  background: none;
+  padding: 0 0 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.iot-new-folder-back:hover {
+  color: var(--color-primary);
+}
+
+.iot-new-folder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.iot-new-folder-field {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.iot-new-folder-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.iot-new-folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .iot-type-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .iot-type-grid {
+    grid-template-columns: 1fr;
+  }
 }
