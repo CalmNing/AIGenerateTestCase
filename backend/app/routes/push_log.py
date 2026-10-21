@@ -21,11 +21,21 @@ def get_push_logs(
     search: str | None = Query(default=None),
     mocked: bool | None = Query(default=None),
     failed: bool | None = Query(default=None),
+    protocol: str | None = Query(default=None),
 ):
-    """获取推送请求记录列表，支持分页和 method/search/mocked/failed 过滤"""
+    """获取推送请求记录列表，支持分页和 method/search/mocked/failed/protocol 过滤"""
     filters = []
     if method:
         filters.append(PushLog.request_method == method.upper())
+    if protocol:
+        # 协议精确过滤：http | mqtt
+        # 直接调用路由函数（非 HTTP 请求）时默认值仍是 Query 对象，需先归一化
+        protocol_value = protocol.strip().lower() if isinstance(protocol, str) else None
+        if protocol_value == "http":
+            # 兼容历史数据：自动迁移补列时旧记录的 protocol 为空字符串，语义上都是 HTTP
+            filters.append((PushLog.protocol == "http") | (PushLog.protocol == ""))
+        elif protocol_value:
+            filters.append(PushLog.protocol == protocol_value)
     if search:
         filters.append(
             (PushLog.final_url.contains(search)) | (PushLog.source_url.contains(search))

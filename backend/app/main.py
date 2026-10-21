@@ -12,6 +12,7 @@ from app.routes.mock_proxy import router as mock_proxy_router
 from app.routes.mock_proxy import public_router as mock_proxy_public_router
 from app.routes.mock_server import router as mock_server_router
 from app.routes.module import router as module_router
+from app.routes.mqtt import router as mqtt_router
 from app.routes.nav_link import router as nav_link_router
 from app.routes.proxy import router as proxy_router
 from app.routes.push_log import router as push_log_router
@@ -26,6 +27,7 @@ from app.routes.document import router as document_router
 from app.routes.chat import router as chat_router
 from app.routes.ui_execution import router as ui_execution_router
 from app.routes.ui_automation import router as ui_automation_router
+from app.routes.websocket import router as ws_router
 
 api_router = APIRouter()
 
@@ -83,6 +85,32 @@ api_router.include_router(
     ],
 )
 api_router.include_router(proxy_router, dependencies=[Depends(require_permissions(Permission.IOT_EXECUTE))])
+# WebSocket 订阅：连接/测试连接属于 iot:execute，读日志/删除沿用 iot:read / iot:delete。
+api_router.include_router(
+    ws_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[Permission.IOT_READ],
+                post=[Permission.IOT_EXECUTE],
+                delete=[Permission.IOT_DELETE],
+            )
+        )
+    ],
+)
+# MQTT 发布：发布/测试连接属于 iot:execute，读日志/删除沿用 iot:read / iot:delete。
+api_router.include_router(
+    mqtt_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                get=[Permission.IOT_READ],
+                post=[Permission.IOT_EXECUTE],
+                delete=[Permission.IOT_DELETE],
+            )
+        )
+    ],
+)
 api_router.include_router(
     push_log_router,
     dependencies=[

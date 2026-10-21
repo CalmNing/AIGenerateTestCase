@@ -225,6 +225,7 @@ class SavedRequestFolder(BaseModel, table=True):
     """保存的请求文件夹数据模型"""
     name: str = Field(default="", description="文件夹名称")
     parent_id: Optional[int] = Field(default=None, foreign_key="savedrequestfolder.id", description="父文件夹ID")
+    sort_order: Optional[int] = Field(default=None, description="同级排序序号（拖拽排序，越小越靠前）")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
     children: List["SavedRequestFolder"] = Relationship(
@@ -247,7 +248,11 @@ class SavedRequest(BaseModel, table=True):
     body: Optional[str] = Field(default=None)
     post_extractions: List[dict] = Field(default_factory=list, sa_type=JSON)  # 后置提取规则
     folder_id: Optional[int] = Field(default=None, foreign_key="savedrequestfolder.id", index=True, description="所属文件夹ID")
+    sort_order: Optional[int] = Field(default=None, description="所属文件夹内的排序序号（拖拽排序，越小越靠前）")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")  # 激活用户关联
+    protocol: str = Field(default="http", description="推送协议: http | mqtt | websocket")
+    mqtt_config: Optional[dict] = Field(default=None, sa_type=JSON, description="MQTT 配置 {broker,topic,qos,retain,payload,client_id,username,password,tls}")
+    ws_config: Optional[dict] = Field(default=None, sa_type=JSON, description="WebSocket 配置 {url,headers,maxMessages,timeoutSeconds,protocols,sendMessage}")
 
 
 class GlobalParameter(BaseModel, table=True):
@@ -418,6 +423,13 @@ class PushLog(BaseModel, table=True):
     duration_ms: int = Field(default=0, description="请求耗时（毫秒）")
     environment_id: Optional[int] = Field(default=None, description="使用的环境参数ID")
     user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")
+    # MQTT 发布专用字段（protocol=mqtt 时填充）
+    protocol: str = Field(default="http", index=True, description="推送协议: http | mqtt")
+    mqtt_broker: Optional[str] = Field(default=None, description="MQTT Broker 地址（变量替换后）")
+    mqtt_topic: Optional[str] = Field(default=None, description="MQTT 主题（变量替换后）")
+    mqtt_qos: Optional[int] = Field(default=None, description="MQTT QoS 等级")
+    mqtt_retain: Optional[bool] = Field(default=None, description="是否保留消息（retain）")
+    mqtt_client_id: Optional[str] = Field(default=None, description="MQTT 客户端ID")
 
 
 class MockProxyRule(BaseModel, table=True):

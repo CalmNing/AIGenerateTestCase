@@ -28,3 +28,5 @@ pdfplumber>=0.11.0
 pillow>=10.0.0
 browser-use>=0.13,<0.14
 playwright>=1.62.0
+paho-mqtt>=2.0
+websockets>=12
