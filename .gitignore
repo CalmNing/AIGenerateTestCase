@@ -38,3 +38,4 @@ frontend/.env.*
 /backend/.venv/
 /backend/.claude/
 /.dsh-acl-recovery/
+/.superpowers/
