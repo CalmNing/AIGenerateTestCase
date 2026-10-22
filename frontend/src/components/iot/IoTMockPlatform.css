@@ -618,6 +618,44 @@
   border-color: var(--color-primary-border);
 }
 
+/* --- Proxy / Host Tag Cells --- */
+.mock-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 44px;
+  overflow: hidden;
+}
+
+.mock-cell-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 160px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary-border);
+}
+
+.mock-cell-tag--host {
+  font-family: inherit;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-light);
+}
+
+.mock-cell-empty {
+  font-size: 12px;
+  color: var(--color-text-disabled);
+}
+
 /* --- Responsive --- */
 @media (max-width: 1200px) {
   .mock-panel-right {

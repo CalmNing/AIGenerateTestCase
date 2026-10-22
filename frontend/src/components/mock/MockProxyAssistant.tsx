@@ -2,15 +2,18 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Drawer, Tabs, Table, Button, Tag, Switch, Modal, Form, Input, InputNumber,
   Space, Badge, Popconfirm, message, Typography, Descriptions, FloatButton,
-  Popover, Empty, Select, Divider,
+  Popover, Empty, Select, Divider, Alert,
 } from 'antd';
 import {
   ApiOutlined, PlusOutlined, DeleteOutlined, ReloadOutlined,
   PlayCircleOutlined, PauseCircleOutlined, DownloadOutlined, LinkOutlined,
-  CheckCircleFilled, QuestionCircleOutlined,
+  CheckCircleFilled, QuestionCircleOutlined, AimOutlined,
 } from '@ant-design/icons';
 import { mockProxyApi, MOCK_PROXY_CA_CERT_URL } from '../../services/api';
-import type { MockProxyRule, MockProxyStatus, MockLogItem } from '../../types';
+import type {
+  MockProxyRule, MockProxyStatus, MockLogItem,
+  PlatformMockCoverage, PlatformMockItem, MockPreviewResult,
+} from '../../types';
 
 const { Text, Paragraph } = Typography;
 
@@ -49,8 +52,15 @@ const SOURCE_OPTIONS: { value: LogSource; label: string }[] = [
 interface RuleFormValues {
   name: string;
   host_pattern: string;
+  service_prefix?: string;
   path_pattern?: string;
   enabled: boolean;
+}
+
+interface PreviewFormValues {
+  host: string;
+  method: string;
+  path: string;
 }
 
 function prettyMaybeJson(text?: string | null): string | undefined {
@@ -93,11 +103,36 @@ function validatePathPattern(_rule: unknown, value?: string): Promise<void> {
   return Promise.resolve();
 }
 
+function normalizeServicePrefix(value?: string): string {
+  let s = (value || '').trim();
+  if (!s) return '';
+  if (!s.startsWith('/')) s = `/${s}`;
+  while (s.length > 1 && s.endsWith('/')) s = s.slice(0, -1);
+  return s === '/' ? '' : s;
+}
+
+function validateServicePrefix(_rule: unknown, value?: string): Promise<void> {
+  const s = (value || '').trim();
+  if (!s) return Promise.resolve();
+  if (/\s/.test(s)) return Promise.reject(new Error('服务前缀不能包含空格'));
+  if (/[{}*]/.test(s)) return Promise.reject(new Error('服务前缀不能包含 { } 或 *'));
+  if (s.includes('//')) return Promise.reject(new Error('服务前缀格式不正确，需形如 /service/contract'));
+  return Promise.resolve();
+}
+
 function hostHint(v?: string): string {
   const s = (v || '').trim();
   if (!s) return '支持精确域名、IP 或通配符 *.example.com';
   if (s.startsWith('*.')) return `将拦截所有 ${s.slice(1)} 子域（不含根域 ${s.slice(2)}）`;
   return `将精确匹配主机 ${s}`;
+}
+
+function servicePrefixHint(v?: string): string {
+  const raw = (v || '').trim();
+  if (!raw || raw === '/') return '可留空：直接以请求完整路径匹配接口平台的 Mock 地址';
+  const s = normalizeServicePrefix(raw);
+  const saved = !raw.startsWith('/') ? `（将保存为 ${s}）` : '';
+  return `请求 ${s}/update 将按相对路径 /update 匹配接口平台的 Mock${saved}`;
 }
 
 function pathHint(v?: string): string {
@@ -132,7 +167,14 @@ const MockProxyAssistant: React.FC = () => {
   const [editingRule, setEditingRule] = useState<MockProxyRule | null>(null);
   const [detailLog, setDetailLog] = useState<MockLogItem | null>(null);
   const [guideOpen, setGuideOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState('rules');
+  const [platformData, setPlatformData] = useState<PlatformMockCoverage | null>(null);
+  const [loadingPlatform, setLoadingPlatform] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<MockPreviewResult | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [form] = Form.useForm<RuleFormValues>();
+  const [previewForm] = Form.useForm<PreviewFormValues>();
   const logQueryRef = useRef(logQuery);
   logQueryRef.current = logQuery;
 
@@ -142,6 +184,7 @@ const MockProxyAssistant: React.FC = () => {
   const proxyAddr = status?.local_ip && status?.port ? `${status.local_ip}:${status.port}` : null;
 
   const hostVal = Form.useWatch('host_pattern', form);
+  const servicePrefixVal = Form.useWatch('service_prefix', form);
   const pathVal = Form.useWatch('path_pattern', form);
 
   const fetchStatus = useCallback(async () => {
@@ -165,6 +208,20 @@ const MockProxyAssistant: React.FC = () => {
       // ignore
     } finally {
       setLoadingRules(false);
+    }
+  }, []);
+
+  const fetchPlatform = useCallback(async () => {
+    setLoadingPlatform(true);
+    try {
+      const res = await mockProxyApi.getPlatformMocks();
+      if (res.code === 200 && res.data) {
+        setPlatformData(res.data);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingPlatform(false);
     }
   }, []);
 
@@ -203,12 +260,18 @@ const MockProxyAssistant: React.FC = () => {
   useEffect(() => {
     if (open) {
       fetchRules();
+      fetchPlatform();
     }
-  }, [open, fetchRules]);
+  }, [open, fetchRules, fetchPlatform]);
 
   useEffect(() => {
     if (open) fetchLogs();
   }, [logQuery, open, fetchLogs]);
+
+  // 切到「接口平台 Mock」时重新拉取，避免规则/平台配置在其他标签页变更后数据过期
+  useEffect(() => {
+    if (open && activeTab === 'platform') fetchPlatform();
+  }, [open, activeTab, fetchPlatform]);
 
   useEffect(() => {
     if (!open || !autoRefresh) return;
@@ -223,6 +286,7 @@ const MockProxyAssistant: React.FC = () => {
   const refreshAll = () => {
     fetchStatus();
     fetchRules();
+    fetchPlatform();
     fetchLogs();
   };
 
@@ -281,6 +345,7 @@ const MockProxyAssistant: React.FC = () => {
       const res = await mockProxyApi.updateRule(rule.id, { enabled });
       if (res.code === 200) {
         setRules((prev) => prev.map((r) => (r.id === rule.id ? { ...r, enabled } : r)));
+        fetchPlatform();
       } else {
         message.error(res.message || '更新失败');
       }
@@ -296,6 +361,7 @@ const MockProxyAssistant: React.FC = () => {
         message.success('规则已删除');
         setRules((prev) => prev.filter((r) => r.id !== ruleId));
         fetchStatus();
+        fetchPlatform();
       } else {
         message.error(res.message || '删除失败');
       }
@@ -306,7 +372,13 @@ const MockProxyAssistant: React.FC = () => {
 
   const openCreateModal = () => {
     setEditingRule(null);
-    form.setFieldsValue({ name: '', host_pattern: '', path_pattern: '', enabled: true });
+    form.setFieldsValue({
+      name: '',
+      host_pattern: '',
+      service_prefix: '',
+      path_pattern: '',
+      enabled: true,
+    });
     setRuleModalVisible(true);
   };
 
@@ -315,10 +387,17 @@ const MockProxyAssistant: React.FC = () => {
     form.setFieldsValue({
       name: rule.name,
       host_pattern: rule.host_pattern,
+      service_prefix: rule.service_prefix || '',
       path_pattern: rule.path_pattern,
       enabled: rule.enabled,
     });
     setRuleModalVisible(true);
+  };
+
+  // 从「接口平台 Mock」页引导到转发规则页并直接打开新建弹窗
+  const goCreateRule = () => {
+    setActiveTab('rules');
+    openCreateModal();
   };
 
   const handleRuleSubmit = async () => {
@@ -327,6 +406,7 @@ const MockProxyAssistant: React.FC = () => {
       const payload = {
         name: values.name || '',
         host_pattern: values.host_pattern.trim(),
+        service_prefix: normalizeServicePrefix(values.service_prefix),
         path_pattern: (values.path_pattern || '').trim(),
         enabled: values.enabled,
       };
@@ -338,11 +418,41 @@ const MockProxyAssistant: React.FC = () => {
         setRuleModalVisible(false);
         fetchRules();
         fetchStatus();
+        fetchPlatform();
       } else {
         message.error(res.message || '保存失败');
       }
     } catch {
       // 表单校验失败
+    }
+  };
+
+  const handlePreview = async () => {
+    let values: PreviewFormValues;
+    try {
+      values = await previewForm.validateFields();
+    } catch {
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewResult(null);
+    try {
+      const res = await mockProxyApi.preview({
+        host: (values.host || '').trim(),
+        method: values.method || 'GET',
+        path: (values.path || '').trim(),
+      });
+      if (res.code === 200 && res.data) {
+        setPreviewResult(res.data);
+      } else {
+        setPreviewError(res.message || '预览失败');
+      }
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } }; message?: string };
+      setPreviewError(err.response?.data?.message || err.message || '预览失败');
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -366,8 +476,18 @@ const MockProxyAssistant: React.FC = () => {
       title: '匹配模式', key: 'pattern',
       render: (_: unknown, r: MockProxyRule) => (
         <div>
-          <div><Text code>{r.host_pattern}</Text></div>
+          <div>
+            <Text type="secondary" style={{ fontSize: 12, marginRight: 6 }}>主机</Text>
+            <Text code>{r.host_pattern}</Text>
+          </div>
           <div style={{ marginTop: 4 }}>
+            <Text type="secondary" style={{ fontSize: 12, marginRight: 6 }}>前缀</Text>
+            {r.service_prefix
+              ? <Text code>{r.service_prefix}</Text>
+              : <Text type="secondary" style={{ fontSize: 12 }}>无</Text>}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            <Text type="secondary" style={{ fontSize: 12, marginRight: 6 }}>路径</Text>
             {r.path_pattern ? <Text code type="secondary">{r.path_pattern}</Text> : <Tag>全部路径</Tag>}
           </div>
         </div>
@@ -388,6 +508,57 @@ const MockProxyAssistant: React.FC = () => {
             <Button type="link" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
+      ),
+    },
+  ];
+
+  const platformColumns = [
+    { title: '名称', dataIndex: 'name', key: 'name', width: 140, ellipsis: true, render: (v: string) => v || '-' },
+    {
+      title: '方法', dataIndex: 'method', key: 'method', width: 78,
+      render: (m: string) => <MethodTag method={m} />,
+    },
+    {
+      title: '路径', dataIndex: 'url_path', key: 'url_path', width: 150, ellipsis: true,
+      render: (v: string) => <Text code>{v || '/'}</Text>,
+    },
+    {
+      title: '代理拦截地址', dataIndex: 'proxy_urls', key: 'proxy_urls', width: 170,
+      render: (v?: string[]) => (
+        v && v.length > 0 ? (
+          <div>
+            {v.map((u) => <div key={u} style={{ fontSize: 12 }}><Text code copyable={{ text: u }}>{u}</Text></div>)}
+          </div>
+        ) : <Text type="secondary" style={{ fontSize: 12 }}>未配置</Text>
+      ),
+    },
+    {
+      title: '生效主机', dataIndex: 'hosts', key: 'hosts', width: 130,
+      render: (v?: string[]) => (
+        v && v.length > 0
+          ? <div>{v.map((h) => <div key={h} style={{ fontSize: 12 }}><Text code>{h}</Text></div>)}</div>
+          : <Tag>全部主机</Tag>
+      ),
+    },
+    {
+      title: '覆盖状态', key: 'covered', width: 110,
+      render: (_: unknown, r: PlatformMockItem) => (
+        <Space size={4} wrap>
+          {r.covered ? <Tag color="green">已覆盖</Tag> : <Tag color="red">无规则覆盖</Tag>}
+          {r.bound && <Tag color="blue">接口地址绑定</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: '覆盖规则', key: 'covering_rules',
+      render: (_: unknown, r: PlatformMockItem) => (
+        r.covering_rules.length > 0 ? (
+          <Space size={4} wrap>
+            {r.covering_rules.map((rule) => (
+              <Tag key={rule.id} color="geekblue">{rule.name || `规则 #${rule.id}`}</Tag>
+            ))}
+          </Space>
+        ) : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>
       ),
     },
   ];
@@ -474,6 +645,12 @@ const MockProxyAssistant: React.FC = () => {
             <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>
               未命中规则的请求将透传到真实服务
             </div>
+            {typeof status?.platform_configs === 'number' && (
+              <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
+                接口平台 Mock 已启用 <Text strong style={{ fontSize: 12 }}>{status.platform_configs}</Text> 条，
+                可在「接口平台 Mock」页查看代理覆盖情况
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: '14px 18px', marginBottom: 4 }}>
@@ -543,7 +720,8 @@ const MockProxyAssistant: React.FC = () => {
 
         <Tabs
           style={{ marginTop: 20 }}
-          defaultActiveKey="rules"
+          activeKey={activeTab}
+          onChange={setActiveTab}
           items={[
             {
               key: 'rules',
@@ -648,6 +826,178 @@ const MockProxyAssistant: React.FC = () => {
                 </>
               ),
             },
+            {
+              key: 'platform',
+              label: `接口平台 Mock (${platformData?.enabled_configs ?? 0})`,
+              children: (
+                <>
+                  <div style={{ fontSize: 13, marginBottom: 12 }}>
+                    {platformData
+                      ? (
+                        <>
+                          <Text strong>{platformData.enabled_configs}</Text> 个启用的 Mock，其中{' '}
+                          <Text strong style={{ color: '#52c41a' }}>{platformData.covered_configs}</Text> 个可被代理命中
+                          {platformData.rules_count === 0 && (
+                            <Text type="secondary" style={{ marginLeft: 8 }}>当前没有启用的转发规则</Text>
+                          )}
+                        </>
+                      )
+                      : <Text type="secondary">暂无数据</Text>}
+                  </div>
+
+                  {platformData && platformData.covered_configs < platformData.enabled_configs && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="还有启用中的接口平台 Mock 无法被代理命中"
+                      description={`${platformData.enabled_configs - platformData.covered_configs} 个 Mock 既未绑定接口地址（proxy_urls），也没有被任何转发规则的服务前缀 + 路径范围覆盖，代理会把对应请求透传到真实服务。`}
+                      action={
+                        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={goCreateRule}>
+                          去新建转发规则
+                        </Button>
+                      }
+                    />
+                  )}
+
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    columns={platformColumns}
+                    dataSource={platformData?.items || []}
+                    loading={loadingPlatform}
+                    pagination={false}
+                    scroll={{ x: 860 }}
+                    locale={{
+                      emptyText: (
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description="暂无启用的接口平台 Mock，先到接口平台创建并启用 Mock"
+                        />
+                      ),
+                    }}
+                  />
+
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: '14px 16px', marginTop: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                      <Space size={6}>
+                        <AimOutlined style={{ color: '#1677ff' }} />
+                        <Text strong>命中预览</Text>
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 12 }}>预览不会写入流量日志</Text>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#999', marginTop: 4, marginBottom: 10 }}>
+                      填入设备实际发起的请求，验证它会不会被代理拦成接口平台的 Mock
+                    </div>
+
+                    <Form form={previewForm} layout="inline" initialValues={{ method: 'GET' }} style={{ gap: 8, flexWrap: 'wrap' }}>
+                      <Form.Item
+                        name="host"
+                        rules={[{ required: true, message: '请输入主机' }]}
+                        style={{ marginRight: 0, marginBottom: 8 }}
+                      >
+                        <Input placeholder="主机，如 api.example.com" style={{ width: 180 }} />
+                      </Form.Item>
+                      <Form.Item name="method" style={{ marginRight: 0, marginBottom: 8 }}>
+                        <Select style={{ width: 96 }} options={METHOD_OPTIONS} />
+                      </Form.Item>
+                      <Form.Item
+                        name="path"
+                        rules={[{ required: true, message: '请输入路径' }]}
+                        style={{ marginRight: 0, marginBottom: 8 }}
+                      >
+                        <Input placeholder="路径，如 /contract/update" style={{ width: 200 }} />
+                      </Form.Item>
+                      <Form.Item style={{ marginRight: 0, marginBottom: 8 }}>
+                        <Button type="primary" loading={previewLoading} onClick={handlePreview}>预览命中</Button>
+                      </Form.Item>
+                    </Form>
+
+                    {previewError && (
+                      <Alert type="error" showIcon style={{ marginTop: 8 }} message={previewError} />
+                    )}
+
+                    {previewResult && (
+                      <div style={{ marginTop: 10 }}>
+                        {!previewResult.intercepted && (
+                          <Alert
+                            type="info"
+                            showIcon
+                            message="该主机没有命中任何转发规则，请求会直接透传到真实服务"
+                          />
+                        )}
+                        {previewResult.intercepted && !previewResult.matched && (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            message="已拦截但未命中接口平台 Mock，会透传真实服务"
+                            description={
+                              previewResult.rule && (
+                                <div style={{ fontSize: 12 }}>
+                                  命中转发规则：<Text code>{previewResult.rule.name}</Text>
+                                  {previewResult.rule.service_prefix && (
+                                    <>
+                                      ，服务前缀 <Text code>{previewResult.rule.service_prefix}</Text>
+                                    </>
+                                  )}
+                                  {previewResult.candidates && previewResult.candidates.length > 0 && (
+                                    <div style={{ marginTop: 6 }}>
+                                      已按候选路径匹配：
+                                      {previewResult.candidates.map((c) => (
+                                        <Tag key={c} style={{ marginLeft: 4 }}>{c}</Tag>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {previewResult.error && (
+                                    <div style={{ marginTop: 6, color: '#cf1322' }}>预览异常：{previewResult.error}</div>
+                                  )}
+                                </div>
+                              )
+                            }
+                          />
+                        )}
+                        {previewResult.intercepted && previewResult.matched && (
+                          <div>
+                            <Descriptions bordered size="small" column={2}>
+                              <Descriptions.Item label="命中来源">
+                                <Tag color={previewResult.source === 'config' ? 'green' : 'volcano'}>
+                                  {previewResult.source === 'config' ? '接口平台 Mock' : '项目 Mock'}
+                                </Tag>
+                              </Descriptions.Item>
+                              <Descriptions.Item label="状态码">
+                                <Tag color={(previewResult.status_code ?? 0) < 400 ? 'green' : 'red'}>
+                                  {previewResult.status_code ?? '-'}
+                                </Tag>
+                              </Descriptions.Item>
+                              <Descriptions.Item label="命中 Mock">{previewResult.config_name || '-'}</Descriptions.Item>
+                              <Descriptions.Item label="转发规则">{previewResult.rule?.name || '-'}</Descriptions.Item>
+                              {previewResult.matched_url && (
+                                <Descriptions.Item label="实际匹配地址" span={2}>
+                                  <Text code>{previewResult.matched_url}</Text>
+                                </Descriptions.Item>
+                              )}
+                              {previewResult.candidates && previewResult.candidates.length > 0 && (
+                                <Descriptions.Item label="候选路径" span={2}>
+                                  {previewResult.candidates.map((c) => (
+                                    <Tag key={c} style={{ marginLeft: 4 }}>{c}</Tag>
+                                  ))}
+                                </Descriptions.Item>
+                              )}
+                            </Descriptions>
+                            <div style={{ marginTop: 8 }}>
+                              <Text strong style={{ fontSize: 13 }}>响应预览：</Text>
+                              <pre style={{ background: '#f6f6f6', padding: 10, borderRadius: 4, maxHeight: 260, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', marginTop: 6 }}>
+                                {prettyMaybeJson(previewResult.body_preview) || '(空)'}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ),
+            },
           ]}
         />
       </Drawer>
@@ -670,6 +1020,14 @@ const MockProxyAssistant: React.FC = () => {
             extra={hostHint(hostVal)}
           >
             <Input placeholder="api.example.com、10.0.0.5 或 *.example.com" />
+          </Form.Item>
+          <Form.Item
+            name="service_prefix"
+            label="服务前缀"
+            rules={[{ validator: validateServicePrefix }]}
+            extra={servicePrefixHint(servicePrefixVal)}
+          >
+            <Input placeholder="/contract 或 /service/contract（可留空）" prefix={<ApiOutlined />} />
           </Form.Item>
           <Form.Item
             name="path_pattern"

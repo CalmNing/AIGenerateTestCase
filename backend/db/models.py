@@ -304,6 +304,8 @@ class MockConfig(BaseModel, table=True):
     response_count: int = Field(default=1, ge=1, description="返回数据条目数量（分页用）")
     page_size: Optional[int] = Field(default=None, ge=1, description="分页大小（可选，默认为1）")
     json_path: Optional[str] = Field(default=None, description="JSON路径，指定响应体中返回批量数据的字段，如 $.data.items")
+    proxy_urls: List[str] = Field(default_factory=list, sa_type=JSON, description="代理拦截的真实接口地址列表（主机+路径，如 http://192.168.13.178:18896/contract/update）；命中即返回本 Mock 响应")
+    hosts: List[str] = Field(default_factory=list, sa_type=JSON, description="定向生效主机列表（支持 *.example.com），留空=规则覆盖的任意主机；用于同路径多环境区分")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 
 class McpServer(BaseModel, table=True):
@@ -437,6 +439,7 @@ class MockProxyRule(BaseModel, table=True):
     name: str = Field(default="", description="规则名称")
     host_pattern: str = Field(default="", description="主机匹配模式，如 api.example.com 或 *.example.com")
     path_pattern: str = Field(default="", description="路径匹配模式，如 /api/user/* 或 /users/{id}；空=全部路径")
+    service_prefix: str = Field(default="", description="该规则覆盖流量的服务前缀，如 /contract；请求去掉它后按平台相对路径匹配，空=不剥离")
     enabled: bool = Field(default=True, description="是否启用")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
 

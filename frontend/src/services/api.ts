@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PlatformMockCoverage, MockPreviewRequest, MockPreviewResult, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult } from '../types';
 
 // 创建axios实例
 const api = axios.create({
@@ -933,6 +933,14 @@ export const mockProxyApi = {
 
   // 清空全部流量日志
   clearLogs: (): Promise<ApiResponse> => api.delete('/mock-logs'),
+
+  // 接口平台 Mock 在代理侧的覆盖情况
+  getPlatformMocks: (): Promise<ApiResponse<PlatformMockCoverage>> =>
+    api.get('/mock-proxy/platform-mocks'),
+
+  // 预览某次真实请求会不会被代理拦成 Mock（不写流量日志）
+  preview: (payload: MockPreviewRequest): Promise<ApiResponse<MockPreviewResult>> =>
+    api.post('/mock-proxy/preview', payload),
 };
 
 // CA 证书下载地址（免认证，用原生下载而非 axios）

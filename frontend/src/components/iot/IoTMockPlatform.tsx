@@ -50,6 +50,23 @@ const StatusCodeBadge: React.FC<{ code: number }> = ({ code }) => {
   return <span className={cls}>{code}</span>;
 };
 
+const TagListCell: React.FC<{ items?: string[]; emptyText: string; variant?: 'host' }> = ({ items, emptyText, variant }) => {
+  const list = (items || []).filter(Boolean);
+  if (list.length === 0) return <span className="mock-cell-empty">{emptyText}</span>;
+  return (
+    <div className="mock-tag-list">
+      {list.map((item) => (
+        <Tooltip key={item} title={item} placement="topLeft">
+          <span className={`mock-cell-tag${variant === 'host' ? ' mock-cell-tag--host' : ''}`}>{item}</span>
+        </Tooltip>
+      ))}
+    </div>
+  );
+};
+
+const normalizeTags = (values?: string[] | null): string[] =>
+  (values || []).map(v => (v || '').trim()).filter(Boolean);
+
 const IoTMockPlatform: React.FC = () => {
   const [configs, setConfigs] = useState<MockConfig[]>([]);
   const [environments, setEnvironments] = useState<GlobalParameter[]>([]);
@@ -112,7 +129,7 @@ const IoTMockPlatform: React.FC = () => {
 
   const resetForm = () => {
     form.resetFields();
-    form.setFieldsValue({ method: 'GET', status_code: 200, enabled: true });
+    form.setFieldsValue({ method: 'GET', status_code: 200, enabled: true, proxy_urls: [], hosts: [] });
     setResponseHeaders([]);
     setEditingConfig(null);
   };
@@ -135,6 +152,8 @@ const IoTMockPlatform: React.FC = () => {
       response_count: record.response_count || 1,
       page_size: record.page_size || undefined,
       json_path: record.json_path || undefined,
+      proxy_urls: record.proxy_urls || [],
+      hosts: record.hosts || [],
     });
     setResponseHeaders(record.response_headers?.map(h => ({ key: h.key, value: h.value })) || []);
     setModalVisible(true);
@@ -151,6 +170,8 @@ const IoTMockPlatform: React.FC = () => {
       enabled: false,
       environment_id: record.environment_id,
       json_path: record.json_path || undefined,
+      proxy_urls: record.proxy_urls || [],
+      hosts: record.hosts || [],
     });
     setResponseHeaders(record.response_headers?.map(h => ({ key: h.key, value: h.value })) || []);
     setModalVisible(true);
@@ -162,6 +183,8 @@ const IoTMockPlatform: React.FC = () => {
       const values = await form.validateFields();
       const payload = {
         ...values,
+        proxy_urls: normalizeTags(values.proxy_urls),
+        hosts: normalizeTags(values.hosts),
         response_headers: responseHeaders.filter(h => h.key),
       };
       if (editingConfig) {
@@ -302,6 +325,22 @@ const IoTMockPlatform: React.FC = () => {
       },
     },
     {
+      title: '代理拦截',
+      key: 'proxy_urls',
+      width: 180,
+      render: (_: any, r: MockConfig) => (
+        <TagListCell items={r.proxy_urls} emptyText="未配置" />
+      ),
+    },
+    {
+      title: '主机范围',
+      key: 'hosts',
+      width: 120,
+      render: (_: any, r: MockConfig) => (
+        <TagListCell items={r.hosts} emptyText="全部主机" variant="host" />
+      ),
+    },
+    {
       title: '启用',
       dataIndex: 'enabled',
       key: 'enabled',
@@ -366,7 +405,7 @@ const IoTMockPlatform: React.FC = () => {
               size: 'small',
               showTotal: (total) => <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>共 {total} 条</span>,
             }}
-            scroll={{ y: 'calc(100vh - 240px)' }}
+            scroll={{ x: 1250, y: 'calc(100vh - 240px)' }}
           />
         </div>
       </div>
@@ -394,6 +433,7 @@ const IoTMockPlatform: React.FC = () => {
             <p><strong>2. URL 路径</strong> — 支持路径参数，如 <code>/users/{"{id}"}</code>，访问 <code>/api/mock/users/123</code> 时 <code>{"{{id}}"}</code> 替换为 <code>123</code></p>
             <p><strong>3. 分页</strong> — 返回条目数 &gt; 1 时启用，通过 <code>?page=1&page_size=10</code> 控制</p>
             <p><strong>4. JSON 路径</strong> — 指定数组数据字段，如 <code>$.data.items</code>，留空自动检测</p>
+            <p><strong>5. 代理拦截地址</strong> — 填真实接口地址（如 <code>192.168.13.178:18896/contract/update</code>），配置后下次监听到该接口调用即返回本 Mock；服务前缀在「Mock 流量代理 → 转发规则」里配置。留空则只能通过 <code>/api/mock</code> 调用</p>
             <div className="mock-highlight-box">
               <strong>基础路径：</strong><code>/api/mock</code><br />
               配置路径 <code>/hello</code>，访问 <code>/api/mock/hello</code>
@@ -497,6 +537,37 @@ const IoTMockPlatform: React.FC = () => {
 
           <Form.Item name="json_path" label="JSON 路径">
             <Input placeholder="响应体中数组数据的 JSON 路径，如 $.data.items" />
+          </Form.Item>
+
+          {/* 代理拦截 */}
+          <Form.Item
+            name="proxy_urls"
+            label="代理拦截地址"
+            extra="填了之后，代理监听到这个接口的真实调用会直接返回本 Mock 的响应，无需再加转发规则。支持完整 URL、省略协议、主机+路径或仅路径；端口与 query 不参与匹配。"
+          >
+            <Select
+              mode="tags"
+              allowClear
+              tokenSeparators={[',', '\n']}
+              placeholder="例如 http://192.168.13.178:18896/contract/update，留空则只能通过 /api/mock 调用"
+              options={[]}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="hosts"
+            label="定向主机"
+            extra="留空 = 规则覆盖的任意主机；支持通配，如 *.example.com，也可直接填 IP。"
+          >
+            <Select
+              mode="tags"
+              allowClear
+              tokenSeparators={[',', '\n']}
+              placeholder="留空=规则覆盖的任意主机"
+              options={[]}
+              style={{ width: '100%' }}
+            />
           </Form.Item>
 
           {/* 响应头 */}

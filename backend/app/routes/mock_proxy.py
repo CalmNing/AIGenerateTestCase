@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from app.deps import SessionDep, CurrentUser
-from db.models import MockProxyRule
+from db.models import MockConfig, MockProxyRule
 from utils.base_response import Response
 
 # 需要权限的管理路由
@@ -23,6 +23,25 @@ public_router = APIRouter(prefix="/mock-proxy", tags=["mock-proxy"])
 
 class ProxyStartRequest(BaseModel):
     port: Optional[int] = None
+
+
+def _normalize_service_prefix(value: str) -> Optional[str]:
+    """规范化规则的服务前缀；非法返回 None。
+
+    合法：空、/contract、/service/contract（以 / 开头、不以 / 结尾、不含 { } *）
+    """
+    prefix = (value or "").strip()
+    if not prefix:
+        return ""
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if len(prefix) > 1 and prefix.endswith("/"):
+        prefix = prefix.rstrip("/")
+    if any(token in prefix for token in ("{", "}", "*")):
+        return None
+    if " " in prefix or "//" in prefix:
+        return None
+    return prefix
 
 
 def _local_ip() -> str:
@@ -45,15 +64,19 @@ def _local_ip() -> str:
 
 @router.get("/status", response_model=Response[dict])
 def get_proxy_status(session: SessionDep, user: CurrentUser):
-    """获取代理运行状态与规则数量。"""
+    """获取代理运行状态、规则数量与平台 Mock 数量。"""
     from app.services.mock_proxy import get_proxy_state
 
     rules_count = len(session.exec(select(MockProxyRule)).all())
+    enabled_configs = len(
+        session.exec(select(MockConfig).where(MockConfig.enabled == True)).all()
+    )
     state = get_proxy_state()
     return Response(data={
         "running": state["running"],
         "port": state["port"],
         "rules_count": rules_count,
+        "platform_configs": enabled_configs,
         "local_ip": _local_ip(),
     })
 
@@ -113,6 +136,10 @@ def create_rule(session: SessionDep, user: CurrentUser, rule: MockProxyRule):
     from app.services.mock_proxy import compile_path_pattern
     compile_path_pattern(rule.path_pattern)
 
+    prefix = _normalize_service_prefix(rule.service_prefix)
+    if prefix is None:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message="服务前缀需形如 /contract，且不能含 { } 或 *")
+    rule.service_prefix = prefix
     rule.user_id = user.user_id
     rule.host_pattern = rule.host_pattern.strip()
     session.add(rule)
@@ -133,6 +160,11 @@ def update_rule(session: SessionDep, user: CurrentUser, rule_id: int, rule: Mock
     compile_path_pattern(rule.path_pattern)
 
     rule_data = rule.model_dump(exclude_unset=True)
+    if "service_prefix" in rule_data:
+        prefix = _normalize_service_prefix(rule_data["service_prefix"])
+        if prefix is None:
+            return Response(code=status.HTTP_400_BAD_REQUEST, message="服务前缀需形如 /contract，且不能含 { } 或 *")
+        rule_data["service_prefix"] = prefix
     rule_data.pop("created_at", None)
     rule_data.pop("updated_at", None)
     db_rule.sqlmodel_update(rule_data)
@@ -151,6 +183,137 @@ def delete_rule(session: SessionDep, user: CurrentUser, rule_id: int):
     session.delete(db_rule)
     session.commit()
     return Response(message="转发规则已删除")
+
+
+
+class PreviewRequest(BaseModel):
+    host: str
+    method: str = "GET"
+    path: str = "/"
+    query: Optional[dict] = None
+    body: Optional[str] = None
+    headers: Optional[dict] = None
+
+
+def _representative_path(config) -> str:
+    """把配置的 url_path 里的 {param} 换成 1，得到可用于覆盖率判定的代表路径。"""
+    import re as _re
+    path = config.url_path or "/"
+    return _re.sub(r"\{[^}]+\}", "1", path)
+
+
+@router.get("/platform-mocks", response_model=Response[dict])
+def get_platform_mocks(session: SessionDep, user: CurrentUser):
+    """接口平台 Mock 在代理侧的覆盖情况。
+
+    判定与生产匹配逻辑同源：把配置路径的 {param} 换成 1，再用规则的
+    服务前缀 + 主机 + 路径范围验证「这条 Mock 会不会被代理拦截」。
+    """
+    from app.services.mock_matcher import (
+        compile_path_pattern, match_address, match_host, path_matches,
+    )
+
+    rules = session.exec(select(MockProxyRule).where(MockProxyRule.enabled == True)).all()
+    configs = session.exec(
+        select(MockConfig).where(MockConfig.enabled == True).order_by(MockConfig.id)
+    ).all()
+
+    items = []
+    covered_count = 0
+    for config in configs:
+        covering = []
+        representative = _representative_path(config)
+        for rule in rules:
+            prefix = (rule.service_prefix or "").rstrip("/")
+            full_path = (prefix + representative) if prefix else representative
+            host_ok = match_host(rule.host_pattern, _host_sample(rule.host_pattern))
+            path_ok = (
+                path_matches(compile_path_pattern(rule.path_pattern), full_path)
+                or path_matches(compile_path_pattern(rule.path_pattern), representative)
+            )
+            if host_ok and path_ok:
+                covering.append({"id": rule.id, "name": rule.name, "host_pattern": rule.host_pattern})
+
+        bound = bool(getattr(config, "proxy_urls", None))
+        is_covered = bool(covering) or bound
+        if is_covered:
+            covered_count += 1
+        items.append({
+            "id": config.id,
+            "name": config.name,
+            "method": config.method,
+            "url_path": config.url_path,
+            "hosts": getattr(config, "hosts", None) or [],
+            "proxy_urls": getattr(config, "proxy_urls", None) or [],
+            "enabled": config.enabled,
+            "covered": is_covered,
+            "bound": bound,
+            "covering_rules": covering,
+        })
+
+    return Response(data={
+        "items": items,
+        "enabled_configs": len(configs),
+        "covered_configs": covered_count,
+        "rules_count": len(rules),
+    })
+
+
+def _host_sample(host_pattern: str) -> str:
+    """把 *.example.com 变成可判定的具体主机，供覆盖率演示用。"""
+    pattern = (host_pattern or "").strip()
+    if pattern.startswith("*."):
+        return "demo" + pattern[1:]
+    return pattern
+
+
+@router.post("/preview", response_model=Response[dict])
+async def preview_mock(session: SessionDep, user: CurrentUser, body: PreviewRequest):
+    """预览某个真实请求会不会被代理拦成 Mock（不写流量日志）。"""
+    from app.routes.mock_server import resolve_mock_response
+    from app.services.mock_matcher import path_candidates
+    from app.services.mock_proxy import find_matching_rule
+
+    rule = find_matching_rule(body.host, body.path)
+    prefix = (rule.service_prefix or "") if rule is not None else ""
+    candidates = path_candidates(body.path, prefix)
+    label = f"[预览:{(rule.name or '').strip() or '规则' + str(rule.id)}]" if rule is not None else "[预览:接口地址]"
+
+    resolution = None
+    try:
+        resolution = await resolve_mock_response(
+            body.path, body.method.upper(), body.query or {}, body.body, body.headers or {},
+            host=body.host, path_candidates=candidates,
+            log_label=label, save_log=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - 预览失败按未命中处理并回传原因
+        return Response(data={
+            "intercepted": rule is not None,
+            "matched": False,
+            "error": str(exc),
+            "rule": None if rule is None else {"id": rule.id, "name": rule.name},
+            "candidates": candidates,
+        })
+
+    data = {
+        "intercepted": rule is not None,
+        "matched": resolution is not None,
+        "source": None,
+        "rule": None if rule is None else {
+            "id": rule.id, "name": rule.name, "service_prefix": rule.service_prefix,
+        },
+        "candidates": candidates,
+    }
+    if resolution is not None:
+        data.update({
+            "source": "config" if resolution.config_id is not None else "project",
+            "config_id": resolution.config_id,
+            "config_name": resolution.config_name,
+            "status_code": resolution.status_code,
+            "body_preview": (resolution.body or "")[:2000],
+            "matched_url": resolution.matched_url,
+        })
+    return Response(data=data)
 
 
 @public_router.get("/ca-cert")

@@ -49,6 +49,8 @@ def create_db_and_tables():
     _migrate_missing_columns(engine)
     # 一次性迁移：把旧 requirementpoint.module 文本按模块名回填到 module_id
     _backfill_requirement_point_module_id(engine)
+    # 一次性迁移：按规则路径模式回填服务前缀，让存量规则立即按真实流量匹配
+    _backfill_mock_proxy_service_prefix(engine)
     # 一次性清理：登录态改为挂在页面对象上，旧的独立「登录配置」结构作废
     _drop_obsolete_login_profile_schema(engine)
 
@@ -228,5 +230,48 @@ def _migrate_missing_columns(engine):
                 except Exception as e:
                     logger.warning(f"自动迁移失败: 表 {table_cls.name} 添加列 {col_name} 失败: {e}")
 
+def _backfill_mock_proxy_service_prefix(engine):
+    """一次性迁移：为存量转发规则按 path_pattern 回填 service_prefix。
+
+    历史规则写的是 /contract/ 或 /service/contract/*，而平台 Mock 的 url_path 是
+    服务内相对路径（/update）。回填服务前缀后，代理才能把真实流量剥离前缀再匹配。
+    空串或纯 * 的规则保持为空（不剥离），幂等且失败忽略。
+    """
+    import sqlalchemy
+    from sqlalchemy import inspect, text
+
+    if engine.dialect.name != "sqlite":
+        return
+
+    insp = inspect(engine)
+    if "mockproxyrule" not in insp.get_table_names():
+        return
+    cols = {c["name"].lower() for c in insp.get_columns("mockproxyrule")}
+    if "service_prefix" not in cols:
+        return  # 等下一轮自动迁移补齐列后再处理
+
+    from app.services.mock_matcher import rule_fixed_prefix
+
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text("SELECT id, path_pattern, service_prefix FROM mockproxyrule")
+            ).fetchall()
+            updated = 0
+            for rule_id, path_pattern, service_prefix in rows:
+                if (service_prefix or "").strip():
+                    continue  # 用户显式配置过，不覆盖
+                prefix = rule_fixed_prefix(path_pattern or "")
+                if not prefix:
+                    continue
+                conn.execute(
+                    text("UPDATE mockproxyrule SET service_prefix = :p WHERE id = :i"),
+                    {"p": prefix, "i": rule_id},
+                )
+                updated += 1
+            if updated:
+                logger.info(f"一次性迁移: 为 {updated} 条 Mock 转发规则按路径模式回填服务前缀")
+    except Exception as e:  # noqa: BLE001 - 回填失败不阻断启动
+        logger.warning(f"自动迁移: 回填 Mock 转发规则服务前缀失败(忽略): {e}")
 # 数据库会话依赖统一由 app/deps.py 的 get_db（基于本模块的 engine）提供，
 # 此处不再重复定义。应用启动时建表/迁移由 main.py 的 lifespan 负责调用。

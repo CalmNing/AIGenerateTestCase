@@ -18,8 +18,16 @@ from urllib.parse import urlsplit, unquote
 import httpx
 
 from db.db import engine
-from db.models import MockLog, MockProxyRule
+from db.models import MockConfig, MockLog, MockProxyRule
 from sqlmodel import Session, select
+
+from app.services.mock_matcher import (
+    compile_path_pattern,
+    match_address,
+    match_host,
+    path_candidates,
+    path_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,94 +73,77 @@ def _get_http_client() -> httpx.AsyncClient:
 # 规则匹配引擎
 # ---------------------------------------------------------------------------
 
-def match_host(rule_host: str, request_host: str) -> bool:
-    """主机模式匹配：精确域名/IP（大小写不敏感）或 *.example.com 通配子域。
-
-    *.example.com 只匹配任意层级子域（a.example.com、a.b.example.com），
-    不匹配根域 example.com 本身。
-    """
-    rule = (rule_host or "").strip().lower().rstrip(".")
-    host = (request_host or "").strip().lower().rstrip(".")
-    if not rule or not host:
-        return False
-    # 去掉端口
-    if ":" in host:
-        host = host.split(":", 1)[0]
-    if rule.startswith("*."):
-        suffix = rule[1:]  # .example.com
-        return host.endswith(suffix) and len(host) > len(suffix)
-    return rule == host
-
-
-def compile_path_pattern(pattern: str):
-    """路径模式编译为正则（re.fullmatch 使用）。
-
-    - 空 / *   → 匹配一切路径
-    - {param}  → 单段占位符 [^/]+（与现有 MockConfig 语义一致）
-    - 其余字符按字面转义
-    返回编译后的 Pattern；非法输入回退为匹配一切。
-    """
-    pattern = (pattern or "").strip()
-    if not pattern or pattern == "*":
-        return re.compile(r".*")
-
-    parts = []
-    i = 0
-    while i < len(pattern):
-        ch = pattern[i]
-        if ch == "{":
-            j = pattern.find("}", i)
-            if j != -1:
-                param_name = pattern[i + 1:j]
-                parts.append(r"(?P<param_" + re.escape(param_name) + r">[^/]+)")
-                i = j + 1
-                continue
-            parts.append(re.escape(ch))
-            i += 1
-        elif ch == "*":
-            parts.append(r".*")
-            i += 1
-        else:
-            parts.append(re.escape(ch))
-            i += 1
-
-    try:
-        return re.compile("".join(parts))
-    except re.error:
-        logger.warning("非法路径模式 %r，回退为匹配一切", pattern)
-        return re.compile(r".*")
-
-
-def path_matches(pattern, path: str) -> bool:
-    """用 compile_path_pattern 的产物对请求路径做 fullmatch。"""
-    try:
-        return pattern.fullmatch(path) is not None
-    except Exception:
-        return False
+def _enabled_rules() -> list:
+    with Session(engine) as session:
+        return list(
+            session.exec(
+                select(MockProxyRule).where(MockProxyRule.enabled == True)
+            ).all()
+        )
 
 
 def find_matching_rule(host: str, path: str) -> Optional[MockProxyRule]:
     """在启用的规则中查找第一个命中「主机+路径」的规则。
 
     按 host_pattern 长度降序尝试（更具体的模式优先）。
+    路径匹配同时看「原样路径」与「规则服务前缀剥离后的路径」，
+    因此规则里可以写 /contract/（内网）或 /service/contract/*（网关）。
+    """
+    for rule in sorted(_enabled_rules(), key=lambda r: len(r.host_pattern or ""), reverse=True):
+        if not match_host(rule.host_pattern, host):
+            continue
+        candidates = path_candidates(path, rule.service_prefix)
+        compiled = compile_path_pattern(rule.path_pattern)
+        if any(path_matches(compiled, candidate) for candidate in candidates):
+            return rule
+    return None
+
+
+def has_address_binding(host: str, path: str) -> bool:
+    """是否有启用的 MockConfig 通过 proxy_urls 显式绑定了这个接口地址。
+
+    用于「用户配了真实接口地址 + 响应，监听下次调用就返回」的场景：
+    即使没有转发规则，也能自动拦截这个接口。
+    """
+    with Session(engine) as session:
+        configs = session.exec(
+            select(MockConfig).where(MockConfig.enabled == True)
+        ).all()
+    for config in configs:
+        for url in getattr(config, "proxy_urls", None) or []:
+            hit, _ = match_address(url, host, path)
+            if hit:
+                return True
+    return False
+
+
+def host_has_any_rule(host: str) -> bool:
+    """该主机是否需要 MITM 解密。
+
+    满足任一条件即需要：
+    - 命中任一启用转发规则的 host_pattern；
+    - 有启用的 Mock 通过 proxy_urls 显式绑定了该主机上的接口地址
+      （用户「配地址 + 响应就返回」的场景，通常没有转发规则）。
+    否则走盲隧道透传，不解密。
     """
     with Session(engine) as session:
         rules = session.exec(
             select(MockProxyRule).where(MockProxyRule.enabled == True)
         ).all()
-    for rule in sorted(rules, key=lambda r: len(r.host_pattern or ""), reverse=True):
-        if match_host(rule.host_pattern, host) and path_matches(compile_path_pattern(rule.path_pattern), path):
-            return rule
-    return None
-
-
-def host_has_any_rule(host: str) -> bool:
-    """该主机是否命中任一启用规则的 host_pattern（决定 CONNECT 是否 MITM）。"""
-    with Session(engine) as session:
-        rules = session.exec(
-            select(MockProxyRule).where(MockProxyRule.enabled == True)
+        if any(match_host(r.host_pattern, host) for r in rules):
+            return True
+        configs = session.exec(
+            select(MockConfig).where(MockConfig.enabled == True)
         ).all()
-    return any(match_host(r.host_pattern, host) for r in rules)
+
+    from app.services.mock_matcher import parse_address
+
+    for config in configs:
+        for url in getattr(config, "proxy_urls", None) or []:
+            parsed = parse_address(url)
+            if parsed is not None and parsed.host is not None and match_host(parsed.host, host):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -161,12 +152,13 @@ def host_has_any_rule(host: str) -> bool:
 
 def _save_proxy_log(config_name: str, method: str, path: str, headers: dict,
                     query: dict, body: Optional[str], status_code: int,
-                    resp_headers, resp_body: Optional[str], matched: bool):
+                    resp_headers, resp_body: Optional[str], matched: bool,
+                    config_id: Optional[int] = None):
     """写入 MockLog；失败仅告警不影响转发。"""
     try:
         with Session(engine) as session:
             log = MockLog(
-                config_id=None,
+                config_id=config_id,
                 config_name=config_name,
                 request_method=method,
                 request_path=path,
@@ -323,21 +315,44 @@ async def read_http_message(reader: asyncio.StreamReader, first_line: str,
 
 
 async def handle_plain_request(req: ParsedRequest, writer: asyncio.StreamWriter):
-    """明文请求处理管线：规则匹配 → Mock / 透传，并写日志。"""
+    """明文请求处理管线：规则/接口地址匹配 → Mock / 透传，并写日志。
+
+    拦截判定顺序：
+    1. 命中转发规则（主机 + 路径范围）→ 走 Mock 匹配链；
+    2. 未命中规则，但该接口地址被某条 Mock 配置的 proxy_urls 显式绑定
+       （用户「配了接口地址 + 响应，下次监听到就返回」）→ 同样走 Mock；
+    3. 都不满足 → 透传真实服务。
+    """
     display_path = f"{req.host}:{req.port or ''}{req.path}"
+    body_text = req.body.decode("utf-8", errors="replace") if req.body else None
+    request_url = f"{req.scheme}://{display_path}"
     try:
         rule = find_matching_rule(req.host, req.path)
+        address_bound = rule is None and has_address_binding(req.host, req.path)
 
-        if rule is not None:
-            # 命中代理规则 → 复用现有 Mock 两层匹配链。
-            # 直接传原始路径：_match_url_path 与 _resolve_project_mock 均能处理
-            # 带/不带 /api/mock 前缀的路径，真实业务路径可自然对齐项目 mock_prefix。
+        if rule is not None or address_bound:
+            # 复用平台同一套 Mock 匹配链；save_log=False 由代理统一写一条完整日志
             from app.routes.mock_server import resolve_mock_response
 
-            body_text = req.body.decode("utf-8", errors="replace") if req.body else None
-            resolution = await resolve_mock_response(
-                req.path, req.method, req.query, body_text, dict(req.headers)
-            )
+            service_prefix = (rule.service_prefix or "") if rule is not None else ""
+            candidates = path_candidates(req.path, service_prefix)
+            if rule is not None:
+                rule_name = (rule.name or "").strip() or f"规则{rule.id}"
+                label = f"[代理→Mock:{rule_name}]"
+            else:
+                label = "[代理→Mock:接口地址]"
+            resolution = None
+            resolution_error = None
+            try:
+                resolution = await resolve_mock_response(
+                    req.path, req.method, req.query, body_text, dict(req.headers),
+                    host=req.host, path_candidates=candidates,
+                    log_label=label, save_log=False,
+                )
+            except Exception as exc:  # 解析失败不应让请求直接 502，退回透传
+                resolution_error = exc
+                logger.warning("Proxy mock resolution failed, fallback to upstream: %s", exc)
+
             if resolution is not None:
                 resp_headers_out = {"Content-Type": "application/json"}
                 for h in resolution.headers:
@@ -346,14 +361,21 @@ async def handle_plain_request(req: ParsedRequest, writer: asyncio.StreamWriter)
                 resp_body = (resolution.body or "").encode()
                 await _write_response(writer, resolution.status_code, resp_headers_out, resp_body)
                 _save_proxy_log(
-                    config_name=f"[代理→Mock:{rule.name}] {resolution.config_name}",
-                    method=req.method, path=f"https://{display_path}" if req.scheme == "https" else f"http://{display_path}",
+                    config_name=resolution.config_name,
+                    method=req.method, path=request_url,
                     headers=dict(req.headers), query=req.query,
                     body=body_text, status_code=resolution.status_code,
-                    resp_headers=resp_headers_out, resp_body=resolution.body,
-                    matched=True,
+                    resp_headers=[{"key": k, "value": v} for k, v in resp_headers_out.items()],
+                    resp_body=(resolution.body or "")[:65536],
+                    matched=True, config_id=resolution.config_id,
                 )
                 return
+
+            if resolution_error is not None:
+                _save_proxy_log(
+                    f"[代理错误] {label}", req.method, request_url,
+                    dict(req.headers), req.query, body_text, 0, {}, str(resolution_error)[:65536], False,
+                )
 
         # 未命中规则（或 Mock 链无匹配）→ 透传真实服务
         try:
@@ -368,7 +390,9 @@ async def handle_plain_request(req: ParsedRequest, writer: asyncio.StreamWriter)
             except UnicodeDecodeError:
                 body_str = f"<binary {len(up_body)} bytes>"
             _save_proxy_log(
-                config_name=f"[代理透传]" if rule is None else f"[代理→透传:{rule.name}]",
+                config_name="[代理透传]" if rule is None else (
+                    f"[代理→透传:{(rule.name or '').strip() or f'规则{rule.id}'}]"
+                ),
                 method=req.method, path=f"{req.scheme}://{display_path}",
                 headers=dict(req.headers), query=req.query,
                 body=req.body.decode("utf-8", errors="replace") if req.body else None,
@@ -378,12 +402,12 @@ async def handle_plain_request(req: ParsedRequest, writer: asyncio.StreamWriter)
         except (httpx.TimeoutException, asyncio.TimeoutError):
             code, err_body, ctype = build_error_response(504, f"upstream timeout: {display_path}")
             await _write_response(writer, code, {"Content-Type": ctype}, err_body)
-            _save_proxy_log("[代理超时]", req.method, f"{req.scheme}://{display_path}",
+            _save_proxy_log("[代理超时]", req.method, request_url,
                             dict(req.headers), req.query, None, code, {}, err_body.decode(), False)
         except Exception as exc:
             code, err_body, ctype = build_error_response(502, f"upstream error: {exc}")
             await _write_response(writer, code, {"Content-Type": ctype}, err_body)
-            _save_proxy_log("[代理错误]", req.method, f"{req.scheme}://{display_path}",
+            _save_proxy_log("[代理错误]", req.method, request_url,
                             dict(req.headers), req.query, None, code, {}, err_body.decode(), False)
     except Exception as exc:
         logger.exception("handle_plain_request failed: %s", exc)

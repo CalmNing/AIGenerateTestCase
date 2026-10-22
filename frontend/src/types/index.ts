@@ -597,6 +597,10 @@ export interface MockConfig {
   response_count: number;
   page_size?: number;
   json_path?: string;
+  // 代理要拦截的真实接口地址（如 http://192.168.13.178:18896/contract/update），命中即返回本 Mock
+  proxy_urls?: string[];
+  // 定向生效主机（支持 *.example.com），留空=规则覆盖的任意主机
+  hosts?: string[];
   user_id?: string;
   created_at: string;
   updated_at: string;
@@ -608,6 +612,8 @@ export interface MockProxyRule {
   name: string;
   host_pattern: string;
   path_pattern: string;
+  // 该规则覆盖流量的服务前缀（如 /contract），请求去掉它后按平台相对路径匹配
+  service_prefix: string;
   enabled: boolean;
   user_id?: string;
   created_at: string;
@@ -619,7 +625,54 @@ export interface MockProxyStatus {
   running: boolean;
   port: number | null;
   rules_count: number;
+  platform_configs?: number;
   local_ip?: string;
+}
+
+// 接口平台 Mock 在代理侧的覆盖情况
+export interface PlatformMockItem {
+  id: number;
+  name: string;
+  method: string;
+  url_path: string;
+  hosts: string[];
+  proxy_urls: string[];
+  enabled: boolean;
+  covered: boolean;
+  bound: boolean;
+  covering_rules: Array<{ id: number; name: string; host_pattern: string }>;
+}
+
+export interface PlatformMockCoverage {
+  items: PlatformMockItem[];
+  enabled_configs: number;
+  covered_configs: number;
+  rules_count: number;
+}
+
+// 代理命中预览请求
+export interface MockPreviewRequest {
+  host: string;
+  method: string;
+  path: string;
+  query?: Record<string, string>;
+  body?: string;
+  headers?: Record<string, string>;
+}
+
+// 代理命中预览结果
+export interface MockPreviewResult {
+  intercepted: boolean;
+  matched: boolean;
+  source?: 'config' | 'project' | null;
+  rule?: { id: number; name: string; service_prefix?: string } | null;
+  candidates?: string[];
+  config_id?: number | null;
+  config_name?: string;
+  status_code?: number;
+  body_preview?: string;
+  matched_url?: string;
+  error?: string;
 }
 
 // Mock 调用日志（含代理流量）

@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 
 from db.db import engine
 from db.models import ApiEndpoint, ApiProject, MockConfig, GlobalParameter, MockLog
+from app.services.mock_matcher import match_address, match_config_path, match_host
 from utils.js_expression import eval_js_expression
 
 logger = logging.getLogger(__name__)
@@ -311,59 +312,12 @@ def _substitute_variables(text: str, env_id: Optional[int], path_params: dict = 
 
 
 def _match_url_path(config: MockConfig, request_path: str) -> tuple[bool, dict]:
-    """将配置的 url_path 与请求路径进行匹配，支持 {param} 通配符
+    """将配置的 url_path 与请求路径进行匹配，支持 {param} 通配符。
 
-    支持两种配置方式：
-    1. 用户配置 /users/{id}，匹配 /api/mock/users/123（自动去掉 /api/mock 前缀）
-    2. 用户配置 /api/mock/users/{id}，匹配 /api/mock/users/123（完整路径匹配）
-
-    返回: (是否匹配, 路径参数字典)
+    统一委托 app.services.mock_matcher.match_config_path：两侧都会去掉 /api/mock
+    前缀，因此配置带不带前缀、请求带不带前缀都能对齐。
     """
-    config_path = config.url_path
-
-    # 如果配置路径不包含 /api/mock 前缀，则从请求路径中去掉该前缀
-    if not config_path.startswith('/api/mock'):
-        if request_path.startswith('/api/mock'):
-            request_path = request_path[len('/api/mock'):]
-            if not request_path.startswith('/'):
-                request_path = '/' + request_path
-
-    # 将路径参数 {param} 转换为正则表达式
-    parts = []
-    i = 0
-    while i < len(config_path):
-        if config_path[i] == '{':
-            j = config_path.find('}', i)
-            if j != -1:
-                param_name = config_path[i+1:j]
-                parts.append(r'(?P<param_' + re.escape(param_name) + r'>[^/]+)')
-                i = j + 1
-            else:
-                parts.append(re.escape(config_path[i]))
-                i += 1
-        else:
-            parts.append(re.escape(config_path[i]))
-            i += 1
-
-    pattern = ''.join(parts)
-    logger.debug("Path matching: config_path=%s, request_path=%s, pattern=%s", config_path, request_path, pattern)
-
-    try:
-        match = re.fullmatch(pattern, request_path)
-        if match:
-            path_params = {}
-            for key, value in match.groupdict().items():
-                if key.startswith('param_'):
-                    param_name = key[6:]
-                    path_params[param_name] = value
-            logger.debug("Path match result: True, params=%s", path_params)
-            return True, path_params
-        else:
-            logger.debug("Path match result: False")
-            return False, {}
-    except re.error as e:
-        logger.warning("Regex error: %s, falling back to exact match", e)
-        return config_path == request_path, {}
+    return match_config_path(config.url_path, request_path)
 
 
 def _save_mock_log(config_id, config_name, request_method, request_path,
@@ -421,6 +375,42 @@ def _match_endpoint_path(endpoint_path: str, request_path: str) -> tuple[bool, d
         return True, dict(match.groupdict())
     except re.error:
         return endpoint_path == request_path, {}
+
+
+def _labelled(label: Optional[str], name: str) -> str:
+    """给日志里的配置名加来源前缀，如 [代理→Mock:规则名] 。"""
+    prefix = (label or "").strip()
+    return f"{prefix} {name}".strip() if prefix else (name or "")
+
+
+def _resolve_project_mock_with_project_prefix(candidates: list, request_method: str):
+    """代理场景专用：候选路径都没有 /api/mock 前缀时，用项目自身 mock_prefix /
+    base_url 路径再拼一次，兼容「内网真实路径不带 /service」的网关形态。
+
+    例如项目 mock_prefix=/service/contract、真实请求 /contract/update：
+    候选里没有 /service 段，这里按「/service + 候选」再试一次。
+    """
+    from urllib.parse import urlsplit
+
+    with Session(engine) as session:
+        projects = session.exec(
+            select(ApiProject).where(ApiProject.mock_enabled == True)
+        ).all()
+        for project in sorted(projects, key=lambda p: len(p.mock_prefix or ""), reverse=True):
+            prefix = (project.mock_prefix or "").rstrip("/")
+            base_path = (urlsplit(project.base_url or "").path or "").rstrip("/")
+            bases = [p for p in (prefix, base_path) if p]
+            if not bases:
+                continue
+            for base in bases:
+                for candidate in candidates:
+                    if not candidate.startswith("/"):
+                        continue
+                    attempt = base + candidate
+                    match = _resolve_project_mock(attempt, request_method)
+                    if match:
+                        return match
+    return None
 
 
 def _resolve_project_mock(request_path: str, request_method: str):
@@ -483,25 +473,100 @@ class MockResolution:
         body: 响应体字符串（可能为 None）
         config_id: 命中的 MockConfig ID（项目级 Mock 为 None）
         config_name: 配置名称快照（用于日志展示）
+        matched_url: 命中的代理接口地址（平台内调用为 None）
     """
 
     def __init__(self, status_code: int, headers: list, body: Optional[str],
-                 config_id: Optional[int], config_name: str):
+                 config_id: Optional[int], config_name: str,
+                 matched_url: Optional[str] = None):
         self.status_code = status_code
         self.headers = headers
         self.body = body
         self.config_id = config_id
         self.config_name = config_name
+        self.matched_url = matched_url
+
+
+def _select_config(configs: list, request_path: str, request_method: str,
+                   candidates: list, host: Optional[str]):
+    """按优先级选出手写 MockConfig。
+
+    优先级（高 → 低）：
+    1. 配置了 proxy_urls 且与请求主机/路径吻合（用户显式指定的真实接口地址）
+    2. 配置了 hosts 且主机吻合的定向配置
+    3. 通用配置（既无 proxy_urls 也无 hosts）
+    同优先级内保持 id 升序（沿用历史行为）。
+
+    返回 (config, 路径参数, 命中的代理地址) 或 (None, {}, None)。
+    """
+    if host is None:
+        # 平台内 /api/mock 路由：不过滤主机，也不做 proxy_urls 绑定匹配
+        for config in configs:
+            is_match, params = match_config_path(config.url_path, request_path)
+            if config.method.upper() == request_method.upper() and is_match:
+                return config, params, None
+        return None, {}, None
+
+    addressed, host_bound, generic = [], [], []
+    for config in configs:
+        if getattr(config, "proxy_urls", None):
+            addressed.append(config)
+        elif getattr(config, "hosts", None):
+            host_bound.append(config)
+        else:
+            generic.append(config)
+
+    # 1. 显式接口地址：原样路径优先，其次服务前缀剥离后的相对路径
+    for config in addressed:
+        if config.method.upper() != request_method.upper():
+            continue
+        for url in config.proxy_urls or []:
+            is_match, params = match_address(url, host, request_path)
+            if is_match:
+                return config, params, url
+
+    # 2. 主机定向 + 3. 通用：按候选路径依次尝试
+    for config in host_bound:
+        if config.method.upper() != request_method.upper():
+            continue
+        if not any(match_host(h, host) for h in (config.hosts or [])):
+            continue
+        for candidate in candidates:
+            is_match, params = match_config_path(config.url_path, candidate)
+            if is_match:
+                return config, params, None
+
+    for config in generic:
+        if config.method.upper() != request_method.upper():
+            continue
+        for candidate in candidates:
+            is_match, params = match_config_path(config.url_path, candidate)
+            if is_match:
+                return config, params, None
+
+    return None, {}, None
 
 
 async def resolve_mock_response(request_path: str, request_method: str,
                                 query_params: dict, body_text: Optional[str],
-                                request_headers: dict) -> Optional[MockResolution]:
+                                request_headers: dict, *,
+                                host: Optional[str] = None,
+                                path_candidates: Optional[list] = None,
+                                log_label: Optional[str] = None,
+                                save_log: bool = True) -> Optional[MockResolution]:
     """两层 Mock 匹配的共享实现：手写 MockConfig → 项目级 Schema Mock。
 
     供 /api/mock/** 路由与 Mock 正向代理共同调用；均未命中返回 None，
     由调用方决定兜底行为（路由返回 404，代理改为透传真实服务）。
+
+    host / path_candidates / log_label / save_log 为代理侧专用：
+    - host：请求主机，用于 proxy_urls 与 hosts 过滤；None 表示平台内调用不过滤
+    - path_candidates：待匹配路径序列（代理传入「原样 + 去服务前缀」）
+    - log_label：写入 MockLog 的 config_name 前缀，如 [代理→Mock:规则名]
+    - save_log：False 时由调用方统一写一条完整日志（避免代理重复记录）
     """
+    candidates = list(path_candidates) if path_candidates else [request_path]
+    logger_label = (log_label or "").strip()
     with Session(engine) as session:
         configs = session.exec(
             select(MockConfig).where(MockConfig.enabled == True)
@@ -509,21 +574,30 @@ async def resolve_mock_response(request_path: str, request_method: str,
 
     matched_config = None
     path_params = {}
-    logger.info("Mock matching: method=%s, path=%s, configs_count=%d", request_method, request_path, len(configs))
+    matched_url = None
+    logger.info("Mock matching: method=%s, path=%s, configs_count=%d, candidates=%s",
+                request_method, request_path, len(configs), candidates)
 
-    for config in configs:
-        is_match, params = _match_url_path(config, request_path)
-        logger.info("Checking config: %s %s -> match=%s, params=%s", config.method, config.url_path, is_match, params)
-
-        if config.method.upper() == request_method.upper() and is_match:
-            matched_config = config
-            path_params = params
-            logger.info("Mock matched: %s %s, path_params=%s", config.method, config.url_path, path_params)
-            break
+    matched_config, path_params, matched_url = _select_config(
+        configs, request_path, request_method, candidates, host
+    )
+    if matched_config is not None:
+        logger.info("Mock matched: %s %s, path_params=%s, proxy_url=%s",
+                    matched_config.method, matched_config.url_path, path_params, matched_url)
 
     if not matched_config:
-        # 手写 MockConfig 未命中时，回退到「已开启 Mock 的接口项目」按 response schema 实时生成
-        project_match = _resolve_project_mock(request_path, request_method)
+        # 手写 MockConfig 未命中时，回退到「已开启 Mock 的接口项目」按 response schema 实时生成。
+        # 代理场景下候选路径可能有多个（原样 / 去服务前缀），逐个尝试；
+        # 另外用项目自身的 mock_prefix 与 base_url 路径再拼一次，兼容「内网路径不带 /service」的网关。
+        project_match = None
+        for candidate in candidates:
+            project_match = _resolve_project_mock(candidate, request_method)
+            if project_match:
+                break
+        if not project_match and host is not None:
+            project_match = _resolve_project_mock_with_project_prefix(
+                candidates, request_method
+            )
         if project_match:
             project, endpoint, _, url_path_params = project_match
 
@@ -550,24 +624,28 @@ async def resolve_mock_response(request_path: str, request_method: str,
                     "Project mock validation failed: %s %s -> %d errors",
                     endpoint.method, endpoint.path, len(validation_errors),
                 )
-                _save_mock_log(
-                    config_id=None,
-                    config_name=f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}",
-                    request_method=request_method, request_path=request_path,
-                    request_headers=request_headers,
-                    request_query_params=json.dumps(query_params, ensure_ascii=False),
-                    request_body=body_text,
-                    response_status_code=400,
-                    response_headers=[{"key": "Content-Type", "value": "application/json"}],
-                    response_body=json.dumps(error_body, ensure_ascii=False),
-                    matched=True, user_id=None,
+                invalid_name = _labelled(
+                    logger_label, f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}"
                 )
+                if save_log:
+                    _save_mock_log(
+                        config_id=None,
+                        config_name=invalid_name,
+                        request_method=request_method, request_path=request_path,
+                        request_headers=request_headers,
+                        request_query_params=json.dumps(query_params, ensure_ascii=False),
+                        request_body=body_text,
+                        response_status_code=400,
+                        response_headers=[{"key": "Content-Type", "value": "application/json"}],
+                        response_body=json.dumps(error_body, ensure_ascii=False),
+                        matched=True, user_id=None,
+                    )
                 return MockResolution(
                     status_code=400,
                     headers=[{"key": "Content-Type", "value": "application/json"}],
                     body=json.dumps(error_body, ensure_ascii=False),
                     config_id=None,
-                    config_name=f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}",
+                    config_name=invalid_name,
                 )
 
             # 收集请求值（body + query + path 参数 + 文档参数），用于回填响应与分页控制
@@ -582,23 +660,26 @@ async def resolve_mock_response(request_path: str, request_method: str,
             )
 
             body = _build_schema_mock_body(endpoint, request_values)
-            config_name = f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}"
+            config_name = _labelled(
+                logger_label, f"[项目Mock] {project.name} {endpoint.method} {endpoint.path}"
+            )
             logger.info(
                 "Project mock matched: project=%s prefix=%s endpoint=%s %s",
                 project.name, project.mock_prefix, endpoint.method, endpoint.path,
             )
-            _save_mock_log(
-                config_id=None,
-                config_name=config_name,
-                request_method=request_method, request_path=request_path,
-                request_headers=request_headers,
-                request_query_params=json.dumps(query_params, ensure_ascii=False),
-                request_body=body_text,
-                response_status_code=200,
-                response_headers=[{"key": "Content-Type", "value": "application/json"}],
-                response_body=body,
-                matched=True, user_id=None,
-            )
+            if save_log:
+                _save_mock_log(
+                    config_id=None,
+                    config_name=config_name,
+                    request_method=request_method, request_path=request_path,
+                    request_headers=request_headers,
+                    request_query_params=json.dumps(query_params, ensure_ascii=False),
+                    request_body=body_text,
+                    response_status_code=200,
+                    response_headers=[{"key": "Content-Type", "value": "application/json"}],
+                    response_body=body,
+                    matched=True, user_id=None,
+                )
             return MockResolution(
                 status_code=200,
                 headers=[{"key": "Content-Type", "value": "application/json"}],
@@ -737,28 +818,31 @@ async def resolve_mock_response(request_path: str, request_method: str,
 
     logger.info("Mock matched: %s %s -> %d", request_method, request_path, matched_config.status_code)
 
-    # 记录匹配的请求日志
-    _save_mock_log(
-        config_id=matched_config.id,
-        config_name=matched_config.name,
-        request_method=request_method,
-        request_path=request_path,
-        request_headers=request_headers,
-        request_query_params=json.dumps(query_params, ensure_ascii=False),
-        request_body=body_text,
-        response_status_code=matched_config.status_code,
-        response_headers=[{"key": k, "value": v} for k, v in resp_headers.items()],
-        response_body=body,
-        matched=True,
-        user_id=None,
-    )
+    config_name = _labelled(logger_label, matched_config.name)
+    # 记录匹配的请求日志（代理侧 save_log=False，由代理统一写一条完整日志）
+    if save_log:
+        _save_mock_log(
+            config_id=matched_config.id,
+            config_name=config_name,
+            request_method=request_method,
+            request_path=request_path,
+            request_headers=request_headers,
+            request_query_params=json.dumps(query_params, ensure_ascii=False),
+            request_body=body_text,
+            response_status_code=matched_config.status_code,
+            response_headers=[{"key": k, "value": v} for k, v in resp_headers.items()],
+            response_body=body,
+            matched=True,
+            user_id=None,
+        )
 
     return MockResolution(
         status_code=matched_config.status_code,
         headers=[{"key": k, "value": v} for k, v in resp_headers.items()],
         body=body,
         config_id=matched_config.id,
-        config_name=matched_config.name,
+        config_name=config_name,
+        matched_url=matched_url,
     )
 
 
