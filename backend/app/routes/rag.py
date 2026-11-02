@@ -45,11 +45,26 @@ def get_rag_stats(session: SessionDep, user: CurrentUser):
     }
     try:
         conn = idx._connect()
+        # 按 created_at 优先（更新的文档排在最前，upsert 也能看见变化），
+        # 无时间戳时按 rowid 兜底；标注来源类型便于区分历史需求/示例
         rows = conn.execute(
-            "SELECT rowid, content FROM retrieval_fts ORDER BY rowid DESC LIMIT 10"
+            """
+            SELECT f.rowid, f.content, m.created_at,
+                   CASE WHEN f.rowid >= 10000000 THEN 'example' ELSE 'history' END AS kind
+            FROM retrieval_fts f
+            LEFT JOIN retrieval_meta m ON m.rowid = f.rowid
+            ORDER BY (m.created_at IS NULL), m.created_at DESC, f.rowid DESC
+            LIMIT 10
+            """
         ).fetchall()
         stats["recent_docs"] = [
-            {"rowid": r[0], "content": (r[1] or "")[:80]} for r in rows
+            {
+                "rowid": r[0],
+                "content": (r[1] or "")[:80],
+                "created_at": r[2],
+                "kind": r[3],
+            }
+            for r in rows
         ]
     except Exception as exc:  # noqa: BLE001
         logger.warning("读取最近文档失败: %s", exc)

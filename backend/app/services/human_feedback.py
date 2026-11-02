@@ -225,32 +225,58 @@ def get_relevant_positive_examples(
                 db, module_id=module_id, session_id=session_id, limit=limit,
             )
 
-        # 正样本写入独立 namespace（rowid 加偏移避免与历史需求索引冲突）
-        EXAMPLE_ID_OFFSET = 10_000_000
-        hits_limit = limit * 4
-        for r in rows[:500]:
+        # 正样本在**内存中**临时建倒排做相关性匹配，不写入共享索引——
+        # 否则 few-shot 文档（大 rowid）会占据「最近索引的文档」列表，
+        # 且污染历史需求的索引统计（用户在 RAG 观测页发现过此问题）。
+        from utils.token_budget import estimate_tokens  # noqa: F401 - 保持导入一致性
+        import re as _re
+
+        def _tokens(text: str) -> list:
+            lowered = (text or "").lower()
+            out: list = []
+            for run in _re.findall(r"[\u4e00-\u9fff]+", lowered):
+                if len(run) == 1:
+                    out.append(run)
+                else:
+                    out.extend(run[i:i + 2] for i in range(len(run) - 1))
+            out.extend(_re.findall(r"[a-z0-9_]{2,}", lowered))
+            return out
+
+        query_tokens = set(_tokens(query))
+        if not query_tokens:
+            return get_positive_examples(
+                db, module_id=module_id, session_id=session_id, limit=limit,
+            )
+
+        scored = []
+        for r in rows:
             text = " ".join([
                 str(r.case_name or ""),
                 " ".join(str(x) for x in (r.expected_results or [])[:3]),
                 " ".join(str(x) for x in (r.steps or [])[:2] if isinstance(x, (str, dict))),
             ])
-            idx.upsert(
-                row_id=EXAMPLE_ID_OFFSET + int(r.id),
-                content=text[:2000],
-                module_id=module_id,
-                user_id=r.user_id,
-                session_id=r.session_id,
-                created_at=None,
+            toks = set(_tokens(text[:2000]))
+            overlap = len(query_tokens & toks)
+            if overlap > 0:
+                scored.append((overlap, r))
+
+        scored.sort(key=lambda x: -x[0])
+        hits_rows = [r for _, r in scored[:limit]]
+        if not hits_rows:
+            return get_positive_examples(
+                db, module_id=module_id, session_id=session_id, limit=limit,
             )
 
-        hits = idx.search(
-            query,
-            module_id=module_id,
-            user_id=None,
-            session_id=session_id,
-            top_k=hits_limit,
-            exclude_ids=None,
-        )
+        return [
+            {
+                "case_name": r.case_name,
+                "preset_conditions": r.preset_conditions or [],
+                "steps": r.steps or [],
+                "expected_results": r.expected_results or [],
+                "case_level": r.case_level,
+            }
+            for r in hits_rows
+        ]
         if not hits:
             return get_positive_examples(
                 db, module_id=module_id, session_id=session_id, limit=limit,

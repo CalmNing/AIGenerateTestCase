@@ -1,22 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Input, Button, Table, Tag, Statistic, Row, Col, Space, message, Modal, Popconfirm, Typography } from 'antd';
 import { ReloadOutlined, SearchOutlined, SyncOutlined, PlusOutlined } from '@ant-design/icons';
-import { ragApi } from '../../services/api';
+import { ragApi, RagStats, RagHit } from '../../services/api';
 
 const { Text } = Typography;
-
-interface RagStats {
-  indexed_count: number;
-  db_path: string;
-  terms: Record<string, string[]>;
-  recent_docs: Array<{ rowid: number; content: string }>;
-}
-
-interface RagHit {
-  rowid: number;
-  score: number;
-  content: string;
-}
 
 /**
  * RAG 检索观测页：索引状态、召回试查、同义词管理、手动重建。
@@ -173,10 +160,23 @@ const RagViewer: React.FC = () => {
         )}
       </Card>
 
-      <Card size="small" title={`最近索引的文档（${stats?.recent_docs?.length ?? 0}）`}>
+      <Card
+        size="small"
+        title={`最近索引的文档（${stats?.recent_docs?.length ?? 0}）`}
+        extra={<Text type="secondary" style={{ fontSize: 12 }}>按写入/更新时间排序；搜索不会新增文档</Text>}
+      >
         {(stats?.recent_docs || []).map((d) => (
           <div key={d.rowid} style={{ padding: '4px 0', borderBottom: '1px solid var(--color-border-secondary)' }}>
-            <Text type="secondary">#{d.rowid}</Text> {d.content}
+            <Tag color={d.kind === 'example' ? 'blue' : 'default'} style={{ marginRight: 6 }}>
+              {d.kind === 'example' ? '示例' : '历史'}
+            </Tag>
+            <Text type="secondary">#{d.rowid}</Text>{' '}
+            {d.created_at && (
+              <Text type="secondary" style={{ fontSize: 11, marginRight: 6 }}>
+                {String(d.created_at).slice(0, 16)}
+              </Text>
+            )}
+            {d.content}
           </div>
         ))}
         {!stats?.recent_docs?.length && <Text type="secondary">（空）</Text>}

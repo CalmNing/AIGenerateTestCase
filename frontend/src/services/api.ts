@@ -9,7 +9,12 @@ export interface RagStats {
   indexed_count: number;
   db_path: string;
   terms: Record<string, string[]>;
-  recent_docs: Array<{ rowid: number; content: string }>;
+  recent_docs: Array<{
+    rowid: number;
+    content: string;
+    created_at?: string | null;
+    kind?: 'history' | 'example';
+  }>;
 }
 
 export interface RagHit {
