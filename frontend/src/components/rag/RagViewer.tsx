@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Input, Button, Table, Tag, Statistic, Row, Col, Space, message, Modal, Popconfirm, Typography } from 'antd';
 import { ReloadOutlined, SearchOutlined, SyncOutlined, PlusOutlined } from '@ant-design/icons';
-import { ragApi, RagStats, RagHit } from '../../services/api';
+import { ragApi, RagStats, RagHit, FewShotPool } from '../../services/api';
 
 const { Text } = Typography;
 
@@ -18,6 +18,7 @@ const RagViewer: React.FC = () => {
   const [termsModalOpen, setTermsModalOpen] = useState(false);
   const [termsText, setTermsText] = useState('');
   const [reindexing, setReindexing] = useState(false);
+  const [pool, setPool] = useState<FewShotPool | null>(null);
 
   const loadStats = async () => {
     setLoading(true);
@@ -32,7 +33,17 @@ const RagViewer: React.FC = () => {
     }
   };
 
-  useEffect(() => { loadStats(); }, []);
+  useEffect(() => {
+    loadStats();
+    loadPool();
+  }, []);
+
+  const loadPool = async () => {
+    try {
+      const res: any = await ragApi.fewShot({ query: query.trim() || undefined });
+      if (res?.code === 200) setPool(res.data);
+    } catch { /* 静默 */ }
+  };
 
   const doSearch = async () => {
     if (!query.trim()) return;
@@ -49,6 +60,7 @@ const RagViewer: React.FC = () => {
       message.error('搜索失败: ' + (e?.message || '未知错误'));
     } finally {
       setSearching(false);
+      loadPool(); // few-shot 池随关键词刷新
     }
   };
 
@@ -157,6 +169,33 @@ const RagViewer: React.FC = () => {
             dataSource={hits}
             pagination={{ pageSize: 5 }}
           />
+        )}
+      </Card>
+
+      <Card
+        size="small"
+        title="few-shot 池（生成器引用的高质量正样本）"
+        style={{ marginBottom: 16 }}
+        extra={
+          pool && (
+            <Tag color={pool.pool_size >= pool.threshold ? 'green' : 'orange'}>
+              池 {pool.pool_size} 条{pool.pool_size >= pool.threshold ? ' · 语义召回' : ` · 低于阈值 ${pool.threshold} 按最新取`}
+            </Tag>
+          )
+        }
+      >
+        {pool?.rejection_guidance && (
+          <div style={{ marginBottom: 10, padding: '6px 10px', background: 'rgba(250,140,22,0.08)', borderRadius: 6 }}>
+            <Text type="warning" style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>{pool.rejection_guidance}</Text>
+          </div>
+        )}
+        {(pool?.examples || []).map((e, i) => (
+          <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid var(--color-border-secondary)' }}>
+            <Text strong style={{ fontSize: 12 }}>[L{e.case_level}]</Text> {e.case_name}
+          </div>
+        ))}
+        {!pool?.examples?.length && (
+          <Text type="secondary">（池为空——执行通过或人工编辑用例后会自动积累）</Text>
         )}
       </Card>
 

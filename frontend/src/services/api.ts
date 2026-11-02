@@ -881,7 +881,24 @@ export const ragApi = {
     terms: Record<string, string[]>,
   ): Promise<ApiResponse<Record<string, string[]>>> => api.put('/rag/terms', { terms }),
   reindex: (): Promise<ApiResponse<{ indexed_count: number }>> => api.post('/rag/reindex'),
+  fewShot: (payload: { query?: string; module_id?: number | null }): Promise<ApiResponse<FewShotPool>> =>
+    api.get('/rag/few-shot', { params: payload }),
 };
+
+export interface FewShotPool {
+  pool_size: number;
+  threshold: number;
+  mode: 'semantic' | 'recent';
+  examples: Array<{
+    case_name: string;
+    preset_conditions: unknown[];
+    steps: unknown[];
+    expected_results: unknown[];
+    case_level: number | null;
+  }>;
+  examples_prompt: string;
+  rejection_guidance: string;
+}
 
 // AI 对话 API
 export const chatApi = {

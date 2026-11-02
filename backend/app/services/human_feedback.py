@@ -74,6 +74,27 @@ def get_positive_examples(db, *, module_id=None, session_id=None, limit=MAX_EXAM
             return stmt
 
         results: list = []
+        # 0) 无 module/session：全局取（B7 观测页与全量场景依赖此路径）
+        if module_id is None and session_id is None:
+            rows = db.exec(
+                _query(None)
+                .order_by(desc(TestCase.status), desc(TestCase.reviewed_at))
+                .limit(limit * 2)
+            ).all()
+            results = [
+                r for r in rows
+                if r.status == "PASSED" or r.validation_status == "passed" or r.human_edited
+            ][:limit]
+            return [
+                {
+                    "case_name": r.case_name,
+                    "preset_conditions": r.preset_conditions or [],
+                    "steps": r.steps or [],
+                    "expected_results": r.expected_results or [],
+                    "case_level": r.case_level,
+                }
+                for r in results
+            ]
         # 1) 同模块：执行通过优先，其次人工编辑
         if module_id is not None:
             rows = db.exec(

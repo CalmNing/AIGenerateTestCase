@@ -120,6 +120,62 @@ def update_terms(payload: TermsPayload, session: SessionDep, user: CurrentUser):
     return Response(data=idx.get_terms(), message="同义词已更新")
 
 
+@router.get("/few-shot")
+def get_few_shot_pool(
+    session: SessionDep,
+    user: CurrentUser,
+    query: str = "",
+    module_id: int | None = None,
+):
+    """few-shot 池查看：当前可被生成器引用的正样本与驳回规避清单。"""
+    from app.services.human_feedback import (
+        format_examples_for_prompt,
+        format_rejection_for_prompt,
+        get_positive_examples,
+        get_rejection_guidance,
+        get_relevant_positive_examples,
+        POSITIVE_FALLBACK_THRESHOLD,
+    )
+
+    total = 0
+    try:
+        from db.models import TestCase
+        from sqlmodel import select, or_
+
+        total = len(db.exec(
+            select(TestCase.id).where(
+                or_(
+                    TestCase.status == "PASSED",
+                    TestCase.validation_status == "passed",
+                    TestCase.human_edited.is_(True),
+                )
+            )
+        ).all())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("统计正样本总数失败: %s", exc)
+
+    if query.strip():
+        examples = get_relevant_positive_examples(
+            session, query=query, module_id=module_id, limit=5,
+        )
+        mode = "semantic"
+    else:
+        examples = get_positive_examples(
+            session, module_id=module_id, limit=5,
+        )
+        mode = "recent"
+    guidance = get_rejection_guidance(session, module_id=module_id)
+
+    return Response(data={
+        "pool_size": total,
+        "threshold": POSITIVE_FALLBACK_THRESHOLD,
+        "mode": mode,
+        "examples": examples,
+        "examples_prompt": format_examples_for_prompt(examples),
+        "rejection_guidance": format_rejection_for_prompt(guidance),
+    })
+
+
 @router.post("/reindex")
 def reindex(session: SessionDep, user: CurrentUser):
     """手动全量重建历史需求索引。"""
