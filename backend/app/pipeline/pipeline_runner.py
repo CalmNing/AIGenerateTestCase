@@ -1734,6 +1734,40 @@ class PipelineRunner:
             # B6：本次生成的质量指标（纯规则、零成本），随结果返回并登记低质量警告
             quality_metrics = self._evaluate_quality(task_id, all_test_cases)
 
+            # B6-C：覆盖度审计——链路断裂（需求点无测试点/无用例）与方法覆盖不足
+            # 让"漏分支"第一次变成机器可检测的问题
+            coverage_summary_dict = None
+            try:
+                from app.services.coverage_audit import audit_requirement_coverage
+
+                audit = audit_requirement_coverage(self.db, session_id=session_id)
+                coverage_summary_dict = audit.to_dict()
+                # 链路断裂（warning 级）：本次生成覆盖的需求点缺测试点/用例
+                for gap in audit.gaps:
+                    if gap.gap_type == "no_testpoints":
+                        _add_warning(
+                            task_id, 1, "coverage_no_testpoints",
+                            f"需求点「{gap.requirement_content}」没有拆分出任何测试点",
+                            severity="warning",
+                        )
+                    elif gap.gap_type == "no_testcases":
+                        _add_warning(
+                            task_id, 3, "coverage_no_testcases",
+                            f"需求点「{gap.requirement_content}」的测试点均无用例",
+                            severity="warning",
+                        )
+                    elif gap.gap_type == "method_gap":
+                        missing_labels = ",".join(
+                            m.replace("_", " ") for m in gap.detail.split(",") if m
+                        )
+                        _add_warning(
+                            task_id, 2, "coverage_method_gap",
+                            f"需求点「{gap.requirement_content}」缺少设计方法：{missing_labels}",
+                            severity="quality",
+                        )
+            except Exception as cov_err:  # noqa: BLE001
+                logger.warning("覆盖度审计失败（已忽略）: %s", cov_err)
+
             # 保存历史提示词（需求描述），仅整体生成成功时记录
             try:
                 self._save_history_prompt(
@@ -1758,6 +1792,8 @@ class PipelineRunner:
                 # B6：质量指标（零成本规则计算，可与基线快照对比）
                 "quality": quality_metrics,
                 "required_fields_autofilled": required_filled_total,
+                # B6-C：覆盖度审计（链路完整率与方法缺口，None = 审计失败）
+                "coverage": coverage_summary_dict,
             })
 
             logger.info(

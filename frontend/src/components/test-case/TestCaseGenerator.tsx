@@ -867,6 +867,17 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                       {pipelineStatus.result.test_cases_count} 个测试用例
                     </div>
                   )}
+                  {/* B6-C：覆盖审计（链路完整率 + 缺口） */}
+                  {pipelineStatus.result?.coverage && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                      <CheckCircleOutlined style={{ marginRight: 4 }} />
+                      覆盖：链路完整率 {(pipelineStatus.result.coverage.link_completeness * 100).toFixed(0)}%
+                      {pipelineStatus.result.coverage.gap_counts?.no_testpoints > 0 &&
+                        `，${pipelineStatus.result.coverage.gap_counts.no_testpoints} 个需求点无测试点`}
+                      {pipelineStatus.result.coverage.gap_counts?.no_testcases > 0 &&
+                        `，${pipelineStatus.result.coverage.gap_counts.no_testcases} 个测试点无用例`}
+                    </div>
+                  )}
                   {/* B6：自动补齐必填字段的提示 */}
                   {pipelineStatus.result?.required_fields_autofilled > 0 && (
                     <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
