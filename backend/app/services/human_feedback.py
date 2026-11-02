@@ -1,7 +1,8 @@
 """B7：人工反馈信号回流——让生成器"看到"人工审阅的结果。
 
 数据来源（两条通道）：
-- 正样本：human_edited=True 的用例 —— 人工修过的内容是高质量示例
+- 正样本：**执行通过的用例**（status=PASSED / validation_status=passed，
+  被真实接口验证过，客观证据最强）优先，人工编辑过的用例（human_edited）次之
   （外部证据 CLAST/ASE'25：高质量 few-shot 使通过率 +28%）；
 - 负样本：reject_reason 非空的用例 —— 驳回理由构成"生成时规避清单"。
 
@@ -41,7 +42,12 @@ REJECT_LABELS = {
 
 
 def get_positive_examples(db, *, module_id=None, session_id=None, limit=MAX_EXAMPLES):
-    """取人工编辑过的高质量用例（few-shot 正样本）。
+    """取高质量用例做 few-shot 正样本。
+
+    正样本的优先级（用户 2026-11 确认的口径）：
+      1. **执行通过的用例**（status=PASSED / validation_status=passed）
+         —— 被（用户确认）真实接口/系统验证过，是客观证据最强的"好"；
+      2. 人工编辑过的用例（human_edited=True）—— 人工判断的"好"，次之。
 
     优先同 module，不足时放宽到同 session。
     返回 [{case_name, preset_conditions, steps, expected_results, case_level}]
@@ -50,36 +56,54 @@ def get_positive_examples(db, *, module_id=None, session_id=None, limit=MAX_EXAM
         return []
     try:
         from db.models import TestCase
-        from sqlmodel import select
+        from sqlmodel import select, or_, desc
 
-        results = []
+        def _query(extra):
+            stmt = select(TestCase).where(
+                or_(
+                    TestCase.status == "PASSED",
+                    TestCase.validation_status == "passed",
+                    TestCase.human_edited.is_(True),
+                )
+            )
+            if extra:
+                stmt = stmt.where(extra)
+            return stmt
+
+        results: list = []
+        # 1) 同模块：执行通过优先，其次人工编辑
         if module_id is not None:
-            results = db.exec(
-                select(TestCase)
-                .where(
-                    TestCase.human_edited.is_(True),
-                    TestCase.module_id == module_id,
-                )
-                .order_by(TestCase.reviewed_at.desc())
-                .limit(limit)
-            ).all()
-        if len(results) < limit and session_id is not None:
-            exclude = {r.id for r in results}
             rows = db.exec(
-                select(TestCase)
-                .where(
-                    TestCase.human_edited.is_(True),
-                    TestCase.session_id == session_id,
+                _query(TestCase.module_id == module_id)
+                .order_by(desc(TestCase.status), desc(TestCase.reviewed_at))
+                .limit(limit * 2)
+            ).all()
+            results = [
+                r for r in rows
+                if r.status == "PASSED" or r.validation_status == "passed"
+            ][:limit]
+            if len(results) < limit:
+                seen = {r.id for r in results}
+                results.extend(
+                    r for r in rows
+                    if r.id not in seen and r.human_edited
                 )
-                .order_by(TestCase.reviewed_at.desc())
+                results = results[:limit]
+        # 2) 兜底：放宽到同会话
+        if len(results) < limit and session_id is not None:
+            seen = {r.id for r in results}
+            rows = db.exec(
+                _query(TestCase.session_id == session_id)
+                .order_by(desc(TestCase.status), desc(TestCase.reviewed_at))
                 .limit(limit * 2)
             ).all()
             for r in rows:
-                if r.id in exclude:
+                if r.id in seen:
                     continue
                 results.append(r)
                 if len(results) >= limit:
                     break
+
         return [
             {
                 "case_name": r.case_name,
@@ -91,7 +115,7 @@ def get_positive_examples(db, *, module_id=None, session_id=None, limit=MAX_EXAM
             for r in results
         ]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("获取人工正样本失败（已忽略）: %s", exc)
+        logger.warning("获取正样本失败（已忽略）: %s", exc)
         return []
 
 
@@ -152,7 +176,7 @@ def format_examples_for_prompt(examples, *, max_chars=MAX_EXAMPLE_CHARS):
     if not examples:
         return ""
     lines = [
-        "## 人工认可的高质量示例（以下用例经人工审阅修改，代表本项目的质量标准，请对齐其风格与粒度）",
+        "## 高质量示例（以下用例经真实执行验证通过或人工审阅修正，代表本项目的质量标准，请对齐其风格与粒度）",
         "",
     ]
     for i, ex in enumerate(examples, 1):

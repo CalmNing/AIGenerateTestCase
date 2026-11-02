@@ -35,15 +35,23 @@ def seeded(db_session):
     db_session.commit()
     db_session.refresh(m2)
 
-    # 同模块正样本 1 条
+    # 同模块正样本：执行通过（客观证据，优先级最高）
     db_session.add(TestCase(
-        case_name="登录成功-人工修正", case_level=1,
+        case_name="登录成功-执行通过", case_level=1,
         steps=[{"action": "输入账号 test_user_001"}],
         expected_results=["跳转 /home"],
         session_id=sess.id, module_id=m1.id, user_id="u1",
+        status="PASSED",
+    ))
+    # 同模块正样本：人工编辑（次之）
+    db_session.add(TestCase(
+        case_name="登录失败-人工修正", case_level=3,
+        steps=[{"action": "输入错误密码"}],
+        expected_results=["提示账号或密码错误"],
+        session_id=sess.id, module_id=m1.id, user_id="u1",
         human_edited=True,
     ))
-    # 其他模块正样本 1 条
+    # 其他模块正样本：人工编辑
     db_session.add(TestCase(
         case_name="其他模块-人工修正", case_level=2,
         steps=[{"action": "x"}], expected_results=["y"],
@@ -67,7 +75,17 @@ def test_positive_examples_prefers_same_module(db_session, seeded):
     sess, m1, m2 = seeded
     ex = hf.get_positive_examples(db_session, module_id=m1.id, session_id=sess.id, limit=1)
     assert len(ex) == 1
-    assert ex[0]["case_name"] == "登录成功-人工修正"
+    # 用户口径：执行通过的用例是客观证据最强的好样本，应排第一
+    assert ex[0]["case_name"] == "登录成功-执行通过"
+
+
+def test_positive_examples_includes_both_sources(db_session, seeded):
+    sess, m1, m2 = seeded
+    ex = hf.get_positive_examples(db_session, module_id=m1.id, session_id=sess.id, limit=5)
+    names = [e["case_name"] for e in ex]
+    # 执行通过 + 人工编辑两个来源都应被纳入
+    assert "登录成功-执行通过" in names
+    assert "登录失败-人工修正" in names
 
 
 def test_positive_examples_falls_back_to_session(db_session, seeded):
@@ -75,7 +93,7 @@ def test_positive_examples_falls_back_to_session(db_session, seeded):
     ex = hf.get_positive_examples(db_session, module_id=m2.id, session_id=sess.id, limit=5)
     # m2 自身 1 条 + 兜底同 session 的 m1 正样本
     assert len(ex) >= 2
-    assert any(e["case_name"] == "登录成功-人工修正" for e in ex)
+    assert any(e["case_name"] == "登录成功-执行通过" for e in ex)
 
 
 def test_positive_examples_none_when_no_data(db_session, seeded):
@@ -114,7 +132,7 @@ def test_format_examples_truncates_long():
     examples = [{"case_name": "x" * 2000, "steps": ["s"], "expected_results": ["e"]}]
     out = hf.format_examples_for_prompt(examples, max_chars=100)
     assert "…" in out
-    assert "人工认可" in out
+    assert "高质量示例" in out
 
 
 def test_format_rejection_empty():
@@ -134,7 +152,7 @@ def test_put_marks_human_edited_on_content_change(db_session, seeded):
     """PUT 更新内容字段变化时自动置 human_edited（逻辑在路由层，这里测等效语义）。"""
     sess, m1, m2 = seeded
     tc = db_session.exec(
-        select(TestCase).where(TestCase.case_name == "登录成功-人工修正")
+        select(TestCase).where(TestCase.case_name == "登录失败-人工修正")
     ).first()
     # 模拟路由层语义：内容字段变化 → 置 human_edited
     content_fields = ("case_name", "preset_conditions", "steps", "expected_results", "case_level")
