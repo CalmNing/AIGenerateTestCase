@@ -53,6 +53,8 @@ def create_db_and_tables():
     _backfill_mock_proxy_service_prefix(engine)
     # 一次性清理：登录态改为挂在页面对象上，旧的独立「登录配置」结构作废
     _drop_obsolete_login_profile_schema(engine)
+    # P2：重建 FTS5 检索索引（存量历史需求首次进入检索层）
+    _rebuild_retrieval_index(engine)
 
 
 def _drop_stale_pushlog_schema(engine):
@@ -98,6 +100,54 @@ def _drop_obsolete_login_profile_schema(engine):
             conn.execute(text("DROP TABLE IF EXISTS login_profile"))
     except Exception as e:  # noqa: BLE001 - 清理失败不该阻断启动
         logger.warning(f"自动迁移: 清理登录配置遗留结构失败(忽略): {e}")
+
+
+def _rebuild_retrieval_index(engine):
+    """把 historyprompt 全量同步进 FTS5 检索索引（P2）。
+
+    索引是缓存，源表 historyprompt 才是唯一事实来源；
+    启动时全量重建一次，保证存量历史需求立即可被检索召回。
+    任何失败都只告警，不阻断启动。
+    """
+    try:
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT id, content, module_id, user_id, session_id, created_at "
+                    "FROM historyprompt"
+                )
+            ).fetchall()
+        if not rows:
+            return
+        source = [
+            {
+                "id": r[0],
+                "content": r[1],
+                "module_id": r[2],
+                "user_id": r[3],
+                "session_id": r[4],
+                "created_at": r[5],
+            }
+            for r in rows
+        ]
+        from utils.retrieval import get_index
+
+        idx = get_index()
+        if idx is None:
+            logger.warning("检索索引不可用（FTS5 未启用），历史召回将降级为时间序")
+            return
+        # 增量写入已经保证索引跟上源表；只有条目数不一致（首次启动/索引丢失）时才全量重建，
+        # 避免每次启动都做 O(N) 的全量清空重建。
+        if idx.indexed_count() == len(source):
+            logger.debug("检索索引已是最新（%d 条），跳过重建", len(source))
+            return
+        count = idx.sync_from_source(source)
+        if count:
+            logger.info("已重建检索索引：%d 条历史需求", count)
+    except Exception as exc:  # noqa: BLE001 - 索引重建失败不该阻断启动
+        logger.warning("重建检索索引失败（已忽略，检索降级为时间序）: %s", exc)
 
 
 def _try_drop_column(conn, table: str, column: str):

@@ -2,10 +2,9 @@
 name: coverage-analysis
 description: >
   Analyze existing test coverage to identify gaps and avoid duplicate test cases.
-  Use the get_existing_coverage tool to understand what's already covered, then
-  design complementary test cases that fill the gaps.
+  Use the "已覆盖清单" section injected in the prompt to understand what's already
+  covered, then design complementary test cases that fill the gaps.
 license: MIT
-allowed-tools: get_existing_coverage
 ---
 
 # Coverage Analysis
@@ -13,15 +12,20 @@ allowed-tools: get_existing_coverage
 ## When to Use
 
 - Before generating new test cases for a module
-- When you have access to the `get_existing_coverage` tool
+- When the prompt contains a "本模块已有测试用例（已覆盖清单）" section
 - When you need to avoid duplicating existing test cases
 - When filling test coverage gaps is important
 
 ## Workflow
 
-### Step 1: Query Existing Coverage
+### Step 1: Read Existing Coverage
 
-Call `get_existing_coverage` to retrieve:
+The prompt contains a **已覆盖清单** section listing this module's existing test
+cases (name + level + verification points). Read it carefully. If that section is
+absent, it means no coverage data is available for this module — proceed directly to
+designing cases and do not invent coverage facts.
+
+From the list, determine:
 - Existing test case names grouped by level (1-4)
 - Which levels already have coverage
 - Which levels are missing coverage

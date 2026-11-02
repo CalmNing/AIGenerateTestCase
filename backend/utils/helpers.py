@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 from sqlmodel import select, desc
@@ -200,6 +200,8 @@ def _upsert_history_prompt(db_session, *, content: str | None, module_id, sessio
 
     existing = db_session.exec(select(HistoryPrompt).where(*filters)).first()
     if existing:
+        # 已有记录也可能尚未进检索索引（索引是缓存，源表才是事实来源）→ 补一次
+        _index_history_prompt(history)
         return existing
 
     history = HistoryPrompt(
@@ -211,7 +213,29 @@ def _upsert_history_prompt(db_session, *, content: str | None, module_id, sessio
     db_session.add(history)
     db_session.commit()
     db_session.refresh(history)
+    # P2：写入即索引（增量），否则检索永远召不到新需求
+    _index_history_prompt(history)
     return history
+
+
+def _index_history_prompt(history) -> None:
+    """把一条历史需求写入 FTS5 检索索引（失败静默忽略，不影响主流程）。"""
+    try:
+        from utils.retrieval import get_index
+
+        idx = get_index()
+        if idx is None:
+            return
+        idx.upsert(
+            row_id=history.id,
+            content=history.content or "",
+            module_id=history.module_id,
+            user_id=history.user_id,
+            session_id=history.session_id,
+            created_at=str(history.created_at) if history.created_at else None,
+        )
+    except Exception:  # noqa: BLE001 - 索引失败绝不能影响保存
+        logger.warning("写入检索索引失败（已忽略）", exc_info=True)
 
 
 def _repair_json(text: str) -> str:
@@ -694,6 +718,12 @@ class _TokenUsageCallback(BaseCallbackHandler):
 
 _HISTORY_PROMPT_LIMIT = 20
 
+# 单条历史需求注入 prompt 的最大字符数（P2：旧实现无截断，长历史会撑爆上下文）
+_HISTORY_CONTENT_MAX_CHARS = 600
+
+# 「已覆盖清单」最多展示的用例条数（P2：替代不存在的 get_existing_coverage 工具）
+_COVERAGE_SUMMARY_LIMIT = 30
+
 _SKILLS_DIR = os.path.join(os.path.dirname(__file__), "..", "skills")
 
 
@@ -733,8 +763,24 @@ def _load_skill_bodies(skill_names: list[str]) -> str:
     return header + "\n\n---\n\n".join(parts)
 
 
-def _build_history_context(db_session, module_id: int) -> str:
-    """获取当前模块下最近 N 条历史需求描述，作为上下文供 agent 理解功能背景。
+def _build_history_context(
+    db_session,
+    module_id: int,
+    *,
+    query: str = "",
+    user_id: Optional[str] = None,
+    session_id: Optional[int] = None,
+    top_k: int = _HISTORY_PROMPT_LIMIT,
+) -> str:
+    """获取历史需求描述作为上下文（P2：相关性召回优先，时间序兜底）。
+
+    改造前：只按 `module_id` 精确过滤 + 时间倒序取最近 20 条——"最近"而非"相关"，
+    模块积累到几百条后最相关的早期需求会被挤掉，且跨模块经验完全不可复用。
+
+    现在：
+      1. 有 `query` 时先走 FTS5 相关性召回（utils/retrieval.py）；
+      2. 召回不可用/无命中 → 回退到原来的时间序（行为与改造前一致）；
+      3. 无论哪条路径，都做**字符级截断**（旧实现无截断，长历史会撑爆上下文）。
 
     历史需求仅用于辅助理解，不参与用例生成。
     无历史记录或 db_session 不可用时返回空字符串。
@@ -742,23 +788,154 @@ def _build_history_context(db_session, module_id: int) -> str:
     if db_session is None or module_id is None:
         return ""
 
-    try:
-        prompts = db_session.exec(
-            select(HistoryPrompt.content)
-            .where(HistoryPrompt.module_id == module_id)
-            .order_by(desc(HistoryPrompt.created_at))
-            .limit(_HISTORY_PROMPT_LIMIT)
-        ).all()
-    except Exception:
-        logger.warning("查询历史提示词失败", exc_info=True)
-        return ""
+    contents: list[str] = []
 
-    if not prompts:
+    # 1) 相关性召回（失败静默降级到时间序）
+    if query:
+        try:
+            from utils.retrieval import retrieve_history
+
+            items = retrieve_history(
+                db_session,
+                query=query,
+                module_id=module_id,
+                user_id=user_id,
+                session_id=session_id,
+                top_k=top_k,
+            )
+            contents = [item.content for item in items]
+        except Exception:
+            logger.warning("历史相关性召回失败，回退时间序", exc_info=True)
+            contents = []
+
+    # 2) 时间序兜底
+    if not contents:
+        try:
+            prompts = db_session.exec(
+                select(HistoryPrompt.content)
+                .where(HistoryPrompt.module_id == module_id)
+                .order_by(desc(HistoryPrompt.created_at))
+                .limit(_HISTORY_PROMPT_LIMIT)
+            ).all()
+        except Exception:
+            logger.warning("查询历史提示词失败", exc_info=True)
+            return ""
+        contents = list(prompts)
+
+    if not contents:
         return ""
 
     lines = ["## 历史需求上下文（仅供参考，不作为本次用例生成的需求）"]
-    for i, content in enumerate(reversed(prompts), 1):
+    idx = 0
+    for content in contents:
         cleaned_content = _clean_history_prompt_content(content)
-        if cleaned_content:
-            lines.append(f"{i}. {cleaned_content}")
+        if not cleaned_content:
+            continue
+        idx += 1
+        if len(cleaned_content) > _HISTORY_CONTENT_MAX_CHARS:
+            cleaned_content = cleaned_content[:_HISTORY_CONTENT_MAX_CHARS] + "…"
+        lines.append(f"{idx}. {cleaned_content}")
+    if idx == 0:
+        return ""
     return "\n".join(lines) + "\n\n"
+
+
+def _retrieve_related_history(
+    db_session,
+    *,
+    query: str,
+    module_id: Optional[int],
+    user_id: Optional[str] = None,
+    session_id: Optional[int] = None,
+    top_k: int = 8,
+) -> str:
+    """按相关性召回历史需求，返回可直接注入 prompt 的文本（P2）。
+
+    与 `_build_history_context` 的区别：后者是给"单次生成"用的完整上下文块，
+    这里给 pipeline 用（阶段 1 需要轻量、可控长度的参考）。
+
+    检索不可用/无命中时返回空字符串（调用方继续，不报错）。
+    """
+    if db_session is None or not (query or "").strip():
+        return ""
+    try:
+        from utils.retrieval import format_retrieved_context, retrieve_history
+
+        items = retrieve_history(
+            db_session,
+            query=query,
+            module_id=module_id,
+            user_id=user_id,
+            session_id=session_id,
+            top_k=top_k,
+        )
+        if not items:
+            return ""
+        return format_retrieved_context(
+            items,
+            title="## 相关历史需求（按相关性召回，仅供参考，避免重复设计）",
+        )
+    except Exception:  # noqa: BLE001 - 检索失败绝不能影响生成
+        logger.warning("召回相关历史需求失败（已忽略）", exc_info=True)
+        return ""
+
+
+def _build_coverage_summary(
+    db_session,
+    module_id: int,
+    *,
+    limit: int = _COVERAGE_SUMMARY_LIMIT,
+) -> str:
+    """生成「本模块已覆盖清单」：已有用例的标题 + 验证要点摘要。
+
+    作用：替代 skills 里那个**后端并不存在**的 `get_existing_coverage` 工具
+    （P2 修复）。技能教模型"先查已有覆盖再补差"，但该工具全库 0 实现，
+    等于给模型注入了一段无法执行的指令；这里用真实数据满足同一意图。
+
+    只读，不抛异常：失败返回空字符串。
+    """
+    if db_session is None or module_id is None:
+        return ""
+
+    try:
+        from db.models import TestCase as DBTestCase
+
+        rows = db_session.exec(
+            select(DBTestCase.case_name, DBTestCase.expected_results, DBTestCase.case_level)
+            .where(DBTestCase.module_id == module_id)
+            .limit(limit * 3)
+        ).all()
+    except Exception:
+        logger.warning("查询已有用例失败（已忽略）", exc_info=True)
+        return ""
+
+    if not rows:
+        return ""
+
+    seen: set[str] = set()
+    items: list[str] = []
+    for case_name, expected_results, case_level in rows:
+        name = (case_name or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        points: list[str] = []
+        if isinstance(expected_results, list):
+            for item in expected_results[:3]:
+                text = str(item).strip()
+                if text:
+                    points.append(text)
+        level_text = f"[等级{case_level}]" if case_level else ""
+        suffix = f"（验证要点：{'；'.join(points)}）" if points else ""
+        items.append(f"- {name} {level_text}{suffix}".strip())
+        if len(items) >= limit:
+            break
+
+    if not items:
+        return ""
+
+    header = (
+        "## 本模块已有测试用例（已覆盖清单，用于避免重复并识别覆盖缺口）\n"
+        f"（共展示 {len(items)} 条，请勿重复设计已覆盖的场景）\n"
+    )
+    return header + "\n".join(items) + "\n\n"

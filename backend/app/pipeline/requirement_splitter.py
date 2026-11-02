@@ -40,6 +40,7 @@ class RequirementSplitter:
         *,
         is_api_test: bool = False,
         api_context: str = "",
+        coverage_summary: str = "",
     ) -> List[Dict[str, Any]]:
         """
         分析需求文档，提取需求点列表。
@@ -56,7 +57,8 @@ class RequirementSplitter:
             # api_context 通过 build_stage_system 注入 system 前缀，便于缓存命中；
             # user 仅保留动态补充内容。
             system_prompt = build_stage_system(
-                API_REQUIREMENT_SPLITTER_SYSTEM, api_context=api_context, is_api_test=True
+                API_REQUIREMENT_SPLITTER_SYSTEM, api_context=api_context, is_api_test=True,
+                coverage_summary=coverage_summary,
             )
             user_prompt = (
                 "## 用户补充说明（次要，仅用于理解业务语境，"
@@ -64,7 +66,9 @@ class RequirementSplitter:
                 + (requirement_text or "(无用户补充说明)")
             )
         else:
-            system_prompt = build_stage_system(REQUIREMENT_SPLITTER_SYSTEM)
+            system_prompt = build_stage_system(
+                REQUIREMENT_SPLITTER_SYSTEM, coverage_summary=coverage_summary,
+            )
             user_prompt = REQUIREMENT_ANALYSIS_USER.format(content=requirement_text)
         messages = [
             {"role": "system", "content": system_prompt},

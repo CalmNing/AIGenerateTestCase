@@ -463,6 +463,7 @@ def build_stage_system(
     stage_specific: str,
     api_context: str = "",
     is_api_test: bool = False,
+    coverage_summary: str = "",
 ) -> str:
     """构造「可缓存」的 stage system 提示词。
 
@@ -485,8 +486,12 @@ def build_stage_system(
         stage_specific: 该阶段专属的指令（如 TEST_POINT_GENERATOR_SYSTEM）。
         api_context: 接口 Schema 文本，仅接口测试非空。
         is_api_test: 是否接口测试。
+        coverage_summary: P2 检索层提供的「已覆盖清单」，仅阶段 1 需要
+            （让拆分阶段就避开已覆盖内容）。同一模块内容稳定，可命中前缀缓存。
     """
     parts = [SHARED_CACHE_PREFIX]
+    if coverage_summary:
+        parts.append(coverage_summary)
     if is_api_test and api_context:
         parts.append(
             "## 接口上下文（核心依据，请基于以下接口信息设计测试用例）\n" + api_context

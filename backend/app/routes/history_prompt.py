@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, status
@@ -8,6 +9,8 @@ from app.deps import SessionDep, CurrentUser
 from db.models import HistoryPrompt
 from utils.base_response import Response
 from utils.history_prompt_cleaner import clean_history_prompt_content
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/history_prompt", tags=["history_prompt"])
 
@@ -108,6 +111,16 @@ def delete_history_prompt(
     if not prompt:
         return Response(code=status.HTTP_404_NOT_FOUND, message="历史提示词不存在")
 
+    prompt_id_saved = prompt.id
     session.delete(prompt)
     session.commit()
+    # P2：同步清理检索索引，否则召回会返回已删除的历史需求
+    try:
+        from utils.retrieval import get_index
+
+        idx = get_index()
+        if idx is not None:
+            idx.delete(prompt_id_saved)
+    except Exception:  # noqa: BLE001 - 索引清理失败不影响删除主流程
+        logger.warning("清理检索索引失败（已忽略）", exc_info=True)
     return Response(message="历史提示词删除成功")

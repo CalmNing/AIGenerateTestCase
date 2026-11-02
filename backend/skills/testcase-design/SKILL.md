@@ -5,7 +5,6 @@ description: >
   or create test cases from requirements. Provides a structured three-step workflow: requirements analysis,
   test case design across four levels, and quality review.
 license: MIT
-allowed-tools: get_existing_coverage
 ---
 
 # Test Case Design
@@ -28,7 +27,7 @@ Before designing test cases, deeply analyze the requirement:
 - Identify input boundaries (min, max, null, special characters)
 - Map out exception paths and error scenarios (network failures, concurrency conflicts, data inconsistency)
 - If session context is provided, analyze interactions and data flow between this requirement and existing modules
-- If existing test coverage data is available via `get_existing_coverage`, identify coverage gaps
+- If the prompt contains a "本模块已有测试用例（已覆盖清单）" section, use it to identify coverage gaps
 
 ### Step 2: Test Case Design
 
