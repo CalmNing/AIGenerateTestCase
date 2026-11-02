@@ -1072,16 +1072,19 @@ class PipelineRunner:
                 from app.services.human_feedback import (
                     format_examples_for_prompt,
                     format_rejection_for_prompt,
-                    get_positive_examples,
+                    get_relevant_positive_examples,
                     get_rejection_guidance,
                 )
 
-                pos_examples = get_positive_examples(
-                    self.db, module_id=module_id, session_id=session_id,
+                pos_examples = get_relevant_positive_examples(
+                    self.db,
+                    query=requirement_text[:500],
+                    module_id=module_id,
+                    session_id=session_id,
                 )
                 if pos_examples:
                     coverage_summary += "\n\n" + format_examples_for_prompt(pos_examples)
-                    logger.info("B7：已注入 %d 条人工认可示例", len(pos_examples))
+                    logger.info("B7：已注入 %d 条高质量示例（相关性召回）", len(pos_examples))
                 reject_guide = get_rejection_guidance(
                     self.db, module_id=module_id, session_id=session_id,
                 )

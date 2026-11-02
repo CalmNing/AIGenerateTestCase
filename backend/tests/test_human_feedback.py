@@ -112,6 +112,93 @@ def test_positive_examples_none_when_no_data(db_session, seeded):
     assert others == []
 
 
+def test_relevant_examples_semantic_when_plenty(db_session, seeded, monkeypatch):
+    """正样本充足时按相关性召回（登录需求 → 登录示例，而非无关示例）。"""
+    sess, m1, m2 = seeded
+    # 造 10 条正样本（超过 POSITIVE_FALLBACK_THRESHOLD=8），一半登录相关一半无关
+    for i in range(5):
+        db_session.add(TestCase(
+            case_name=f"登录场景-{i}", case_level=1,
+            steps=[{"action": f"输入账号 user{i} 登录"}],
+            expected_results=["跳转 /home"],
+            session_id=sess.id, module_id=m1.id, user_id="u1",
+            status="PASSED",
+        ))
+        db_session.add(TestCase(
+            case_name=f"报表导出-{i}", case_level=1,
+            steps=[{"action": f"导出报表{i}"}],
+            expected_results=["文件下载"],
+            session_id=sess.id, module_id=m1.id, user_id="u1",
+            status="PASSED",
+        ))
+    db_session.commit()
+
+    ex = hf.get_relevant_positive_examples(
+        db_session,
+        query="账号密码登录 验证码",
+        module_id=m1.id, session_id=sess.id, limit=3,
+    )
+    assert ex, "应召回到示例"
+    names = " ".join(e["case_name"] for e in ex)
+    assert "登录" in names, f"相关性召回应优先登录示例，实际：{names}"
+
+
+def test_relevant_examples_fallback_when_few(db_session, seeded):
+    """正样本少于阈值 → 退回来源优先级（不引入检索噪声）。"""
+    sess, m1, m2 = seeded
+    ex = hf.get_relevant_positive_examples(
+        db_session,
+        query="完全无关的量子计算需求",
+        module_id=m1.id, session_id=sess.id, limit=5,
+    )
+    assert ex, "样本少时应退回来源优先级而非空"
+    assert len(ex) <= hf.MAX_EXAMPLES
+
+
+def test_relevant_examples_empty_query(db_session, seeded):
+    sess, m1, m2 = seeded
+    assert hf.get_relevant_positive_examples(db_session, query="") == []
+    assert hf.get_relevant_positive_examples(None, query="x") == []
+
+
+def test_relevant_examples_id_offset_no_conflict(db_session, seeded, monkeypatch):
+    """示例索引 rowid 加偏移，不得覆盖历史需求索引的同 id 文档。"""
+    # 造 10 条正样本触发检索路径
+    sess, m1, m2 = seeded
+    for i in range(10):
+        db_session.add(TestCase(
+            case_name=f"登录-批量{i}", case_level=1,
+            steps=[{"action": "登录"}], expected_results=["跳转"],
+            session_id=sess.id, module_id=m1.id, user_id="u1",
+            status="PASSED",
+        ))
+    db_session.commit()
+
+    # 同一索引实例：先放一条"历史需求"（rowid=1），再跑示例召回
+    from utils.retrieval import get_index, reset_index_singleton
+    import tempfile, os as _os
+    reset_index_singleton()
+    d = tempfile.mkdtemp()
+    monkeypatch.setattr(
+        "utils.retrieval.DEFAULT_INDEX_PATH", _os.path.join(d, "idx.db"),
+    )
+    idx = get_index()
+    idx.upsert(row_id=1, content="某历史需求内容", module_id=m1.id,
+               user_id="u1", session_id=sess.id, created_at=None)
+
+    ex = hf.get_relevant_positive_examples(
+        db_session, query="登录", module_id=m1.id, session_id=sess.id, limit=5,
+    )
+    assert ex
+    # 历史需求文档仍完好（未被示例 upsert 覆盖）
+    conn = idx._connect()
+    row = conn.execute(
+        "SELECT content FROM retrieval_fts WHERE rowid = 1"
+    ).fetchone()
+    assert row is not None and "历史需求" in row[0]
+    reset_index_singleton()
+
+
 def test_rejection_guidance_counts_by_code(db_session, seeded):
     sess, m1, m2 = seeded
     guide = hf.get_rejection_guidance(db_session, module_id=m1.id, session_id=sess.id)

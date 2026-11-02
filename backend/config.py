@@ -52,8 +52,9 @@ default_config = {
     # pipeline 内部 LLM 调用并发上限（阶段2/3/4 共用；默认 4，可调大缩短等待）
     "pipeline_concurrency": 4,
     # P3 执行验证闭环：生成后真实执行接口用例，失败信息回灌重修。
-    # 默认关闭——开启后会向被测接口发真实请求，需确认执行环境已就绪。
-    "verification_enabled": False,
+    # 默认开启（2026-11 用户确认）；只读保护 verification_read_only=True 下
+    # 仅发 GET/HEAD/OPTIONS 请求，不会改动被测系统数据。
+    "verification_enabled": True,
     "verification_max_rounds": 1,
     # 只执行只读方法的接口（GET/HEAD/OPTIONS），避免误改被测系统的数据。
     # 置为 false 才会执行 POST/PUT/DELETE 等写操作（需自行确保环境可写）。

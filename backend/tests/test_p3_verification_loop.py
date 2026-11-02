@@ -119,11 +119,13 @@ def _enable_verification(monkeypatch, enabled=True, rounds=1):
     )
 
 
-def test_verification_disabled_by_default(monkeypatch):
+def test_verification_enabled_by_default(monkeypatch):
     from config import config_manager
 
-    # 默认配置下开关是关闭的（避免误发真实请求）
-    assert config_manager.get_verification_enabled() is False
+    # 2026-11 用户确认后默认开启；只读保护（verification_read_only=True）兜底：
+    # 仅发 GET/HEAD/OPTIONS，不改动被测系统数据。
+    # 用户可在 data/config.json 显式置 false 关闭。
+    assert config_manager.get_verification_enabled() is True
 
 
 def test_pipeline_skips_verification_when_disabled(

@@ -31,6 +31,9 @@ MAX_EXAMPLE_CHARS = 500
 # 驳回清单最多展示几类
 MAX_REJECT_TYPES = 5
 
+# 正样本数量阈值：低于此值时相关性检索只会引入噪声，退回来源优先级
+POSITIVE_FALLBACK_THRESHOLD = 8
+
 # 驳回理由的可读文案（与 routes/testcase.py 的 REJECT_REASONS 对齐）
 REJECT_LABELS = {
     "duplicate": "与已有用例重复",
@@ -169,6 +172,119 @@ def get_rejection_guidance(db, *, module_id=None, session_id=None):
     except Exception as exc:  # noqa: BLE001
         logger.warning("汇总驳回理由失败（已忽略）: %s", exc)
         return ""
+
+
+def get_relevant_positive_examples(
+    db,
+    *,
+    query: str,
+    module_id=None,
+    session_id=None,
+    limit=MAX_EXAMPLES,
+) -> list:
+    """按需求相关性召回高质量正样本（few-shot 语义检索）。
+
+    与 get_positive_examples 的区别：
+    - get_positive_examples：按"来源优先级"取最新的 N 条（无相关性概念）；
+    - 本函数：把正样本索引进 FTS5，按与本次需求的**文本相关性**召回——
+      正样本多于阈值（POSITIVE_FALLBACK_THRESHOLD）时用语义检索，
+      少时退回来源优先级（此时检索只会引入噪声）。
+
+    正样本判定：status=PASSED / validation_status=passed / human_edited=True。
+    """
+    if db is None or not (query or "").strip():
+        return []
+    try:
+        from db.models import TestCase
+        from sqlmodel import select, or_
+
+        rows = db.exec(
+            select(TestCase).where(
+                or_(
+                    TestCase.status == "PASSED",
+                    TestCase.validation_status == "passed",
+                    TestCase.human_edited.is_(True),
+                )
+            )
+        ).all()
+        if not rows:
+            return []
+
+        # 样本少：直接用来源优先级取最新（检索只引入噪声）
+        if len(rows) <= POSITIVE_FALLBACK_THRESHOLD:
+            return get_positive_examples(
+                db, module_id=module_id, session_id=session_id, limit=limit,
+            )
+
+        # 样本充足：FTS5 相关性召回
+        from utils.retrieval import get_index
+
+        idx = get_index()
+        if idx is None:
+            return get_positive_examples(
+                db, module_id=module_id, session_id=session_id, limit=limit,
+            )
+
+        # 正样本写入独立 namespace（rowid 加偏移避免与历史需求索引冲突）
+        EXAMPLE_ID_OFFSET = 10_000_000
+        hits_limit = limit * 4
+        for r in rows[:500]:
+            text = " ".join([
+                str(r.case_name or ""),
+                " ".join(str(x) for x in (r.expected_results or [])[:3]),
+                " ".join(str(x) for x in (r.steps or [])[:2] if isinstance(x, (str, dict))),
+            ])
+            idx.upsert(
+                row_id=EXAMPLE_ID_OFFSET + int(r.id),
+                content=text[:2000],
+                module_id=module_id,
+                user_id=r.user_id,
+                session_id=r.session_id,
+                created_at=None,
+            )
+
+        hits = idx.search(
+            query,
+            module_id=module_id,
+            user_id=None,
+            session_id=session_id,
+            top_k=hits_limit,
+            exclude_ids=None,
+        )
+        if not hits:
+            return get_positive_examples(
+                db, module_id=module_id, session_id=session_id, limit=limit,
+            )
+
+        by_id = {int(r.id): r for r in rows}
+        out: list = []
+        seen: set = set()
+        for h in hits:
+            tc_id = h.row_id - EXAMPLE_ID_OFFSET
+            if tc_id in seen or tc_id not in by_id:
+                continue
+            seen.add(tc_id)
+            r = by_id[tc_id]
+            out.append({
+                "case_name": r.case_name,
+                "preset_conditions": r.preset_conditions or [],
+                "steps": r.steps or [],
+                "expected_results": r.expected_results or [],
+                "case_level": r.case_level,
+            })
+            if len(out) >= limit:
+                break
+        # 检索无命中时兜底
+        if not out:
+            return get_positive_examples(
+                db, module_id=module_id, session_id=session_id, limit=limit,
+            )
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("相关性示例召回失败（降级为来源优先级）: %s", exc)
+        return get_positive_examples(
+            db, module_id=module_id, session_id=session_id, limit=limit,
+        )
 
 
 def format_examples_for_prompt(examples, *, max_chars=MAX_EXAMPLE_CHARS):
