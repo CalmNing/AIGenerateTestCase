@@ -243,7 +243,8 @@ def test_full_run_removes_redundant_case(db_session, patched, monkeypatch):
         return []
 
     # 阶段4 用例级冗余审查：标记第 2 条用例冗余
-    async def fake_tc_dedup(cases, requirement_content, model):
+    # （签名需接受 on_fallback：P0 起去重函数会回传降级原因）
+    async def fake_tc_dedup(cases, requirement_content, model, **kwargs):
         ids = [c.id for c in cases]
         return [ids[1]]
 

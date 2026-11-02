@@ -3,6 +3,7 @@
 提供通用的 AI 对话能力，支持 MCP 工具调用和 Skills 方法论注入。
 """
 import logging
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -53,6 +54,9 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     selected_skills: Optional[list[str]] = None
+    # 会话标识：同一 client_session_id 的多轮对话共享一条 LangGraph thread，
+    # 从而支持服务端记忆（前端目前每次都回传完整 messages，传了这个字段即可受益）。
+    client_session_id: Optional[str] = None
 
 
 def _build_chat_system_prompt(
@@ -183,18 +187,66 @@ async def chat(
         )
 
         if all_tools:
-            # 有工具时使用 agent（不强制结构化输出）
+            # 有工具时使用 agent（不强制结构化输出），并启用记忆（checkpointer + store）
             from langchain.agents import create_agent
 
-            agent = create_agent(
-                model=model,
-                tools=all_tools,
-                system_prompt=system_content,
-            )
-            logger.info("使用 Agent 模式（含 %d 个工具）", len(all_tools))
-            response = await agent.ainvoke(
-                {"messages": langchain_messages}
-            )
+            from utils.agent_memory import agent_memory_context, build_thread_id
+
+            # 前端未传 client_session_id 时退化为"单次会话"（thread 仅当次有效），
+            # 不影响原有行为；传入后即可跨请求续接同一条轨迹。
+            # 安全（P1 审查修复）：匿名请求绝不能共享固定 thread——固定 "anonymous" 会让
+            # 所有匿名用户共用同一条轨迹（上下文泄漏），且全量 messages 反复追加导致
+            # 持久化状态无限膨胀（实测两次请求后翻倍）。改为每次匿名请求一个独立 thread。
+            if req.client_session_id:
+                thread_id = build_thread_id(
+                    scope="chat",
+                    user_id=current_user.user_id if current_user else None,
+                    session_id=req.client_session_id,
+                    module_id=None,
+                )
+            else:
+                thread_id = build_thread_id(
+                    scope="chat",
+                    user_id=current_user.user_id if current_user else None,
+                    session_id=f"ephemeral-{uuid.uuid4().hex[:12]}",
+                    module_id=None,
+                )
+            logger.info("使用 Agent 模式（含 %d 个工具，thread=%s）", len(all_tools), thread_id)
+
+            async with agent_memory_context() as (checkpointer, store):
+                agent = create_agent(
+                    model=model,
+                    tools=all_tools,
+                    system_prompt=system_content,
+                    checkpointer=checkpointer,
+                    store=store,
+                )
+                # 关键：只有"已存在该 thread 的轨迹"时才像增量对话那样只发新消息。
+                # 否则前端每次回传完整 messages，会被 checkpointer 的 add_messages
+                # 原样追加，导致历史在持久化状态里无限膨胀（重复）。
+                has_history = False
+                if req.client_session_id:
+                    try:
+                        has_history = await checkpointer.aget_tuple(
+                            {"configurable": {"thread_id": thread_id}}
+                        ) is not None
+                    except Exception:  # noqa: BLE001 - 记忆读取失败按无历史处理
+                        has_history = False
+
+                if has_history:
+                    # system_prompt 已由 create_agent 注入，这里只补最新一条用户消息
+                    input_messages = [langchain_messages[-1]]
+                    logger.info("命中已有记忆轨迹，仅提交最新一条消息（thread=%s）", thread_id)
+                else:
+                    input_messages = langchain_messages
+
+                response = await agent.ainvoke(
+                    {"messages": input_messages},
+                    config={
+                        "configurable": {"thread_id": thread_id},
+                        "recursion_limit": 100,
+                    },
+                )
             # agent 返回的是 dict，需要提取最后一条消息
             if isinstance(response, dict) and "messages" in response:
                 last_msg = response["messages"][-1]

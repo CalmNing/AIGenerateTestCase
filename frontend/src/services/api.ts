@@ -847,9 +847,15 @@ export const skillsApi = {
 export const chatApi = {
   send: (
     messages: Array<{ role: string; content: string }>,
-    selectedSkills?: string[]
+    selectedSkills?: string[],
+    /** 会话标识：传入后后端可复用同一条 LangGraph thread（服务端记忆） */
+    clientSessionId?: string
   ): Promise<ApiResponse<{ reply: string }>> =>
-    api.post('/chat', { messages, selected_skills: selectedSkills }),
+    api.post('/chat', {
+      messages,
+      selected_skills: selectedSkills,
+      client_session_id: clientSessionId,
+    }),
 };
 
 // 系统配置 API

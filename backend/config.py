@@ -42,6 +42,20 @@ default_config = {
     "vision_api_key": "",
     # prompt caching: None = 按 base_url 自动判定（DeepSeek 开启）；True/False = 强制开关
     "prompt_cache_enabled": None,
+    # Agent 记忆（LangGraph checkpointer + Store）：默认启用，落盘到 data/agent_memory.db
+    # 置 false 可完全关闭（降级为无记忆，不影响生成）；agent_memory_db_path 可指定路径
+    "agent_memory_enabled": True,
+    "agent_memory_db_path": "",
+    # P5 上下文工程：token 预算（模型窗口 / 输出预留）
+    "model_window": 32768,
+    "reserved_output_tokens": 8192,
+    # P3 执行验证闭环：生成后真实执行接口用例，失败信息回灌重修。
+    # 默认关闭——开启后会向被测接口发真实请求，需确认执行环境已就绪。
+    "verification_enabled": False,
+    "verification_max_rounds": 1,
+    # 只执行只读方法的接口（GET/HEAD/OPTIONS），避免误改被测系统的数据。
+    # 置为 false 才会执行 POST/PUT/DELETE 等写操作（需自行确保环境可写）。
+    "verification_read_only": True,
     # Mock 正向代理：监听端口与重启后是否自动恢复运行
     "mock_proxy_port": 9000,
     "mock_proxy_enabled": False,
@@ -120,6 +134,55 @@ class ConfigManager:
         if value is None:
             return None
         return bool(value)
+
+    def get_agent_memory_enabled(self) -> bool:
+        """是否启用 Agent 记忆（checkpointer + store）。
+
+        默认 True；置 false 时生成链路完全不接触记忆，行为与改造前一致。
+        """
+        return bool(self.config.get("agent_memory_enabled", True))
+
+    def get_agent_memory_db_path(self) -> str:
+        """Agent 记忆落盘路径；空字符串表示使用默认路径 backend/data/agent_memory.db。"""
+        return (self.config.get("agent_memory_db_path") or "").strip()
+
+    def get_model_window(self) -> int:
+        """模型上下文窗口（P5：token 预算）。
+
+        默认 32768（保守值）。若实际模型窗口更大/更小，可在此调整。
+        """
+        try:
+            return max(4096, int(self.config.get("model_window", 32768)))
+        except (TypeError, ValueError):
+            return 32768
+
+    def get_reserved_output_tokens(self) -> int:
+        """为模型输出预留的 token（从输入预算里扣除）。"""
+        try:
+            return max(0, int(self.config.get("reserved_output_tokens", 8192)))
+        except (TypeError, ValueError):
+            return 8192
+
+    def get_verification_enabled(self) -> bool:
+        """是否启用 P3 执行验证闭环（生成后真实执行接口用例并按失败重修）。
+
+        默认 False：开启会向被测接口发真实请求，必须由用户显式开启。
+        """
+        return bool(self.config.get("verification_enabled", False))
+
+    def get_verification_read_only(self) -> bool:
+        """执行验证是否只允许只读方法（GET/HEAD/OPTIONS）。
+
+        默认 True：执行 POST/PUT/DELETE 会真实改动被测系统数据。
+        """
+        return bool(self.config.get("verification_read_only", True))
+
+    def get_verification_max_rounds(self) -> int:
+        """执行验证的重修复轮数上限（默认 1，避免无限循环）。"""
+        try:
+            return max(0, min(3, int(self.config.get("verification_max_rounds", 1))))
+        except (TypeError, ValueError):
+            return 1
 
     def get_mcp_server_url(self) -> str:
         """获取 MCP 服务器地址"""

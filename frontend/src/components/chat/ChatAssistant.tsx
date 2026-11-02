@@ -42,6 +42,10 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ open, onClose }) => {
   const [showSettings, setShowSettings] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<any>(null);
+  // 会话标识：让后端复用同一条 LangGraph thread（服务端记忆），仅当有工具时生效
+  const [clientSessionId, setClientSessionId] = useState<string>(
+    () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  );
 
   // 加载可用 Skills
   useEffect(() => {
@@ -107,7 +111,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ open, onClose }) => {
         content: m.content,
       }));
 
-      const res = await chatApi.send(history, selectedSkills);
+      const res = await chatApi.send(history, selectedSkills, clientSessionId);
       // axios 拦截器已解包 response.data，res 就是后端返回的 {code, message, data}
       const resAny = res as any;
 
@@ -148,6 +152,12 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ open, onClose }) => {
   const _handleClear = () => {
     setMessages([]);
     setInputValue('');
+    // P1 审查修复：清空对话必须同时换 clientSessionId，
+    // 否则后端仍保留旧 thread 轨迹，"只发最新一条"的增量逻辑会把新对话
+    // 接在被清掉的旧上下文后面（前后端记忆错位）。
+    setClientSessionId(
+      `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    );
   };
 
   const handleSkillToggle = (skillName: string, checked: boolean) => {
