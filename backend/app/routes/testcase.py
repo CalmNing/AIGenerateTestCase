@@ -504,9 +504,20 @@ async def generate_testcases(
         dependency_labels=dependency_labels,
     )
 
+    # P5：api_context 分级裁剪——用户显式选中的接口保全文，
+    # "依赖补全"接口压成骨架（方法/路径/必填字段），避免 token 爆炸。
+    # 只有超出预算时才裁剪，未超限时行为完全不变。
+    core_endpoint_ids = {
+        idx for idx, eid in endpoint_index_to_id.items()
+        if eid not in dependency_labels
+    }
+
     # api_context 不再并入 requirement，改为单独传参；generate_testcases 会把它
     # 放入「可缓存的 system 前缀」，从而让同一接口项目反复生成时命中前缀 KV 缓存。
     # （用户需求降为补充背景的逻辑已内移到 generate_testcases 的 human_text 中）
+
+    # P0 失败可见性：收集降级警告，随响应一并返回；partial=True 表示"部分成功"
+    generation_warnings: list = []
     try:
         # Convert api_project_id to int once for downstream usage
         api_project_id_int: int | None = None
@@ -535,6 +546,10 @@ async def generate_testcases(
             endpoint_index_to_id=endpoint_index_to_id,
             api_project_id=api_project_id_int,
             is_api_test=bool(api_context),
+            # P0 失败可见性：收集降级警告（历史保存失败 / 前置依赖补全失败等）
+            warnings_out=generation_warnings,
+            # P5：核心接口（用户显式选中）永不裁剪
+            core_endpoint_ids=core_endpoint_ids,
         )
     except ModelServiceUnavailableError as e:
         logger.error(f"生成测试用例失败: {e}")
@@ -554,6 +569,21 @@ async def generate_testcases(
             tc.api_project_id = api_project_id_int
     session.add_all(testcases)
     session.commit()
+    # P0：部分成功必须让前端看见（此前降级只写日志，用户只看到"生成成功"）
+    if generation_warnings:
+        logger.warning(
+            "生成完成但有 %d 项降级: %s",
+            len(generation_warnings),
+            [w.get("code") for w in generation_warnings],
+        )
+        return Response(
+            message=f"生成测试用例完成，但有 {len(generation_warnings)} 项降级（部分结果可能不完整）",
+            data={
+                "partial": True,
+                "warnings": generation_warnings,
+                "testcases_count": len(testcases),
+            },
+        )
     return Response(message="生成测试用例成功")
 
 

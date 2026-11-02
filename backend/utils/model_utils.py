@@ -4,14 +4,13 @@ import json
 import logging
 import re
 import time
-import uuid
-from typing import List, Optional, Union, Any
+from typing import List, Optional, Any
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
-from langgraph.checkpoint.memory import InMemorySaver
+# 记忆（checkpointer / store）改为在调用点按上下文构造，见 utils/agent_memory.py
 from pydantic import BaseModel, SecretStr
 
 from sqlmodel import select
@@ -26,6 +25,7 @@ from utils.models import (
 )
 from utils.helpers import (
     ModelServiceUnavailableError,
+    _build_coverage_summary,
     _McpPermissionError,
     _McpToolValidationError,
     _is_model_service_unavailable,
@@ -143,7 +143,6 @@ except ImportError:
     build_tools_from_configs = None
 
 logger = logging.getLogger(__name__)
-checkpointer = InMemorySaver()
 
 # 蓝湖 / 飞书 URL 匹配（统一来源 utils.document_prefetch）
 from utils.document_prefetch import (
@@ -558,8 +557,15 @@ async def create_testcase_agent(
         system_prompt: str = "",
         response_format: type = ResponseFormat,
         prompt_cache: Optional[bool] = None,
+        checkpointer: Any = None,
+        store: Any = None,
 ):
-    """创建测试用例生成agent，自动集成蓝湖 MCP 工具（如果可用）。"""
+    """创建测试用例生成agent，自动集成蓝湖 MCP 工具（如果可用）。
+
+    checkpointer / store 非空时会被真正传入 `create_agent`，从而启用
+    LangGraph 的短期记忆（按 thread 存轨迹）与长期记忆（跨 thread 的 KV）。
+    详见 `utils/agent_memory.py`。
+    """
 
     if model_type == "api":
         # 使用API模型（OpenAI 兼容接口）
@@ -634,7 +640,11 @@ async def create_testcase_agent(
             model=model,
             system_prompt=TOOL_SYSTEM_PROMPT,
             response_format=ToolStrategy(response_format),
-            tools=all_tools
+            tools=all_tools,
+            # 记忆接线（P1）：此前 InMemorySaver 只是实例化不用，agent 每次冷启动。
+            # 传 None 时行为与改造前完全一致，因此对未启用记忆的调用方无副作用。
+            **({"checkpointer": checkpointer} if checkpointer is not None else {}),
+            **({"store": store} if store is not None else {}),
         )
         return agent
 
@@ -778,9 +788,13 @@ def _persist_testcases(
     db_session,
     user_id,
     api_project_id,
+    warnings_out: list | None = None,
 ) -> list:
     """Convert parsed testcases into DBTestCase rows (creating ApiScenario for
     api_call steps) and upsert the history prompt. Returns the DBTestCase list.
+
+    `warnings_out`（可选）用于收集降级警告，让路由层把"部分成功"如实返回给前端
+    （P0 失败可见性）。不传时行为完全不变。
     """
     # 转换为DBTestCase对象
     db_testcases = []
@@ -971,8 +985,144 @@ def _persist_testcases(
             )
     except Exception as e:
         logger.warning(f"保存历史提示词失败（不影响主流程）: {e}")
+        # P0：降级必须可见（历史保存失败会让"下次生成没有上下文"，用户应知情）
+        if warnings_out is not None:
+            warnings_out.append({
+                "phase": 0,
+                "phase_name": "落库",
+                "code": "history_prompt_save_failed",
+                "message": "历史提示词保存失败，本次需求不会进入后续生成的历史上下文",
+                "detail": f"{type(e).__name__}: {e}"[:400],
+            })
 
     return db_testcases
+
+
+def _document_char_allowance() -> int:
+    """需求文档的字符额度（按 token 预算换算）。"""
+    try:
+        from config import config_manager
+
+        window = config_manager.get_model_window()
+        reserved = config_manager.get_reserved_output_tokens()
+    except Exception:  # noqa: BLE001
+        window, reserved = 32768, 8192
+    usable = max(0, int(window * 0.85) - reserved)
+    # 文档最多占可用预算的 40%
+    return max(2000, int(usable * 0.4 * 1.6))
+
+
+def _extract_focus_keywords(requirement: str, document: str) -> list[str]:
+    """从本次需求里抽取关键词，用于长文档压缩时保留重点段。
+
+    做法：取需求里的中文 2~4 字词片段作为关键词（不引分词库）。
+    """
+    keywords: list[str] = []
+    text = (requirement or "")[:1000]
+    import re as _re
+
+    for m in _re.finditer(r"[\u4e00-\u9fff]{2,6}", text):
+        word = m.group(0)
+        # 2~4 字的片段更可能是有意义的词
+        if 2 <= len(word) <= 4 and word not in keywords:
+            keywords.append(word)
+        if len(keywords) >= 12:
+            break
+    return keywords
+
+
+def _apply_token_budget(
+    *,
+    api_context: str,
+    history_context: str,
+    coverage_summary: str,
+    human_requirement: str,
+    schema: type,
+    core_endpoint_ids: Optional[set] = None,
+    model_window: Optional[int] = None,
+    reserved_output: Optional[int] = None,
+) -> tuple[str, dict]:
+    """按 token 预算裁剪上下文（P5）。
+
+    返回 (裁剪后的 api_context, 裁剪报告)。
+
+    裁剪优先级（从低到高，先裁最不重要的）：
+      1. 历史需求上下文（参考性内容，最先被裁）；
+      2. 依赖补全接口的完整 Schema（压成骨架）；
+      3. api_context 尾部（最后手段）。
+
+    **用户显式选中的接口（core_endpoint_ids）永不裁剪**——那是用户明确要求覆盖的范围。
+    预算充足时不做任何裁剪，行为与改造前完全一致。
+    """
+    try:
+        from utils.token_budget import (
+            TokenBudget,
+            compact_api_context,
+            estimate_schema_tokens,
+            estimate_tokens,
+            truncate_text,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning("加载 token 预算模块失败（跳过预算裁剪）: %s", exc)
+        return api_context, {"truncated": False, "saved_tokens": 0, "items": []}
+
+    try:
+        window = model_window or config_manager.get_model_window()
+        reserved = reserved_output if reserved_output is not None else config_manager.get_reserved_output_tokens()
+    except Exception:  # noqa: BLE001
+        window = 32768
+        reserved = 8192
+
+    budget = TokenBudget(model_window=window, reserved_output=reserved)
+    budget.reserve("schema", estimate_schema_tokens(schema))
+    # system 前缀里除 api_context 外的内容（提示词 + 技能 + 已覆盖清单）先占位
+    fixed_system = estimate_tokens(history_context) + estimate_tokens(coverage_summary)
+    budget.reserve("system_fixed", fixed_system)
+    budget.reserve("api_context", estimate_tokens(api_context))
+    budget.reserve("human", estimate_tokens(human_requirement))
+
+    report_items: list[dict] = []
+    saved = 0
+
+    if not budget.over_budget():
+        return api_context, {"truncated": False, "saved_tokens": 0, "items": []}
+
+    # --- 1) 裁历史上下文（占位符，实际裁剪在下方按字符回填） ---
+    # 注意：history_context 由调用方拼进 human 文本，这里只统计并给出建议额度。
+    history_tokens = estimate_tokens(history_context)
+    if history_tokens > 0:
+        # 历史最多允许占用剩余预算的一半
+        allowance = max(0, budget.remaining // 2)
+        if history_tokens > allowance:
+            max_chars = int(allowance * 1.6)  # 中文近似 1 token ≈ 1.6 字符（保守）
+            new_history = truncate_text(history_context, max_chars)
+            saved += history_tokens - estimate_tokens(new_history)
+            report_items.append({
+                "name": "history_context",
+                "before_tokens": history_tokens,
+                "after_tokens": estimate_tokens(new_history),
+                "saved_tokens": history_tokens - estimate_tokens(new_history),
+                "reason": "历史需求上下文超出预算，已截断",
+            })
+
+    # --- 2) api_context 分级裁剪 ---
+    api_allowance_chars = max(2000, int(max(0, budget.remaining) * 3.0))
+    if estimate_tokens(api_context) > estimate_tokens("x" * api_allowance_chars):
+        new_api, api_report = compact_api_context(
+            api_context,
+            core_endpoint_ids=core_endpoint_ids,
+            max_chars=api_allowance_chars,
+        )
+        if api_report.get("truncated"):
+            report_items.extend(api_report.get("items", []))
+            saved += api_report.get("saved_tokens", 0)
+            api_context = new_api
+
+    return api_context, {
+        "truncated": bool(report_items),
+        "saved_tokens": saved,
+        "items": report_items,
+    }
 
 
 def _build_generation_messages(
@@ -982,11 +1132,13 @@ def _build_generation_messages(
         selected_skill_names: list[str] | None,
         api_context: str = "",
         is_api_test: bool = False,
+        coverage_summary: str = "",
 ) -> tuple[str, str]:
     """把「可复用静态上下文」与「动态指令」拆开，以提升 prompt 缓存命中率。
 
     返回 (system_text, human_text)：
-    - system_text：selected_prompt +（可选）技能方法论 +（可选）接口上下文。
+    - system_text：selected_prompt +（可选）技能方法论 +（可选）已覆盖清单
+      +（可选）接口上下文。
       这部分在同一接口项目 / 同一技能组合下逐字节一致，是 DeepSeek 前缀 KV
       缓存的稳定锚点（位于消息最前端，整段可被命中）。
     - human_text：用户真实需求（接口测试时加「补充背景」标签）。这部分每次
@@ -994,12 +1146,17 @@ def _build_generation_messages(
 
     关键约束：selected_prompt 必须始终是 system_text 的开头，这样即使没有
     api_context / 技能，全局基础提示词也始终能命中缓存。
+
+    P2：`coverage_summary`（已覆盖清单）放在 system 前缀里——它按模块内容稳定，
+    重复生成同一模块时可被缓存命中；放在 human 里则每次都全价重算。
     """
     system_parts = [selected_prompt]
     if selected_skill_names:
         skill_context = _load_skill_bodies(selected_skill_names)
         if skill_context:
             system_parts.append("## 参考技能与方法论\n" + skill_context)
+    if coverage_summary:
+        system_parts.append(coverage_summary)
     if api_context:
         system_parts.append(
             "## 接口上下文（核心依据，请基于以下接口信息设计测试用例）\n" + api_context
@@ -1029,9 +1186,16 @@ async def generate_testcases(
         selected_skill_names: list[str] | None = None,
         is_api_test: bool = False,
         api_context: str = "",
+        warnings_out: list | None = None,
+        core_endpoint_ids: Optional[set] = None,
         **kwargs
 ) -> tuple[List[DBTestCase], str]:
-    """根据需求生成测试用例，返回 (testcases, effective_requirement)。"""
+    """根据需求生成测试用例，返回 (testcases, effective_requirement)。
+
+    `warnings_out`（可选 list）收集降级警告（历史保存失败、前置依赖补全失败、
+    记忆初始化失败等），路由层据此返回 `partial` 标记，避免把降级伪装成完全成功
+    （P0 失败可见性）。不传时行为完全不变。
+    """
     # 调用模型并记录耗时与错误（不要在日志中记录 api_key）
     start = time.time()
 
@@ -1053,7 +1217,16 @@ async def generate_testcases(
 
     db_session = kwargs.get("db_session")
     user_id = kwargs.get("user_id")
-    history_context = _build_history_context(db_session, module_id)
+    # P2：历史上下文改为「相关性召回优先、时间序兜底」；query 用本次需求原文
+    history_context = _build_history_context(
+        db_session,
+        module_id,
+        query=(requirement or "")[:500],
+        user_id=user_id,
+        session_id=session_id,
+    )
+    # P2：「已覆盖清单」——用真实已有用例替代 skills 里不存在的 get_existing_coverage 工具
+    coverage_summary = _build_coverage_summary(db_session, module_id)
 
     # 检测链接并解析内容。蓝湖可预取。
     # 如果解析成功，prompt = 历史上下文(参考) + 解析内容(实际需求)
@@ -1120,6 +1293,69 @@ async def generate_testcases(
     if parsed_content:
         _history_save_content = _clean_history_prompt_content(parsed_content)
 
+        # P5：长文档分层压缩——超预算时按段压缩（保留含关键词的段落），
+        # 而不是把整篇塞进 prompt（此前只截尾，关键需求在末尾会静默丢失）。
+        try:
+            from utils.token_budget import compact_document, estimate_tokens
+
+            doc_limit = _document_char_allowance()
+            if estimate_tokens(parsed_content) > estimate_tokens("x" * doc_limit):
+                focus = _extract_focus_keywords(requirement, parsed_content)
+                compacted, doc_report = compact_document(
+                    parsed_content,
+                    max_chars=doc_limit,
+                    focus_keywords=focus,
+                )
+                if doc_report.get("truncated"):
+                    parsed_content = compacted
+                    logger.info(
+                        "需求文档已按段压缩：%d → %d 字符（节省约 %d token）",
+                        len(compacted), doc_limit, doc_report.get("saved_tokens", 0),
+                    )
+                    if warnings_out is not None:
+                        warnings_out.append({
+                            "phase": 0,
+                            "phase_name": "上下文",
+                            "code": "document_compacted",
+                            "message": "需求文档超出 token 预算，已按段落压缩（非重点段落被省略）",
+                            "detail": json.dumps(
+                                doc_report.get("items", []), ensure_ascii=False
+                            )[:400],
+                        })
+        except Exception as doc_err:  # noqa: BLE001
+            logger.warning("需求文档压缩失败（不影响生成）: %s", doc_err)
+
+    # ---- P5：token 预算与裁剪 ----
+    # 在拼 prompt 之前统一算一次预算，超限时按优先级裁剪（历史 → 辅助接口 → 文档）。
+    # 正常输入不受影响（预算充足时行为与改造前完全一致）。
+    api_context, budget_report = _apply_token_budget(
+        api_context=api_context,
+        history_context=history_context,
+        coverage_summary=coverage_summary,
+        human_requirement=requirement,
+        schema=selected_schema,
+        core_endpoint_ids=core_endpoint_ids,
+    )
+    budget_report = budget_report or {}
+    if budget_report.get("truncated"):
+        logger.info(
+            "上下文超预算已裁剪：节省 %d token（%s）",
+            budget_report.get("saved_tokens", 0),
+            [i.get("name") for i in budget_report.get("items", [])],
+        )
+        # 裁剪明细已通过 warnings_out 回传给路由层（前端可见）
+        if warnings_out is not None:
+            warnings_out.append({
+                "phase": 0,
+                "phase_name": "上下文",
+                "code": "context_truncated",
+                "message": (
+                    f"输入上下文超出 token 预算，已裁剪（节省约 "
+                    f"{budget_report.get('saved_tokens', 0)} token），部分接口规格或历史需求可能不完整"
+                ),
+                "detail": json.dumps(budget_report.get("items", []), ensure_ascii=False)[:400],
+            })
+
     # 3) 构造最终 prompt
     if parsed_content:
         # 有解析内容：历史上下文作为补充参考，实际需求是解析内容
@@ -1156,6 +1392,7 @@ async def generate_testcases(
         selected_skill_names=selected_skill_names,
         api_context=api_context,
         is_api_test=is_api_test,
+        coverage_summary=coverage_summary,
     )
     logger.info(
         f"消息拆分: system(可缓存前缀)={len(system_text)} chars | human(动态)={len(human_text)} chars"
@@ -1198,31 +1435,56 @@ async def generate_testcases(
                     raise _McpToolValidationError(_diagnostic_cb.mcp_validation_error)
             else:
                 if custom_mcp_tools:
-                    # 有 MCP 工具时使用 agent
-                    agent = await create_testcase_agent(
-                        model_type=model_type,
-                        api_key=api_key,
-                        api_base_url=api_base_url,
-                        api_proxy_url=api_proxy_url,
-                        api_model=api_model,
-                        with_mcp_tools=has_lanhu_url,
-                        custom_tools=custom_mcp_tools,
-                        system_prompt=system_text,
-                        response_format=selected_schema,
-                        prompt_cache=prompt_cache_cfg,
+                    # 有 MCP 工具时使用 agent（并启用记忆：checkpointer + store）
+                    # thread_id 以前是 "session-uuid4"，每次都是新 thread，记忆形同虚设；
+                    # 现在按 (user, session, module) 生成稳定 key，同模块多次生成共享轨迹。
+                    from utils.agent_memory import agent_memory_context, build_thread_id
+
+                    thread_id = build_thread_id(
+                        scope="testcase",
+                        user_id=kwargs.get("user_id"),
+                        session_id=session_id,
+                        module_id=module_id,
                     )
-                    logger.info(f"调用agent: requirement size={len(human_text)} preview={human_text[:300]}... tail={human_text[-200:]}")
-                    _diagnostic_cb = _TokenUsageCallback()
-                    response = await agent.ainvoke(
-                        {"messages": [{"role": "user", "content": human_text}]},
-                        config={
-                            "configurable": {
-                                "thread_id": f"{session_id}-{uuid.uuid4().hex[:12]}",
+                    logger.info(f"调用agent: requirement size={len(human_text)} preview={human_text[:300]}... tail={human_text[-200:]} thread_id={thread_id}")
+                    async with agent_memory_context() as (checkpointer, store):
+                        agent = await create_testcase_agent(
+                            model_type=model_type,
+                            api_key=api_key,
+                            api_base_url=api_base_url,
+                            api_proxy_url=api_proxy_url,
+                            api_model=api_model,
+                            with_mcp_tools=has_lanhu_url,
+                            custom_tools=custom_mcp_tools,
+                            system_prompt=system_text,
+                            response_format=selected_schema,
+                            prompt_cache=prompt_cache_cfg,
+                            checkpointer=checkpointer,
+                            store=store,
+                        )
+                        _diagnostic_cb = _TokenUsageCallback()
+                        # 生成是"一次性任务"：thread_id 稳定（便于追溯/将来支持断点续跑），
+                        # 但每次新生成都应从干净的状态开始，否则同模块第二次生成会把
+                        # 上一次的 ReAct 轨迹整体带进上下文（token 膨胀 + 结论串味）。
+                        # 因此：同一 thread 若已有历史，先清空再跑；Store（长期记忆）不受影响。
+                        try:
+                            existing = await checkpointer.aget_tuple(
+                                {"configurable": {"thread_id": thread_id}}
+                            )
+                            if existing is not None:
+                                await checkpointer.adelete_thread(thread_id)
+                                logger.info(f"复用 thread={thread_id}，已清空上一轮轨迹（本次为全新生成）")
+                        except Exception as mem_err:  # noqa: BLE001 - 记忆操作失败不得影响生成
+                            logger.warning(f"清理旧 thread 失败（按无历史继续）: {mem_err}")
+
+                        response = await agent.ainvoke(
+                            {"messages": [{"role": "user", "content": human_text}]},
+                            config={
+                                "configurable": {"thread_id": thread_id},
+                                "recursion_limit": 150,
+                                "callbacks": [_diagnostic_cb],
                             },
-                            "recursion_limit": 150,
-                            "callbacks": [_diagnostic_cb],
-                        },
-                    )
+                        )
                     if _diagnostic_cb.mcp_permission_error:
                         raise _McpPermissionError(_diagnostic_cb.mcp_permission_error)
                     if _diagnostic_cb.mcp_validation_error:
@@ -1339,6 +1601,71 @@ async def generate_testcases(
                 )
             except Exception as e:
                 logger.warning(f"前置依赖补全失败（已忽略，不影响生成）: {e}")
+                # P0：此前只记日志——用例会缺少前置步骤但看起来"生成成功"
+                if warnings_out is not None:
+                    warnings_out.append({
+                        "phase": 0,
+                        "phase_name": "落库",
+                        "code": "prerequisite_steps_failed",
+                        "message": "接口依赖的前置步骤补全失败，部分接口用例可能缺少前置调用步骤",
+                        "detail": f"{type(e).__name__}: {e}"[:400],
+                    })
+
+        # B6：必填字段确定性补全（与 pipeline 对齐）。
+        # 单次生成路径的 local_testcases 是 Pydantic 对象（steps 里可能是
+        # ApiCallStep 对象），先转成可编辑 dict 再补全。
+        required_filled_total = 0
+        if is_api_test and kwargs.get("endpoint_index_to_id"):
+            try:
+                from sqlmodel import select as _select
+
+                from app.services.required_field_filler import fill_testcase_steps
+                from db.models import ApiEndpoint as _ApiEp
+
+                idx_map = kwargs.get("endpoint_index_to_id", {}) or {}
+                ep_ids: set = set()
+                for tc_obj in local_testcases:
+                    for s in (getattr(tc_obj, "steps", None) or []):
+                        eid = None
+                        if isinstance(s, dict):
+                            eid = s.get("endpoint_id")
+                            if eid is None and isinstance(s.get("endpoint_ref"), int):
+                                eid = idx_map.get(s["endpoint_ref"])
+                        elif hasattr(s, "endpoint_ref"):
+                            eid = idx_map.get(getattr(s, "endpoint_ref", None))
+                        if eid:
+                            ep_ids.add(int(eid))
+
+                db_sess = kwargs.get("db_session")
+                if ep_ids and db_sess is not None:
+                    ep_rows = db_sess.exec(
+                        _select(_ApiEp).where(_ApiEp.id.in_(list(ep_ids)))
+                    ).all()
+                    schema_by_id = {
+                        row.id: (row.request_schema if isinstance(row.request_schema, dict) else {})
+                        for row in ep_rows
+                    }
+                    for tc_obj in local_testcases:
+                        raw_steps = []
+                        for s in (getattr(tc_obj, "steps", None) or []):
+                            if isinstance(s, dict):
+                                raw_steps.append(s)
+                            elif hasattr(s, "model_dump"):
+                                try:
+                                    raw_steps.append(s.model_dump(by_alias=True))
+                                except Exception:  # noqa: BLE001
+                                    raw_steps.append(dict(s))
+                            else:
+                                raw_steps.append(s)
+                        new_steps, filled = fill_testcase_steps(
+                            raw_steps, schema_by_id,
+                            endpoint_id_by_ordinal=idx_map,
+                        )
+                        if filled:
+                            required_filled_total += len(filled)
+                            tc_obj.steps = new_steps
+            except Exception as e:
+                logger.warning(f"必填字段补全失败（已忽略，不影响生成）: {e}")
 
         # 转换为 DBTestCase 并保存历史提示词
         # 历史保存用户真实需求(human_text)，不含已拆入 system 前缀的技能/api_context 冗余
@@ -1352,6 +1679,7 @@ async def generate_testcases(
             db_session=kwargs.get("db_session"),
             user_id=kwargs.get("user_id"),
             api_project_id=kwargs.get("api_project_id"),
+            warnings_out=warnings_out,
         )
 
         return db_testcases, human_text

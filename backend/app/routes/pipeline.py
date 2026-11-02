@@ -221,6 +221,7 @@ async def generate_v2(
         except (ValueError, TypeError):
             pass
 
+    user_selected_endpoint_ids = list(api_endpoint_ids)
     if api_endpoint_ids and api_project_id_int:
         from app.routes.testcase import infer_endpoint_dependencies
         extra_ids = infer_endpoint_dependencies(session, api_endpoint_ids, api_project_id_int)
@@ -250,6 +251,12 @@ async def generate_v2(
             session, api_endpoint_ids, api_project_id_int, endpoint_overrides,
         )
 
+    # P5：核心接口 = 用户显式选中的接口（依赖补全接口可被压缩）
+    core_endpoint_ids = {
+        idx for idx, eid in endpoint_index_to_id.items()
+        if eid in set(user_selected_endpoint_ids)
+    }
+
     # 创建 pipeline runner
     runner = PipelineRunner(
         db_session=session,
@@ -275,6 +282,7 @@ async def generate_v2(
         api_project_id=api_project_id_int,
         endpoint_index_to_id=endpoint_index_to_id,
         api_context=api_context,
+        core_endpoint_ids=core_endpoint_ids,
         stop_after_stage=stop_after_stage,
         feishu_section=feishu_section.strip() if feishu_section and feishu_section.strip() else None,
     )
