@@ -49,6 +49,8 @@ default_config = {
     # P5 上下文工程：token 预算（模型窗口 / 输出预留）
     "model_window": 32768,
     "reserved_output_tokens": 8192,
+    # pipeline 内部 LLM 调用并发上限（阶段2/3/4 共用；默认 4，可调大缩短等待）
+    "pipeline_concurrency": 4,
     # P3 执行验证闭环：生成后真实执行接口用例，失败信息回灌重修。
     # 默认关闭——开启后会向被测接口发真实请求，需确认执行环境已就绪。
     "verification_enabled": False,
@@ -145,6 +147,13 @@ class ConfigManager:
     def get_agent_memory_db_path(self) -> str:
         """Agent 记忆落盘路径；空字符串表示使用默认路径 backend/data/agent_memory.db。"""
         return (self.config.get("agent_memory_db_path") or "").strip()
+
+    def get_pipeline_concurrency(self) -> int:
+        """pipeline 内部 LLM 调用并发上限（默认 4）。"""
+        try:
+            return int(self.config.get("pipeline_concurrency", 4))
+        except (TypeError, ValueError):
+            return 4
 
     def get_model_window(self) -> int:
         """模型上下文窗口（P5：token 预算）。

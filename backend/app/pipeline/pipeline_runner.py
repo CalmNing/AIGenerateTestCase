@@ -395,8 +395,7 @@ _REQ_DEDUP_SYSTEM = """你是一名资深的测试用例需求去重专家。给
 # 内存中的 pipeline 任务状态存储
 _pipeline_tasks: Dict[str, Dict[str, Any]] = {}
 
-# 并发度：同时进行的 LLM 调用上限，避免 API 限流
-_PIPELINE_CONCURRENCY = 4
+# 并发度改为可配置：见 _pipeline_concurrency()（配置键 pipeline_concurrency，默认 4）
 
 # 降级（warning）级别的文案：用于 task["message"] 汇总，避免前端显示"完全成功"
 _WARNING_PHASE_LABELS = {1: "需求拆分", 2: "测试点生成", 3: "用例设计", 4: "用例优化"}
@@ -450,6 +449,21 @@ def _fill_required_fields(
     except Exception as exc:  # noqa: BLE001 - 补全失败不得影响生成
         logger.warning("必填字段补全失败（已忽略）: %s", exc)
         return steps, []
+
+
+def _pipeline_concurrency() -> int:
+    """pipeline 内部 LLM 调用的并发上限（B6-优化：从写死 4 改为可配置）。
+
+    配置键 `pipeline_concurrency`，默认 4（与历史行为一致）。
+    DeepSeek 无硬限流、且希望缩短大任务等待时可调大（如 6~8）；
+    被测服务或代理不稳时调小。
+    """
+    try:
+        from config import config_manager
+
+        return max(1, min(16, int(config_manager.get_pipeline_concurrency())))
+    except Exception:  # noqa: BLE001
+        return 4
 
 
 def _api_context_char_allowance() -> int:
@@ -1139,7 +1153,7 @@ class PipelineRunner:
 
             # ========== 阶段2: 测试点生成 (25-50%) ==========
             all_test_points = []
-            sem = asyncio.Semaphore(_PIPELINE_CONCURRENCY)
+            sem = asyncio.Semaphore(_pipeline_concurrency())
             total_rp = len(req_points)
 
             async def _gen_for_point(rp):
@@ -1233,7 +1247,7 @@ class PipelineRunner:
 
             # 加载原始需求文档作为上下文
             requirement_content = requirement_text
-            design_sem = asyncio.Semaphore(_PIPELINE_CONCURRENCY)
+            design_sem = asyncio.Semaphore(_pipeline_concurrency())
 
             async def _design_batch(batch):
                 async with design_sem:
@@ -1500,33 +1514,66 @@ class PipelineRunner:
 
                     # 大批量下单次调用输出会被 max_tokens 截断，故按块分批优化
                     # （用例级冗余审查已独立为轻量调用，质量优化是逐用例的，可安全分片）
+                    #
+                    # B6-优化：批次并行化（对齐阶段3的 gather+Semaphore 写法）。
+                    # 此前是 for 循环逐批串行 await：100 条用例 = 10 批串行等待，
+                    # 与阶段3（同样场景已并发）不一致，纯属遗漏。
+                    # 批次失败自动重试 1 次（瞬时 5xx/超时常见，重试可减少无产出）。
                     OPT_BATCH_SIZE = 10
+                    OPT_MAX_RETRIES = 1
                     opt_map = {}
                     opt_failed_batches = 0
-                    for i in range(0, len(cases_for_opt), OPT_BATCH_SIZE):
-                        chunk = cases_for_opt[i:i + OPT_BATCH_SIZE]
-                        try:
-                            chunk_optimized = await self.optimizer.optimize(
+                    chunks = [
+                        (i // OPT_BATCH_SIZE + 1, cases_for_opt[i:i + OPT_BATCH_SIZE])
+                        for i in range(0, len(cases_for_opt), OPT_BATCH_SIZE)
+                    ]
+                    opt_sem = asyncio.Semaphore(_pipeline_concurrency())
+
+                    async def _optimize_batch(chunk: list):
+                        async with opt_sem:
+                            return await self.optimizer.optimize(
                                 chunk, is_api_test=is_api_test, api_context=api_context,
                             )
+
+                    async def _run_batch(batch_no: int, chunk: list):
+                        """执行一批，失败自动重试一次（瞬时 5xx/超时常见）。"""
+                        try:
+                            return await _optimize_batch(chunk)
+                        except Exception as first_err:
+                            if OPT_MAX_RETRIES < 1:
+                                raise
+                            logger.warning(
+                                f"优化批次 {batch_no} 失败，自动重试 1 次: {first_err}"
+                            )
+                            try:
+                                return await _optimize_batch(chunk)
+                            except Exception as e:
+                                raise e from first_err
+
+                    async def _safe_run_batch(batch_no: int, chunk: list):
+                        nonlocal opt_failed_batches
+                        try:
+                            chunk_optimized = await _run_batch(batch_no, chunk)
                         except Exception as e:
                             # P0：优化批次失败不再只是日志——登记 warning 并计数
                             logger.warning(
-                                f"优化批次 {i // OPT_BATCH_SIZE + 1} 失败，跳过该批: {e}"
+                                f"优化批次 {batch_no} 失败（含重试），跳过该批: {e}"
                             )
                             opt_failed_batches += 1
                             _add_warning(
                                 task_id, 4, "optimization_batch_failed",
-                                f"第 {i // OPT_BATCH_SIZE + 1} 批用例优化失败，该批用例保留优化前内容",
+                                f"第 {batch_no} 批用例优化失败（已重试），该批用例保留优化前内容",
                                 detail=(
                                     f"case_ids={[c.get('id') for c in chunk]}; "
                                     f"{type(e).__name__}: {e}"
                                 ),
                             )
-                            continue
+                            return
                         for opt in chunk_optimized:
                             if opt.get("id"):
                                 opt_map[opt["id"]] = opt
+
+                    await asyncio.gather(*[_safe_run_batch(no, ch) for no, ch in chunks])
 
                     # 应用优化结果
                     optimized_count = 0
