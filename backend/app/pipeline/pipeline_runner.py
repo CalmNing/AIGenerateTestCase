@@ -21,6 +21,7 @@ from app.pipeline.schemas import (
     TestPointDedupResult,
     TestCaseDedupResult,
 )
+from utils.helpers import _build_coverage_summary, _retrieve_related_history, _TokenUsageCallback
 from utils.document_prefetch import (
     FEISHU_URL_RE as _FEISHU_URL_RE,
     LANHU_URL_RE as _LANHU_URL_RE,
@@ -88,12 +89,16 @@ async def _dedup_requirement_points_by_llm(
     existing_points: List[Any],
     model: Any,
     module_id: Optional[int],
+    *,
+    on_fallback: Optional[Callable[[str, str], None]] = None,
 ) -> List[dict]:
     """基于 LLM 语义比对，返回当前模块下需要新建的需求点列表。
 
     - 范围：同一 module_id（调用方已按 session + module 过滤 existing_points）
     - 由 LLM 判断新候选是否与已有需求点语义重复，仅保留未覆盖的
-    - LLM 异常/返回空时保守保留全部新候选，避免误删导致覆盖丢失
+    - LLM 异常/返回空时保守保留全部新候选，避免误删导致覆盖丢失；
+      此时通过 `on_fallback(code, message)` 回调上报，让调用方登记为警告
+      （P0 失败可见性：保守保留不再静默）。
     """
     # 无已有需求点则全部保留
     if not existing_points:
@@ -129,16 +134,28 @@ async def _dedup_requirement_points_by_llm(
         {"role": "user", "content": user_prompt},
     ]
 
+    def _fallback(code: str, message: str):
+        if on_fallback:
+            try:
+                on_fallback(code, message)
+            except Exception:  # noqa: BLE001 - 回调绝不能影响主流程
+                logger.debug("去重回调异常（已忽略）", exc_info=True)
+
     try:
+        # P5：补埋点——此前去重调用没接 callbacks，缓存命中率是盲区
+        _dedup_cb = _TokenUsageCallback()
         result = await _structured_output_robust(
-            model, RequirementDedupResult, messages, config={}
+            model, RequirementDedupResult, messages,
+            config={"callbacks": [_dedup_cb]},
         )
     except Exception as e:
         logger.warning("需求点 LLM 去重异常，保守保留全部新需求点: %s", e)
+        _fallback("requirement_dedup_failed", f"需求点去重调用失败，已保留全部候选：{type(e).__name__}: {e}")
         return _assign_requirement_order(new_points, existing_points, module_id)
 
     if result is None:
         logger.warning("需求点 LLM 去重返回空，保守保留全部新需求点")
+        _fallback("requirement_dedup_empty", "需求点去重返回空结果，已保留全部候选")
         return _assign_requirement_order(new_points, existing_points, module_id)
 
     keep_indices = getattr(result, "keep_indices", None) or []
@@ -146,6 +163,7 @@ async def _dedup_requirement_points_by_llm(
     if not valid and keep_indices:
         # 模型返回了索引但全部越界（异常），保守保留全部
         logger.warning("需求点 LLM 去重：返回索引全部越界，保守保留全部新需求点")
+        _fallback("requirement_dedup_invalid_indices", "需求点去重返回的索引全部越界，已保留全部候选")
         return _assign_requirement_order(new_points, existing_points, module_id)
 
     to_keep = [new_points[i] for i in valid]
@@ -168,6 +186,8 @@ async def _dedup_test_points_by_llm(
     requirement_content: str,
     model: Any,
     session: Any,
+    *,
+    on_fallback: Optional[Callable[[str, str], None]] = None,
 ) -> List[Any]:
     """跨需求点测试点去重：仅保留语义上未被覆盖的测试点。
 
@@ -209,16 +229,27 @@ async def _dedup_test_points_by_llm(
         },
     ]
 
+    def _fallback(code: str, message: str):
+        if on_fallback:
+            try:
+                on_fallback(code, message)
+            except Exception:  # noqa: BLE001
+                logger.debug("去重回调异常（已忽略）", exc_info=True)
+
     try:
+        _dedup_cb = _TokenUsageCallback()
         result = await _structured_output_robust(
-            model, TestPointDedupResult, messages, config={}
+            model, TestPointDedupResult, messages,
+            config={"callbacks": [_dedup_cb]},
         )
     except Exception as e:
         logger.warning("测试点 LLM 去重异常，保守保留全部测试点: %s", e)
+        _fallback("test_point_dedup_failed", f"测试点去重调用失败，已保留全部测试点：{type(e).__name__}: {e}")
         return points
 
     if result is None:
         logger.warning("测试点 LLM 去重返回空，保守保留全部测试点")
+        _fallback("test_point_dedup_empty", "测试点去重返回空结果，已保留全部测试点")
         return points
 
     keep_ids = getattr(result, "keep_ids", None) or []
@@ -267,6 +298,8 @@ async def _dedup_test_cases_by_llm(
     cases: List[Any],
     requirement_content: str,
     model: Any,
+    *,
+    on_fallback: Optional[Callable[[str, str], None]] = None,
 ) -> List[int]:
     """跨用例冗余审查：返回验证维度完全被其他用例覆盖、应删除的用例 id 列表。
 
@@ -304,16 +337,27 @@ async def _dedup_test_cases_by_llm(
         },
     ]
 
+    def _fallback(code: str, message: str):
+        if on_fallback:
+            try:
+                on_fallback(code, message)
+            except Exception:  # noqa: BLE001
+                logger.debug("去重回调异常（已忽略）", exc_info=True)
+
     try:
+        _dedup_cb = _TokenUsageCallback()
         result = await _structured_output_robust(
-            model, TestCaseDedupResult, messages, config={}
+            model, TestCaseDedupResult, messages,
+            config={"callbacks": [_dedup_cb]},
         )
     except Exception as e:
         logger.warning("用例冗余审查异常，保守不删除任何用例: %s", e)
+        _fallback("test_case_dedup_failed", f"用例冗余审查失败，未删除任何用例：{type(e).__name__}: {e}")
         return []
 
     if result is None:
         logger.warning("用例冗余审查返回空，保守不删除任何用例")
+        _fallback("test_case_dedup_empty", "用例冗余审查返回空结果，未删除任何用例")
         return []
 
     remove_ids = getattr(result, "remove_ids", None) or []
@@ -331,6 +375,7 @@ async def _dedup_test_cases_by_llm(
     # 防御：不删除全部用例
     if len(out) >= len(cases):
         logger.info("用例冗余审查：删除全部被拦截，保守不删除")
+        _fallback("test_case_dedup_delete_all_blocked", f"用例冗余审查试图删除全部 {len(cases)} 个用例，已拦截并保留")
         return []
     if out:
         logger.info("用例冗余审查：标记 %d 个冗余用例待移除", len(out))
@@ -352,6 +397,167 @@ _pipeline_tasks: Dict[str, Dict[str, Any]] = {}
 
 # 并发度：同时进行的 LLM 调用上限，避免 API 限流
 _PIPELINE_CONCURRENCY = 4
+
+# 降级（warning）级别的文案：用于 task["message"] 汇总，避免前端显示"完全成功"
+_WARNING_PHASE_LABELS = {1: "需求拆分", 2: "测试点生成", 3: "用例设计", 4: "用例优化"}
+
+
+def _fill_required_fields(
+    db,
+    steps: list,
+    endpoint_index_to_id: Dict[int, int],
+) -> tuple[list, list[str]]:
+    """按接口 request_schema.required 补齐用例步骤缺失的必填字段（B6）。
+
+    实测存量 1574 条用例中有 442 处必填字段缺失（cmpId 214 次等），
+    导致与 Schema 的一致性只有 76.2%。这类"结构化约束"用确定性代码兜底
+    比靠提示词可靠得多。
+
+    返回 (新 steps, 补齐的字段说明列表)。
+    """
+    if not steps:
+        return steps, []
+    try:
+        from app.services.required_field_filler import fill_testcase_steps
+        from db.models import ApiEndpoint
+
+        endpoint_ids = set()
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            eid = s.get("endpoint_id")
+            if eid is None and isinstance(s.get("endpoint_ref"), int):
+                eid = endpoint_index_to_id.get(s["endpoint_ref"])
+            if eid:
+                endpoint_ids.add(int(eid))
+
+        if not endpoint_ids:
+            return steps, []
+
+        rows = db.exec(
+            select(ApiEndpoint).where(ApiEndpoint.id.in_(list(endpoint_ids)))
+        ).all()
+        schema_by_id = {
+            e.id: (e.request_schema if isinstance(e.request_schema, dict) else {})
+            for e in rows
+        }
+        if not any(schema_by_id.values()):
+            return steps, []
+
+        return fill_testcase_steps(
+            steps, schema_by_id, endpoint_id_by_ordinal=endpoint_index_to_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - 补全失败不得影响生成
+        logger.warning("必填字段补全失败（已忽略）: %s", exc)
+        return steps, []
+
+
+def _api_context_char_allowance() -> int:
+    """api_context 的字符额度（按 token 预算换算）。
+
+    预算口径与 utils/token_budget.py 一致：中文 1 字≈1 token，ASCII 4 字符≈1 token；
+    这里按"字符数 ≈ token 数 × 1.6"（中文为主的保守换算）给出上限。
+    """
+    try:
+        from config import config_manager
+
+        window = config_manager.get_model_window()
+        reserved = config_manager.get_reserved_output_tokens()
+    except Exception:  # noqa: BLE001
+        window, reserved = 32768, 8192
+    usable = max(0, int(window * 0.85) - reserved)
+    # api_context 最多占可用预算的一半，剩下的留给需求/历史/输出
+    return max(2000, int(usable * 0.5 * 1.6))
+
+
+def _add_warning(
+    task_id: str,
+    phase: int,
+    code: str,
+    message: str,
+    detail: Any = "",
+    severity: str = "warning",
+) -> None:
+    """记录一条警告到任务状态（P0 失败可见性）。
+
+    背景：改造前阶段内批次失败只是 `logger.error` 后返回空列表，任务仍被标记
+    `completed`，前端看到的是"生成完成"——部分失败被伪装成完全成功。
+    现在所有可继续的失败都会落到 `task["warnings"]`，由前端与 `result` 一并展示。
+
+    两档严重度，区分"结果确实缺内容"与"仅仅是个质量提示"：
+    - `warning`：降级导致部分结果缺失（批次失败、去重降级、历史保存失败等）
+      → 任务状态降为 `partial`；
+    - `quality`：结果完整但质量可能不达标（等级分布异常等） → 仅提示，不改状态。
+
+    任何异常都不得影响主流程（例如 task 已被清理时不写）。
+    """
+    task = _pipeline_tasks.get(task_id)
+    if task is None:
+        return
+    warnings = task.setdefault("warnings", [])
+    entry: Dict[str, Any] = {
+        "phase": phase,
+        "phase_name": _WARNING_PHASE_LABELS.get(phase, ""),
+        "code": code,
+        "message": message,
+        "severity": severity if severity in ("warning", "quality") else "warning",
+    }
+    if detail:
+        entry["detail"] = str(detail)[:400]
+    warnings.append(entry)
+    log = logger.warning if entry["severity"] == "warning" else logger.info
+    log(
+        "[Pipeline %s] %s(%s, 阶段%s): %s | %s",
+        task_id[:8],
+        "降级警告" if entry["severity"] == "warning" else "质量提示",
+        code, phase, message, str(detail)[:200],
+    )
+
+
+def compute_level_distribution(cases: List[Any]) -> Dict[str, int]:
+    """统计用例等级分布（1=功能 2=边界 3=异常 4=场景），用于质量校验。"""
+    dist = {"1": 0, "2": 0, "3": 0, "4": 0, "unknown": 0}
+    for tc in cases:
+        level = getattr(tc, "case_level", None) if not isinstance(tc, dict) else tc.get("case_level")
+        try:
+            key = str(int(level))
+        except (TypeError, ValueError):
+            key = "unknown"
+        if key not in dist:
+            key = "unknown"
+        dist[key] += 1
+    return dist
+
+
+def check_level_distribution(task_id: str, phase: int, cases: List[Any]) -> Dict[str, int]:
+    """校验等级分布并把明显异常登记为警告（P0）。返回分布供 result 使用。
+
+    判定规则（宽松，避免误报）：
+    - 用例数 >= 4 且全部落在同一等级 → 警告（提示词明确要求级别分布合理）；
+    - 存在非法等级（非 1-4）→ 警告。
+    """
+    dist = compute_level_distribution(cases)
+    total = len(cases)
+    if total == 0:
+        return dist
+
+    if dist.get("unknown"):
+        _add_warning(
+            task_id, phase, "invalid_case_level",
+            f"{dist['unknown']} 个用例的 case_level 不在 1-4 范围内",
+            severity="quality",
+        )
+
+    valid_levels = {k: v for k, v in dist.items() if k != "unknown"}
+    used = [k for k, v in valid_levels.items() if v]
+    if total >= 4 and len(used) <= 1 and used:
+        _add_warning(
+            task_id, phase, "uniform_case_level",
+            f"{total} 个用例全部为等级 {used[0]}，级别分布异常（提示词要求覆盖功能/边界/异常/场景）",
+            detail=f"level_distribution={dist}",
+            severity="quality",
+        )
+    return dist
 
 
 def get_pipeline_task(task_id: str) -> Optional[Dict[str, Any]]:
@@ -577,6 +783,9 @@ class PipelineRunner:
             "message": "正在初始化...",
             "result": None,
             "error": None,
+            # P0 失败可见性：可继续的失败（批次失败/去重降级/等级异常）都登记在这里，
+            # 前端据此提示"部分成功"，不再把降级伪装成完全成功。
+            "warnings": [],
             "created_at": datetime.now().isoformat(),
         }
         return task_id
@@ -600,23 +809,40 @@ class PipelineRunner:
             logger.info(f"[Pipeline {task_id[:8]}] 阶段{phase} {phase_name}: {progress}% - {message}")
 
     def _complete_task(self, task_id: str, result: Dict[str, Any]):
-        """标记任务完成"""
+        """标记任务完成（有 warnings 时把状态显式降级为 partial，并写入 message）。"""
         if task_id in _pipeline_tasks:
-            _pipeline_tasks[task_id].update({
-                "status": "completed",
+            task = _pipeline_tasks[task_id]
+            warnings = task.get("warnings") or []
+            # 只有 severity=warning 的条目才算"结果确实缺内容"；quality 仅作提示
+            degradations = [w for w in warnings if w.get("severity") != "quality"]
+            # warnings 同时挂到 result 上，方便前端只读 result 的场景（如批量生成回调）
+            result = dict(result or {})
+            result["warnings"] = list(warnings)
+            result["partial"] = bool(degradations)
+            status = "partial" if degradations else "completed"
+            if degradations:
+                message = f"生成完成，但有 {len(degradations)} 项降级（部分结果可能缺失）"
+            elif warnings:
+                message = f"生成完成（{len(warnings)} 项质量提示）"
+            else:
+                message = "生成完成！"
+            task.update({
+                "status": status,
                 "progress": 100,
                 "phase_name": "完成",
-                "message": "生成完成！",
+                "message": message,
                 "result": result,
             })
 
     def _fail_task(self, task_id: str, error: str):
-        """标记任务失败"""
+        """标记任务失败（保留已产生的 warnings，便于定位"失败前已降级"的部分）"""
         if task_id in _pipeline_tasks:
+            task = _pipeline_tasks[task_id]
             _pipeline_tasks[task_id].update({
                 "status": "failed",
                 "message": f"生成失败：{error}",
                 "error": error,
+                "warnings": list(task.get("warnings") or []),
             })
 
     def _save_history_prompt(
@@ -675,6 +901,7 @@ class PipelineRunner:
         original_requirement: str = "",
         stop_after_stage: int = 4,
         feishu_section: Optional[str] = None,
+        core_endpoint_ids: Optional[set] = None,
     ) -> str:
         """
         启动 4 阶段 pipeline（异步执行）
@@ -727,6 +954,7 @@ class PipelineRunner:
                 original_requirement=original_requirement,
                 stop_after_stage=stop_after_stage,
                 feishu_section=feishu_section,
+                core_endpoint_ids=core_endpoint_ids,
             )
         )
 
@@ -769,6 +997,7 @@ class PipelineRunner:
         original_requirement: str = "",
         stop_after_stage: int = 4,
         feishu_section: Optional[str] = None,
+        core_endpoint_ids: Optional[set] = None,
     ):
         """执行完整的 4 阶段 pipeline"""
         from db.models import RequirementPoint, TestPoint, TestCase
@@ -791,13 +1020,54 @@ class PipelineRunner:
                         "请检查 MCP 服务器配置、飞书应用权限或 access token 是否有效后重试。"
                     )
 
+            # P5：token 预算裁剪 api_context（核心接口保全文，辅助接口压骨架）
+            if api_context:
+                try:
+                    from utils.token_budget import compact_api_context, estimate_tokens
+
+                    allowance = _api_context_char_allowance()
+                    if estimate_tokens(api_context) > estimate_tokens("x" * allowance):
+                        api_context, api_report = compact_api_context(
+                            api_context,
+                            core_endpoint_ids=core_endpoint_ids,
+                            max_chars=allowance,
+                        )
+                        if api_report.get("truncated"):
+                            _add_warning(
+                                task_id, 1, "context_truncated",
+                                (
+                                    f"接口上下文超出 token 预算，已裁剪（节省约 "
+                                    f"{api_report.get('saved_tokens', 0)} token），"
+                                    "部分接口规格可能不完整"
+                                ),
+                                detail=json.dumps(
+                                    api_report.get("items", []), ensure_ascii=False
+                                )[:400],
+                            )
+                except Exception as ctx_err:  # noqa: BLE001
+                    logger.warning("接口上下文裁剪失败（不影响生成）: %s", ctx_err)
+
             # ========== 阶段1: 需求拆分 (0-25%) ==========
             self._update_progress(task_id, 1, "需求拆分", 5, "正在分析需求文档...")
+
+            # P2：把「已覆盖清单」注入阶段 1（拆分阶段就避开已覆盖内容），
+            # 并把相关历史需求作为参考注入（pipeline 此前完全不读历史上下文）。
+            coverage_summary = _build_coverage_summary(self.db, module_id)
+            related_history = _retrieve_related_history(
+                self.db,
+                query=requirement_text,
+                module_id=module_id,
+                user_id=user_id,
+                session_id=session_id,
+            )
+            if related_history:
+                coverage_summary = related_history + coverage_summary
 
             requirement_points_data = await self.splitter.analyze(
                 requirement_text,
                 is_api_test=is_api_test,
                 api_context=api_context,
+                coverage_summary=coverage_summary,
             )
 
             if not requirement_points_data:
@@ -819,8 +1089,12 @@ class PipelineRunner:
             existing_points = self.db.exec(existing_stmt).all()
 
             # 去重：基于 LLM 语义比对，已存在的相同需求点不再创建，仅新建未覆盖到的
+            def _req_dedup_warn(code: str, message: str):
+                _add_warning(task_id, 1, code, message)
+
             to_create = await _dedup_requirement_points_by_llm(
-                requirement_points_data, existing_points, self.splitter.model, module_id
+                requirement_points_data, existing_points, self.splitter.model, module_id,
+                on_fallback=_req_dedup_warn,
             )
             skipped = len(requirement_points_data) - len(to_create)
 
@@ -859,6 +1133,7 @@ class PipelineRunner:
                     "test_points_count": 0,
                     "test_cases_count": 0,
                     "mode": "stage1",
+                    "level_distribution": compute_level_distribution([]),
                 })
                 return
 
@@ -876,7 +1151,13 @@ class PipelineRunner:
                             api_context=api_context,
                         )
                     except Exception as e:
+                        # P0：单点失败不再静默——登记 warning，让前端知道该需求点无测试点
                         logger.error(f"需求点 {rp.id} 测试点生成失败: {e}")
+                        _add_warning(
+                            task_id, 2, "test_point_generation_failed",
+                            f"需求点「{str(rp.content)[:40]}」的测试点生成失败，该需求点未产出测试点",
+                            detail=f"{type(e).__name__}: {e}",
+                        )
                         return rp, []
 
             self._update_progress(
@@ -918,8 +1199,12 @@ class PipelineRunner:
                     task_id, 2, "测试点生成", 50,
                     f"正在跨需求点去重测试点（共 {len(all_test_points)} 个）..."
                 )
+                def _tp_dedup_warn(code: str, message: str):
+                    _add_warning(task_id, 2, code, message)
+
                 all_test_points = await _dedup_test_points_by_llm(
-                    all_test_points, requirement_text, self.tp_generator.model, self.db
+                    all_test_points, requirement_text, self.tp_generator.model, self.db,
+                    on_fallback=_tp_dedup_warn,
                 )
 
             # 手动模式：只执行前两阶段，到此结束
@@ -938,6 +1223,8 @@ class PipelineRunner:
 
             # ========== 阶段3: 用例设计 (50-85%) ==========
             all_test_cases = []
+            # B6：本次生成中自动补齐的必填字段总数（用于质量提示）
+            required_filled_total = 0
             BATCH_SIZE = 3
             batches = [
                 all_test_points[i:i + BATCH_SIZE]
@@ -967,7 +1254,16 @@ class PipelineRunner:
                             api_context=api_context,
                         )
                     except Exception as e:
+                        # P0：整批失败登记 warning（含受影响的测试点 id）
                         logger.error(f"批次用例设计失败: {e}")
+                        _add_warning(
+                            task_id, 3, "case_design_batch_failed",
+                            f"一批 {len(batch)} 个测试点的用例设计失败，对应测试点无用例",
+                            detail=(
+                                f"test_point_ids={[getattr(tp, 'id', None) for tp in batch]}; "
+                                f"{type(e).__name__}: {e}"
+                            ),
+                        )
                         return []
 
             self._update_progress(
@@ -1003,6 +1299,13 @@ class PipelineRunner:
                     # 根据测试类型设置不同的字段
                     if is_api_test:
                         steps = _normalize_pipeline_api_steps(steps, endpoint_index_to_id)
+                        # B6 头号质量问题修复：按 request_schema.required 确定性补齐
+                        # 缺失的必填字段（LLM 不保证遵守"请求骨架-硬约束"）。
+                        steps, filled = _fill_required_fields(
+                            self.db, steps, endpoint_index_to_id,
+                        )
+                        if filled:
+                            required_filled_total += len(filled)
 
                     tc_kwargs = dict(
                         case_name=case_data.get("title", ""),
@@ -1167,11 +1470,13 @@ class PipelineRunner:
                     task_id, 0, "完成", 100,
                     f"用例设计完成：{len(req_points)} 个需求点，{len(all_test_points)} 个测试点，{len(all_test_cases)} 个测试用例"
                 )
+                stage3_level_dist = check_level_distribution(task_id, 3, all_test_cases)
                 self._complete_task(task_id, {
                     "requirement_points_count": len(req_points),
                     "test_points_count": len(all_test_points),
                     "test_cases_count": len(all_test_cases),
                     "mode": "stage3",
+                    "level_distribution": stage3_level_dist,
                 })
                 return
 
@@ -1197,6 +1502,7 @@ class PipelineRunner:
                     # （用例级冗余审查已独立为轻量调用，质量优化是逐用例的，可安全分片）
                     OPT_BATCH_SIZE = 10
                     opt_map = {}
+                    opt_failed_batches = 0
                     for i in range(0, len(cases_for_opt), OPT_BATCH_SIZE):
                         chunk = cases_for_opt[i:i + OPT_BATCH_SIZE]
                         try:
@@ -1204,8 +1510,18 @@ class PipelineRunner:
                                 chunk, is_api_test=is_api_test, api_context=api_context,
                             )
                         except Exception as e:
+                            # P0：优化批次失败不再只是日志——登记 warning 并计数
                             logger.warning(
                                 f"优化批次 {i // OPT_BATCH_SIZE + 1} 失败，跳过该批: {e}"
+                            )
+                            opt_failed_batches += 1
+                            _add_warning(
+                                task_id, 4, "optimization_batch_failed",
+                                f"第 {i // OPT_BATCH_SIZE + 1} 批用例优化失败，该批用例保留优化前内容",
+                                detail=(
+                                    f"case_ids={[c.get('id') for c in chunk]}; "
+                                    f"{type(e).__name__}: {e}"
+                                ),
                             )
                             continue
                         for opt in chunk_optimized:
@@ -1273,15 +1589,27 @@ class PipelineRunner:
 
                     self.db.commit()
                     logger.info(f"优化完成，成功优化 {optimized_count} 个用例")
+                    if opt_failed_batches:
+                        logger.warning(f"优化有 {opt_failed_batches} 个批次失败（已登记 warnings）")
 
                 except Exception as e:
+                    # P0：整阶段优化失败要可见（此前只记日志，任务照常显示"生成完成"）
                     logger.error(f"用例优化失败: {e}")
+                    _add_warning(
+                        task_id, 4, "optimization_stage_failed",
+                        "用例优化阶段整体失败，所有用例保留优化前内容",
+                        detail=f"{type(e).__name__}: {e}",
+                    )
 
                 # 用例级冗余审查（独立轻量 LLM 调用，可靠）：删除验证维度完全被其他用例覆盖的用例及其测试点（1:1 级联）
                 if len(all_test_cases) > 1:
                     try:
+                        def _tc_dedup_warn(code: str, message: str):
+                            _add_warning(task_id, 4, code, message)
+
                         remove_ids = await _dedup_test_cases_by_llm(
-                            all_test_cases, requirement_text, self.optimizer.model
+                            all_test_cases, requirement_text, self.optimizer.model,
+                            on_fallback=_tc_dedup_warn,
                         )
                     except Exception as e:
                         logger.warning("用例冗余审查异常，跳过删除: %s", e)
@@ -1305,6 +1633,38 @@ class PipelineRunner:
                             f"（含其测试点），剩余 {len(all_test_cases)} 个用例"
                         )
 
+            # ========== P3：执行验证闭环（生成 → 执行 → 按失败修复） ==========
+            # 这是把"执行结果"从只有写侧变成可回灌的反馈信号的关键一步。
+            # 仅接口测试有意义（需要 ApiScenario + ApiProject），且默认关闭（配置开关），
+            # 避免在未配置执行环境时误发真实请求。
+            verification_summary = None
+            if is_api_test and api_project_id and all_test_cases:
+                verification_summary = await self._run_verification_loop(
+                    task_id,
+                    all_test_cases,
+                    api_project_id=api_project_id,
+                    api_context=api_context,
+                    endpoint_index_to_id=endpoint_index_to_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+
+            # P0：等级分布校验（提示词要求覆盖功能/边界/异常/场景，此前无任何代码校验）
+            level_distribution = check_level_distribution(task_id, 3, all_test_cases)
+
+            # B6：自动补齐必填字段的提示（让用户知道哪些值是占位符）
+            if required_filled_total:
+                _add_warning(
+                    task_id, 3, "required_fields_autofilled",
+                    f"自动补齐了 {required_filled_total} 处缺失的接口必填字段"
+                    "（值为 Schema 派生占位值，建议核对或替换为真实数据）",
+                    detail="由 request_schema.required 驱动，避免请求因缺字段直接失败",
+                    severity="quality",
+                )
+
+            # B6：本次生成的质量指标（纯规则、零成本），随结果返回并登记低质量警告
+            quality_metrics = self._evaluate_quality(task_id, all_test_cases)
+
             # 保存历史提示词（需求描述），仅整体生成成功时记录
             try:
                 self._save_history_prompt(
@@ -1321,6 +1681,14 @@ class PipelineRunner:
                 "test_cases_count": len(all_test_cases),
                 "is_api_test": is_api_test,
                 "mode": "auto",
+                # P0 可见性指标：等级分布 + 优化失败批次数（前端可直接展示）
+                "level_distribution": level_distribution,
+                "optimization_failed_batches": opt_failed_batches if all_test_cases else 0,
+                # P3：执行验证闭环的统计（None = 未启用或非接口测试）
+                "verification": verification_summary,
+                # B6：质量指标（零成本规则计算，可与基线快照对比）
+                "quality": quality_metrics,
+                "required_fields_autofilled": required_filled_total,
             })
 
             logger.info(
@@ -1332,6 +1700,312 @@ class PipelineRunner:
         except Exception as e:
             logger.error(f"Pipeline 执行失败: {e}", exc_info=True)
             self._fail_task(task_id, str(e))
+
+    # ===================== B6：质量指标 =====================
+
+    def _evaluate_quality(self, task_id: str, all_test_cases: list) -> Optional[dict]:
+        """计算本次生成的质量指标，并在明显不达标时登记警告（B6）。
+
+        纯规则计算，零 API 成本；失败时返回 None，绝不影响主流程。
+        """
+        if not all_test_cases:
+            return None
+        try:
+            from app.services.quality_metrics import (
+                evaluate_testcases,
+                summarize_metrics,
+            )
+
+            results = evaluate_testcases(self.db, all_test_cases)
+            summary = summarize_metrics(results)
+            logger.info(
+                "质量指标：完整率 %.1f%%、结构规范率 %.1f%%、断言覆盖 %.1f%%、重复率 %.1f%%",
+                summary["completeness_rate"] * 100,
+                summary["structure_ok_rate"] * 100,
+                summary["assertion_coverage_rate"] * 100,
+                summary["duplicate_rate"] * 100,
+            )
+
+            # 明显不达标时登记质量提示（severity=quality，不改变任务状态）
+            if summary["structure_ok_rate"] < 0.8:
+                _add_warning(
+                    task_id, 4, "low_structure_quality",
+                    f"结构规范率仅 {summary['structure_ok_rate'] * 100:.0f}%（"
+                    f"{len(results) - round(summary['structure_ok_rate'] * len(results))} 条用例"
+                    "存在步骤缺描述/缺接口引用等结构问题）",
+                    severity="quality",
+                )
+            if summary["duplicate_rate"] > 0.1:
+                _add_warning(
+                    task_id, 4, "high_duplicate_rate",
+                    f"重复率 {summary['duplicate_rate'] * 100:.0f}%"
+                    f"（{summary['duplicate_groups']} 组重复），建议检查去重效果",
+                    severity="quality",
+                )
+            checked_count = summary.get("consistency_checked") or 0
+            if checked_count and summary["consistency_pass_rate"] < 0.7:
+                _add_warning(
+                    task_id, 4, "low_schema_consistency",
+                    f"接口用例与 Schema 一致性仅 "
+                    f"{summary['consistency_pass_rate'] * 100:.0f}%"
+                    f"（{checked_count} 条已检），可能存在必填字段缺失或字段越界",
+                    severity="quality",
+                )
+            return summary
+        except Exception as exc:  # noqa: BLE001 - 指标计算失败不得影响生成
+            logger.warning("质量指标计算失败（已忽略）: %s", exc)
+            return None
+
+    # ===================== P3：执行验证闭环 =====================
+
+    async def _run_verification_loop(
+        self,
+        task_id: str,
+        all_test_cases: list,
+        *,
+        api_project_id: int,
+        api_context: str,
+        endpoint_index_to_id: Dict[int, int],
+        user_id: Optional[str],
+        session_id: Optional[int] = None,
+        max_rounds: int = 1,
+    ) -> Optional[dict]:
+        """执行 → 失败归因 → 带失败信息重修复（P3 闭环）。
+
+        流程：
+          1. 对有 ApiScenario 的接口用例真实执行（`case_verifier.verify_batch`）；
+          2. 把失败归因成结构化修复指令（只含"用例写得不对"的失败，环境类失败排除）；
+          3. 把失败指令喂回优化器重修一次；
+          4. 重修后再次执行，确认是否修复；
+          5. 全部过程写入 `validation_status` / 执行日志，并在失败时登记 warnings。
+
+        返回统计摘要；未启用（功能测试 / 无项目 / 配置关闭）时返回 None。
+        """
+        try:
+            from app.services.case_verifier import (
+                build_failure_feedback,
+                summarize_verification,
+                verify_batch,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("加载用例验证器失败（跳过 P3 闭环）: %s", exc)
+            return None
+
+        # 配置开关：默认关闭，避免在未配置执行环境时误发真实请求
+        try:
+            from config import config_manager
+
+            if not config_manager.get_verification_enabled():
+                logger.info("执行验证闭环未启用（配置开关关闭），跳过")
+                return None
+            max_rounds = max(0, min(3, config_manager.get_verification_max_rounds()))
+            read_only = config_manager.get_verification_read_only()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("读取执行验证配置失败（跳过 P3 闭环）: %s", exc)
+            return None
+
+        # 记录 session_id（取会话级请求头用）
+        self._verification_session_id = session_id
+
+        # 只验证有场景的用例
+        candidates = [tc for tc in all_test_cases if getattr(tc, "scenario_id", None)]
+        if not candidates:
+            logger.info("没有关联接口场景的用例，跳过执行验证闭环")
+            return None
+
+        self._update_progress(
+            task_id, 4, "执行验证", 92,
+            f"正在执行 {len(candidates)} 条接口用例进行验证...",
+        )
+
+        session_headers = self._resolve_session_headers()
+        results = await verify_batch(
+            self.db, candidates, session_headers=session_headers,
+            read_only=read_only,
+        )
+        summary = summarize_verification(results)
+        logger.info(
+            "执行验证完成：通过 %d / 执行 %d（跳过 %d，失败 %d）",
+            summary["passed"], summary["executed"], summary["skipped"], summary["failed"],
+        )
+
+        # 回写验证状态与执行日志（让"执行结果"真正落到用例上，可被前端查看）
+        self._persist_verification_results(results, candidates)
+
+        # 失败登记 warning（部分失败不能被伪装成完全成功）
+        if summary["failed"] or summary["error"]:
+            _add_warning(
+                task_id, 4, "verification_failed",
+                f"{summary['failed'] + summary['error']} 条接口用例在真实执行中失败",
+                detail=(
+                    f"passed={summary['passed']}/{summary['executed']}; "
+                    f"causes={sorted({r.cause for r in results if not r.passed})}"
+                ),
+            )
+
+        if summary["failed"] == 0 and summary["error"] == 0:
+            return summary
+        if max_rounds <= 0:
+            return summary
+
+        # ---- 重修复一轮 ----
+        names = {tc.id: tc.case_name for tc in candidates}
+        feedback = build_failure_feedback(results, case_names=names)
+        if not feedback:
+            logger.info("失败均为环境类问题（连不上/超时），不做自动重修复")
+            return summary
+
+        self._update_progress(
+            task_id, 4, "执行验证", 95,
+            f"正在依据 {summary['fixable']} 条执行失败修正用例...",
+        )
+
+        try:
+            fixed = await self._repair_failed_cases(
+                task_id,
+                all_test_cases,
+                feedback,
+                api_context=api_context,
+                endpoint_index_to_id=endpoint_index_to_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("执行失败重修复异常（已忽略）: %s", exc)
+            fixed = 0
+
+        if fixed:
+            # 重新执行，确认是否真的修复
+            self._update_progress(
+                task_id, 4, "执行验证", 97, "重新执行验证修复结果...",
+            )
+            recheck_candidates = [tc for tc in all_test_cases if getattr(tc, "scenario_id", None)]
+            recheck = await verify_batch(
+                self.db, recheck_candidates, session_headers=session_headers,
+                read_only=read_only,
+            )
+            self._persist_verification_results(recheck, recheck_candidates)
+            recheck_summary = summarize_verification(recheck)
+            summary["repair_rounds"] = 1
+            summary["repaired_cases"] = fixed
+            summary["after_repair"] = recheck_summary
+            logger.info(
+                "重修复后：通过 %d / 执行 %d（原通过 %d）",
+                recheck_summary["passed"], recheck_summary["executed"], summary["passed"],
+            )
+
+        return summary
+
+    def _resolve_session_headers(self) -> list:
+        """取会话级请求头（执行接口用例时需要携带鉴权头）。"""
+        try:
+            session_id = getattr(self, "_verification_session_id", None)
+            if not session_id:
+                return []
+            from app.routes.testcase import _session_api_overrides
+
+            overrides = _session_api_overrides(self.db, session_id)
+            return overrides.get("headers") or []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _persist_verification_results(self, results: list, testcases: list) -> None:
+        """把验证结果写回用例（validation_status / status）与执行日志。"""
+        by_id = {getattr(tc, "id", None): tc for tc in testcases or []}
+        for r in results or []:
+            tc = by_id.get(r.testcase_id)
+            if tc is None:
+                continue
+            try:
+                if r.status == "skipped":
+                    # 跳过的用例不覆盖已有状态
+                    continue
+                tc.validation_status = "passed" if r.passed else "failed"
+                tc.validation_detail = json.dumps(r.to_dict(), ensure_ascii=False)
+                tc.validation_at = datetime.now()
+                tc.status = "PASSED" if r.passed else "FAILED"
+                self.db.add(tc)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("回写验证结果失败（已忽略）: %s", exc)
+        try:
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("提交验证结果失败（已忽略）: %s", exc)
+
+    async def _repair_failed_cases(
+        self,
+        task_id: str,
+        all_test_cases: list,
+        feedback: str,
+        *,
+        api_context: str,
+        endpoint_index_to_id: Dict[int, int],
+    ) -> int:
+        """把执行失败明细喂回优化器，重修这些用例。返回重修的用例数。"""
+        items = []
+        target_ids = set()
+        for tc in all_test_cases:
+            if not getattr(tc, "scenario_id", None):
+                continue
+            item = {
+                "id": tc.id,
+                "title": tc.case_name,
+                "description": "",
+                "preconditions": tc.preset_conditions or [],
+                "test_steps": tc.steps if tc.steps else [],
+                "assertions": tc.assertions or [],
+            }
+            items.append(item)
+            target_ids.add(tc.id)
+
+        if not items:
+            return 0
+
+        OPT_BATCH_SIZE = 10
+        repaired = 0
+        for i in range(0, len(items), OPT_BATCH_SIZE):
+            chunk = items[i:i + OPT_BATCH_SIZE]
+            try:
+                optimized = await self.optimizer.optimize(
+                    chunk,
+                    is_api_test=True,
+                    api_context=api_context,
+                    failure_feedback=feedback,
+                )
+            except Exception as e:
+                logger.warning("执行失败重修复批次失败（已忽略）: %s", e)
+                _add_warning(
+                    task_id, 4, "verification_repair_failed",
+                    f"依据执行失败重修复第 {i // OPT_BATCH_SIZE + 1} 批失败",
+                    detail=f"{type(e).__name__}: {e}",
+                )
+                continue
+
+            opt_map = {o.get("id"): o for o in optimized if o.get("id")}
+            for tc in all_test_cases:
+                opt = opt_map.get(tc.id)
+                if not opt:
+                    continue
+                if opt.get("title"):
+                    tc.case_name = opt["title"]
+                if opt.get("test_steps"):
+                    tc.steps = _normalize_pipeline_api_steps(
+                        opt["test_steps"], endpoint_index_to_id
+                    )
+                    tc.expected_results = [
+                        s.get("description", "") if isinstance(s, dict) else str(s)
+                        for s in tc.steps
+                    ]
+                if opt.get("preconditions"):
+                    tc.preset_conditions = opt["preconditions"]
+                if opt.get("assertions"):
+                    tc.assertions = opt["assertions"]
+                self.db.add(tc)
+                repaired += 1
+
+        try:
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("提交重修复结果失败（已忽略）: %s", exc)
+        return repaired
 
     # ===================== 复用：用例构造 + 场景同步 =====================
 

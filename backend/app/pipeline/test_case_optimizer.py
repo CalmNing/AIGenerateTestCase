@@ -47,8 +47,14 @@ class TestCaseOptimizer:
         *,
         is_api_test: bool = False,
         api_context: str = "",
+        failure_feedback: str = "",
     ) -> List[Dict[str, Any]]:
-        """Optimize one batch of test cases."""
+        """Optimize one batch of test cases.
+
+        `failure_feedback`（P3）：真实执行失败明细（来自 case_verifier）。
+        非空时会把失败上下文追加到 user 消息，让模型按实际接口行为修正断言/参数，
+        而不是凭空"优化"——这是把执行结果变成可用反馈信号的关键一步。
+        """
         from utils.model_utils import _structured_output_robust
 
         simplified = []
@@ -66,6 +72,10 @@ class TestCaseOptimizer:
 
         cases_json = json.dumps(simplified, ensure_ascii=False, indent=2)
         user_prompt = TEST_CASE_BATCH_OPTIMIZE_USER.format(test_cases=cases_json) + PRECONDITIONS_OUTPUT_RULE
+        if failure_feedback:
+            # 失败明细放在用例 JSON **之后**：既是动态内容，又紧邻任务说明，
+            # 不会破坏 system 前缀的缓存命中。
+            user_prompt = user_prompt + "\n\n" + failure_feedback
         # 使用共享前缀构造 system，保证与阶段1/2/3 的前缀可共享缓存命中
         system_prompt = build_stage_system(
             TEST_CASE_OPTIMIZER_SYSTEM, api_context=api_context, is_api_test=is_api_test
