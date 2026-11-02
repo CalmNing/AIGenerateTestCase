@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Select, message, Switch } from 'antd';
+import { Button, Input, Select, message, Switch, Modal, Radio, Input as TextInput } from 'antd';
 import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
 import { configApi, testcaseApi } from '../../services/api';
@@ -32,6 +32,16 @@ interface TestCaseManagerProps {
   onUiExecute?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
 }
+
+// B7：驳回理由选项（与后端 REJECT_REASONS 对齐）
+const REJECT_OPTIONS = [
+  { value: 'duplicate', label: '与已有用例重复' },
+  { value: 'vague_steps', label: '步骤笼统不可执行' },
+  { value: 'unverifiable_expect', label: '预期结果不可验证' },
+  { value: 'missing_branch', label: '遗漏分支/场景' },
+  { value: 'fact_error', label: '事实/业务错误' },
+  { value: 'other', label: '其他' },
+];
 
 const showMessage = (
   type: 'success' | 'error' | 'warning',
@@ -76,6 +86,38 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onMove,
   onBatchMove,
 }) => {
+  // B7：驳回弹窗状态
+  const [rejectTarget, setRejectTarget] = useState<TestCase | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('duplicate');
+  const [rejectDetail, setRejectDetail] = useState<string>('');
+
+  const openReject = (testcase: TestCase) => {
+    setRejectTarget(testcase);
+    setRejectReason('duplicate');
+    setRejectDetail('');
+  };
+
+  const confirmReject = async () => {
+    if (!rejectTarget || !selectedSession) return;
+    try {
+      const res = await testcaseApi.rejectTestcase(
+        selectedSession.id,
+        rejectTarget.id,
+        rejectReason,
+        rejectDetail.trim() || undefined,
+      );
+      if (res.code === 200) {
+        message.success('已驳回，理由将用于改进生成质量');
+        setRejectTarget(null);
+        onLoadTestcases(selectedSession.id, filters);
+      } else {
+        message.error(res.message || '驳回失败');
+      }
+    } catch (e: any) {
+      message.error('驳回失败: ' + (e?.message || '未知错误'));
+    }
+  };
+
   const handleValidate = async (testcase: TestCase) => {
     if (onValidate) {
       onValidate(testcase);
@@ -268,9 +310,40 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onInferDependencies={onInferDependencies}
             onValidate={onValidate ?? handleValidate}
             onUiExecute={onUiExecute}
+            onReject={openReject}
             onBatchMove={onBatchMove}
             bugLinkTemplate={bugLinkTemplate}
           />
+
+          {/* B7：驳回理由弹窗 */}
+          <Modal
+            title={`驳回用例：${rejectTarget?.case_name ?? ''}`}
+            open={!!rejectTarget}
+            onOk={confirmReject}
+            onCancel={() => setRejectTarget(null)}
+            okText="确认驳回"
+            cancelText="取消"
+            width={480}
+          >
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 6, fontWeight: 500 }}>驳回理由（用于改进生成质量）</div>
+              <Radio.Group
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+              >
+                {REJECT_OPTIONS.map((opt) => (
+                  <Radio key={opt.value} value={opt.value}>{opt.label}</Radio>
+                ))}
+              </Radio.Group>
+            </div>
+            <TextInput.TextArea
+              rows={2}
+              placeholder="补充说明（可选）"
+              value={rejectDetail}
+              onChange={(e) => setRejectDetail(e.target.value)}
+            />
+          </Modal>
         </>
       )}
     </div>

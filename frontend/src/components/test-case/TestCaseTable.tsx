@@ -11,6 +11,7 @@ import {
   BranchesOutlined,
   SafetyCertificateOutlined,
   ChromeOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
 import { isUiExecutable } from '../modals/UIExecutionModal';
@@ -29,6 +30,7 @@ interface TestCaseTableProps {
   onInferDependencies?: (testcase: TestCase) => void;
   onValidate?: (testcase: TestCase) => void;
   onUiExecute?: (testcase: TestCase) => void;
+  onReject?: (testcase: TestCase) => void;
   onBatchMove: (ids: number[]) => void;
   bugLinkTemplate?: string;
 }
@@ -69,6 +71,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onInferDependencies,
   onValidate,
   onUiExecute,
+  onReject,
   onBatchMove,
   bugLinkTemplate,
 }) => {
@@ -327,6 +330,13 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
             <Tooltip title="UI 执行" placement="top">
               <button className="tcm-action-btn tcm-action-btn--ui" onClick={(event) => { stopRowClick(event); onUiExecute(record); }}>
                 <ChromeOutlined />
+              </button>
+            </Tooltip>
+          )}
+          {onReject && (
+            <Tooltip title="驳回（记录理由，帮助生成器改进）" placement="top">
+              <button className="tcm-action-btn tcm-action-btn--reject" onClick={(event) => { stopRowClick(event); onReject(record); }}>
+                <StopOutlined />
               </button>
             </Tooltip>
           )}

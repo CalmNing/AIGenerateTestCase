@@ -1227,6 +1227,29 @@ async def generate_testcases(
     )
     # P2：「已覆盖清单」——用真实已有用例替代 skills 里不存在的 get_existing_coverage 工具
     coverage_summary = _build_coverage_summary(db_session, module_id)
+    # B7：人工反馈回流——人工正样本做 few-shot，驳回理由做规避清单
+    try:
+        from app.services.human_feedback import (
+            format_examples_for_prompt,
+            format_rejection_for_prompt,
+            get_positive_examples,
+            get_rejection_guidance,
+        )
+
+        pos_examples = get_positive_examples(
+            db_session, module_id=module_id, session_id=session_id,
+        )
+        if pos_examples:
+            coverage_summary += "\n\n" + format_examples_for_prompt(pos_examples)
+            logger.info("B7：已注入 %d 条人工认可示例", len(pos_examples))
+        reject_guide = get_rejection_guidance(
+            db_session, module_id=module_id, session_id=session_id,
+        )
+        if reject_guide:
+            coverage_summary += "\n\n" + format_rejection_for_prompt(reject_guide)
+            logger.info("B7：已注入驳回规避清单")
+    except Exception as e:
+        logger.warning(f"人工反馈回流失败（已忽略，不影响生成）: {e}")
 
     # 检测链接并解析内容。蓝湖可预取。
     # 如果解析成功，prompt = 历史上下文(参考) + 解析内容(实际需求)

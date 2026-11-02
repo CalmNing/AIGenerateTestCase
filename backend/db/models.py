@@ -106,6 +106,11 @@ class TestCase(BaseModel, table=True):
     # UI 自动化绑定计划(NL 步骤 → PageObject 元素),由 /ui-execution/compile 生成、前端可修正
     ui_binding: Optional[dict] = Field(default=None, sa_type=JSON, description="UI绑定计划{page_object_id,steps,asserts,...}")
 
+    # ===== B7 HITL 回流：人工反馈信号（生成质量的数据来源） =====
+    human_edited: bool = Field(default=False, description="人工编辑过（采纳为正样本：其内容是高质量示例）")
+    reject_reason: Optional[str] = Field(default=None, description="驳回理由（负样本：重复/步骤笼统/预期不可验证/遗漏分支/事实错误/其他）")
+    reviewed_at: Optional[datetime] = Field(default=None, description="人工审阅时间(UTC+8)")
+
     # 定义与会话的多对一关系
     session: Optional[Session] = Relationship(back_populates="test_cases")
 

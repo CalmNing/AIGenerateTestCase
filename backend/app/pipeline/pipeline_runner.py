@@ -1067,6 +1067,28 @@ class PipelineRunner:
             # P2：把「已覆盖清单」注入阶段 1（拆分阶段就避开已覆盖内容），
             # 并把相关历史需求作为参考注入（pipeline 此前完全不读历史上下文）。
             coverage_summary = _build_coverage_summary(self.db, module_id)
+            # B7：人工反馈回流（正样本 few-shot + 驳回规避清单）
+            try:
+                from app.services.human_feedback import (
+                    format_examples_for_prompt,
+                    format_rejection_for_prompt,
+                    get_positive_examples,
+                    get_rejection_guidance,
+                )
+
+                pos_examples = get_positive_examples(
+                    self.db, module_id=module_id, session_id=session_id,
+                )
+                if pos_examples:
+                    coverage_summary += "\n\n" + format_examples_for_prompt(pos_examples)
+                    logger.info("B7：已注入 %d 条人工认可示例", len(pos_examples))
+                reject_guide = get_rejection_guidance(
+                    self.db, module_id=module_id, session_id=session_id,
+                )
+                if reject_guide:
+                    coverage_summary += "\n\n" + format_rejection_for_prompt(reject_guide)
+            except Exception as fb_err:  # noqa: BLE001
+                logger.warning("人工反馈回流失败（已忽略）: %s", fb_err)
             related_history = _retrieve_related_history(
                 self.db,
                 query=requirement_text,

@@ -202,6 +202,10 @@ export const testcaseApi = {
   // 删除测试用例
   deleteTestcase: (sessionId: number, ids: number[]): Promise<ApiResponse> => api.delete(`/testcases/${sessionId}/testcases`, { data: ids }),
 
+  // B7：驳回测试用例（记录结构化理由，回流为生成规避清单）
+  rejectTestcase: (sessionId: number, testcaseId: number, reason: string, detail?: string): Promise<ApiResponse> =>
+    api.post(`/testcases/${sessionId}/testcases/${testcaseId}/reject`, null, { params: { reason, detail } }),
+
   // 移动测试用例
   moveTestcase: (testcaseId: number, sessionId: number, moduleId: number | null): Promise<ApiResponse> =>
     api.post(`/testcases/${testcaseId}/move`, { session_id: sessionId, module_id: moduleId }),

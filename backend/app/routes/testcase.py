@@ -587,6 +587,20 @@ async def generate_testcases(
     return Response(message="生成测试用例成功")
 
 
+# 人工编辑视为"内容变化"的字段（B7：这些字段被改 → 该用例是高质量正样本）
+_HUMAN_CONTENT_FIELDS = ("case_name", "preset_conditions", "steps", "expected_results", "case_level")
+
+# 驳回理由的合法枚举（前端下拉与此对齐）
+REJECT_REASONS = (
+    "duplicate",          # 与已有用例重复
+    "vague_steps",        # 步骤笼统不可执行
+    "unverifiable_expect",# 预期结果不可验证
+    "missing_branch",     # 遗漏分支/场景
+    "fact_error",         # 事实/业务错误
+    "other",              # 其他
+)
+
+
 @router.put("/{session_id}/testcases/{testcase_id}", response_model=Response)
 def update_testcase(
         session: SessionDep,
@@ -595,19 +609,63 @@ def update_testcase(
         testcase_id: int,
         testcase: TestCase
 ):
-    """更新测试用例"""
+    """更新测试用例。
+
+    B7：内容字段（名称/步骤/预期/前置/等级）发生实际变化时自动置
+    `human_edited=True` —— 人工修过的用例是高质量正样本，
+    后续作为 few-shot 示例参与生成（见 quality_metrics / 检索层）。
+    """
     testcase_db = session.get(TestCase, testcase_id)
     if not testcase_db:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     testcase_data = testcase.model_dump(exclude_unset=True)
-    testcase_data.pop("created_at")
-    testcase_data.pop("updated_at")
+    testcase_data.pop("created_at", None)
+    testcase_data.pop("updated_at", None)
+
+    # B7：检测人工实质修改（排除 user 自己显式传入的 human_edited/reject_reason）
+    content_changed = any(
+        f in testcase_data and testcase_data[f] != getattr(testcase_db, f)
+        for f in _HUMAN_CONTENT_FIELDS
+    )
+    if content_changed and not testcase_data.get("human_edited"):
+        testcase_data["human_edited"] = True
+        testcase_data["reviewed_at"] = datetime.now()
+
     testcase_db.sqlmodel_update(testcase_data)
     session.add(testcase_db)
     session.commit()
     session.refresh(testcase_db)
     return Response(message="更新测试用例成功")
+
+
+@router.post("/{session_id}/testcases/{testcase_id}/reject", response_model=Response)
+def reject_testcase(
+        session: SessionDep,
+        user: CurrentUser,
+        session_id: int,
+        testcase_id: int,
+        reason: str,
+        detail: Optional[str] = None,
+):
+    """驳回测试用例（B7 负样本：记录结构化理由，回流为生成时的规避清单）。
+
+    reason 取值：duplicate / vague_steps / unverifiable_expect /
+                missing_branch / fact_error / other
+    """
+    if reason not in REJECT_REASONS:
+        return Response(code=status.HTTP_400_BAD_REQUEST, message=f"无效的驳回理由: {reason}")
+    testcase_db = session.get(TestCase, testcase_id)
+    if not testcase_db:
+        return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
+
+    testcase_db.reject_reason = (
+        reason if not detail else f"{reason}: {detail}"[:400]
+    )
+    testcase_db.reviewed_at = datetime.now()
+    session.add(testcase_db)
+    session.commit()
+    return Response(message="已驳回，理由已记录")
 
 
 @router.delete("/{session_id}/testcases", response_model=Response[str])
