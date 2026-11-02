@@ -39,6 +39,42 @@ def _schema_required(schema: Any) -> List[str]:
     return list(req) if isinstance(req, list) else []
 
 
+def _schema_path_present(schema: Any, required_name: str, body: Any) -> bool:
+    """判断 body 里是否存在 schema 要求的字段（**递归**支持嵌套对象/数组）。
+
+    `required` 列表里的名字可能是：
+      - 顶层字段：`"username"`
+      - 嵌套对象的字段：`"comment"` 出现在 `actionPayload.comment`
+      - 数组元素的字段：`"value"` 出现在 `items[].value`
+
+    判定规则：只要在 body 的**任意层级**能找到一个同名键即视为存在
+    （schema 里的 required 是"该对象内必须有"，但不同层级同名键不冲突）。
+    找不到时再按 schema 的 properties 递归下钻做精确匹配。
+    """
+    if body is None:
+        return False
+    if isinstance(body, dict):
+        if required_name in body:
+            return True
+        # 递归下钻：schema 的 properties 里若有名为 required_name 的对象，
+        # 尝试在 body 的同名子对象里找到它
+        props = _schema_properties(schema)
+        pdef = props.get(required_name)
+        if isinstance(pdef, dict):
+            if _schema_path_present(pdef, required_name, body.get(required_name)):
+                return True
+        # 任意层级同名键都算存在（宽松，避免误报）
+        for value in body.values():
+            if _schema_path_present(schema, required_name, value):
+                return True
+        return False
+    if isinstance(body, list):
+        return any(
+            _schema_path_present(schema, required_name, item) for item in body
+        )
+    return False
+
+
 def _jsonpath_field_key(jsonpath: str) -> Optional[str]:
     """从 jsonpath 取末级字段名用于粗匹配，如 $.data.id -> id。"""
     if not jsonpath:
@@ -54,6 +90,49 @@ def _get_steps(case: dict) -> List[dict]:
     if not isinstance(raw, list):
         raw = case.get("test_steps")
     return raw if isinstance(raw, list) else []
+
+
+def _resolve_step_endpoint_id(
+    step: dict,
+    endpoint_index_to_id: Dict[int, Any],
+) -> Tuple[Optional[int], Optional[str]]:
+    """解析步骤引用的接口 ID，返回 (endpoint_id, 解析方式)。
+
+    兼容三种引用格式（这是**真 bug 修复**）：
+      - `endpoint_ref`：序号（1-based），pipeline 生成时的格式；
+      - `endpoint_id`：数据库主键，**落库后的实际格式**（单次生成路径 /
+        pipeline 落库后写回的都是这个）；
+      - 两者都无但有 `endpoint_ref_value`：兼容手工编辑。
+
+    修复前只认 `endpoint_ref`，导致存量用例（steps 里是 `endpoint_id`）
+    全部被判为"接口步骤不存在"，一致性通过率被严重低估（实测 200 条 0 条通过）。
+    """
+    if not isinstance(step, dict):
+        return None, None
+
+    # 1) 显式 endpoint_id（落库后的标准格式）
+    raw_id = step.get("endpoint_id")
+    if raw_id not in (None, ""):
+        try:
+            return int(raw_id), "endpoint_id"
+        except (TypeError, ValueError):
+            pass
+
+    # 2) endpoint_ref：可能是序号（映射到 ID），也可能本身就是 ID
+    raw_ref = step.get("endpoint_ref")
+    if raw_ref not in (None, ""):
+        try:
+            ref_int = int(raw_ref)
+        except (TypeError, ValueError):
+            return None, None
+        # 优先当序号解释（1-based 映射）
+        mapped = endpoint_index_to_id.get(ref_int)
+        if mapped is not None:
+            return mapped, "endpoint_ref"
+        # 否则当数据库主键解释
+        return ref_int, "endpoint_ref_as_id"
+
+    return None, None
 
 
 def check_testcase_consistency(
@@ -78,16 +157,16 @@ def check_testcase_consistency(
     else:
         checks.append({"check": "has_steps", "passed": True, "detail": f"共 {len(steps)} 个步骤"})
 
-    # 1. endpoint_ref 有效性 + 逐步骤字段校验
+    # 1. 接口引用有效性 + 逐步骤字段校验
+    #    （兼容 endpoint_ref 序号 / endpoint_id 主键两种格式，见 _resolve_step_endpoint_id）
     for i, step in enumerate(steps, 1):
         if not isinstance(step, dict):
             continue
-        ref = step.get("endpoint_ref")
-        eid = endpoint_index_to_id.get(ref) if isinstance(ref, int) else None
+        eid, ref_kind = _resolve_step_endpoint_id(step, endpoint_index_to_id)
         ep = endpoints.get(eid) if eid is not None else None
         if ep is None:
             checks.append({"check": "endpoint_ref_valid", "passed": False,
-                           "detail": f"步骤{i} endpoint_ref={ref} 无对应接口"})
+                           "detail": f"步骤{i} 引用的接口({ref_kind})={eid} 无对应接口定义"})
             continue
         checks.append({"check": "endpoint_ref_valid", "passed": True,
                        "detail": f"步骤{i} -> 接口 {getattr(ep, 'method', '')} {getattr(ep, 'path', '')}"})
@@ -110,7 +189,13 @@ def check_testcase_consistency(
                     "passed": not extra,
                     "detail": (f"步骤{i} 字段均合法" if not extra else f"步骤{i} 含 schema 外字段: {extra}"),
                 })
-                missing = [r for r in required if r not in body]
+                # 必填字段校验：**递归**比对嵌套结构。
+                # 修复前只看顶层（`r not in body`），对 `{actionPayload:{comment:{value:..}}}`
+                # 这类嵌套 body 会全部误报"缺必填字段"（实测 266 条误报）。
+                missing = [
+                    r for r in required
+                    if not _schema_path_present(schema, r, body)
+                ]
                 checks.append({
                     "check": "required_fields_present",
                     "passed": not missing,
@@ -137,8 +222,8 @@ def check_testcase_consistency(
     resp_schema = None
     for step in steps:
         if isinstance(step, dict):
-            eid = endpoint_index_to_id.get(step.get("endpoint_ref"))
-            ep = endpoints.get(eid)
+            eid, _ = _resolve_step_endpoint_id(step, endpoint_index_to_id)
+            ep = endpoints.get(eid) if eid is not None else None
             if ep is not None:
                 resp_schema = getattr(ep, "response_schema", None)
                 if resp_schema:
