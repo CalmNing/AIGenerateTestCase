@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, Form, Tabs, Modal, Input, Button, Select, Popconfirm, Tooltip, message, FloatButton } from 'antd';
@@ -31,6 +31,7 @@ import EditTestcaseModal from './components/modals/EditTestcaseModal';
 import SettingsModal from './components/modals/SettingsModal';
 import McpConfigModal from './components/modals/McpConfigModal';
 import SkillsHubModal from './components/modals/SkillsHubModal';
+import RagViewer from './components/rag/RagViewer';
 import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
 import AddTestcaseModal from './components/modals/AddTestcaseModal';
 import TestCaseExecutionLogModal from './components/modals/TestCaseExecutionLogModal';
@@ -943,6 +944,7 @@ const App: React.FC = () => {
   const [settingButtonStatus, setSettingButtonStatus] = useState(false);
   const [isMcpConfigVisible, setIsMcpConfigVisible] = useState(false);
   const [isSkillsHubVisible, setIsSkillsHubVisible] = useState(false);
+  const [isRagViewerVisible, setIsRagViewerVisible] = useState(false);
     const saved = localStorage.getItem('selectedSkills');
   const [selectedSkills, setSelectedSkills] = useState<string[]>(() => {
     return saved ? JSON.parse(saved) : [];
@@ -1379,6 +1381,7 @@ const App: React.FC = () => {
             onBackToHome={navigateToHome}
             onMcpConfigOpen={() => canManageMcp && setIsMcpConfigVisible(true)}
             onSkillsHubOpen={() => canManageSkills && setIsSkillsHubVisible(true)}
+            onRagViewerOpen={() => setIsRagViewerVisible(true)}
             onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
             canManageSettings={canManageSettings}
             canManageMcp={canManageMcp}
@@ -1755,6 +1758,19 @@ const App: React.FC = () => {
                 setIsSkillsHubVisible(false);
               }}
             />
+          )}
+
+          {isRagViewerVisible && (
+            <Modal
+              title="RAG 检索观测"
+              open
+              onCancel={() => setIsRagViewerVisible(false)}
+              footer={null}
+              width={1040}
+              destroyOnClose
+            >
+              <RagViewer />
+            </Modal>
           )}
 
           <MoveTestcaseModal

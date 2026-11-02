@@ -4,6 +4,20 @@ import keycloak from './keycloak';
 import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PlatformMockCoverage, MockPreviewRequest, MockPreviewResult, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult } from '../types';
 
 // 创建axios实例
+// RAG 类型定义（B6 观测页用）
+export interface RagStats {
+  indexed_count: number;
+  db_path: string;
+  terms: Record<string, string[]>;
+  recent_docs: Array<{ rowid: number; content: string }>;
+}
+
+export interface RagHit {
+  rowid: number;
+  score: number;
+  content: string;
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 300000, // 增加超时时间到300秒
@@ -845,6 +859,23 @@ export const skillsApi = {
   get: (name: string): Promise<ApiResponse<Skill>> => api.get(`/skills/${name}`),
   install: (url: string): Promise<ApiResponse<Skill>> => api.post('/skills/install', { url }),
   delete: (name: string): Promise<ApiResponse> => api.delete(`/skills/${name}`),
+};
+
+// RAG 检索观测 API（B6：索引状态/召回试查/同义词/重建）
+export const ragApi = {
+  stats: (): Promise<ApiResponse<RagStats>> => api.get('/rag/stats'),
+  search: (payload: {
+    query: string;
+    module_id?: number | null;
+    session_id?: number | null;
+    top_k?: number;
+  }): Promise<ApiResponse<{ query: string; count: number; hits: RagHit[] }>> =>
+    api.post('/rag/search', payload),
+  terms: (): Promise<ApiResponse<Record<string, string[]>>> => api.get('/rag/terms'),
+  updateTerms: (
+    terms: Record<string, string[]>,
+  ): Promise<ApiResponse<Record<string, string[]>>> => api.put('/rag/terms', { terms }),
+  reindex: (): Promise<ApiResponse<{ indexed_count: number }>> => api.post('/rag/reindex'),
 };
 
 // AI 对话 API

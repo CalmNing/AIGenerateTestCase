@@ -21,6 +21,7 @@ from app.routes.saved_request_folder import router as saved_request_folder_route
 from app.routes.scheduled_task import router as scheduled_task_router
 from app.routes.session import router as session_router
 from app.routes.skills import router as skills_router
+from app.routes.rag import router as rag_router
 from app.routes.testcase import router as testcase_router
 from app.routes.pipeline import router as pipeline_router
 from app.routes.document import router as document_router
@@ -187,6 +188,8 @@ api_router.include_router(
 api_router.include_router(config_router, dependencies=[Depends(require_permissions(Permission.CONFIG_MANAGE))])
 api_router.include_router(mcp_router, dependencies=[Depends(require_permissions(Permission.MCP_MANAGE))])
 api_router.include_router(skills_router, dependencies=[Depends(require_permissions(Permission.SKILLS_MANAGE))])
+# RAG 检索观测/管理（索引统计、召回试查、同义词、重建）
+api_router.include_router(rag_router, dependencies=[Depends(require_permissions(Permission.SKILLS_MANAGE))])
 api_router.include_router(
     global_parameter_router,
     dependencies=[

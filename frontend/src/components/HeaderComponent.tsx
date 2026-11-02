@@ -1,6 +1,6 @@
 import React from 'react';
 import { Layout, Typography, Button, Space, Avatar, Dropdown } from 'antd';
-import { UserOutlined, LogoutOutlined, SettingOutlined, ApiOutlined, BookOutlined, ControlOutlined } from '@ant-design/icons';
+import { UserOutlined, LogoutOutlined, SettingOutlined, ApiOutlined, BookOutlined, ControlOutlined, SearchOutlined } from '@ant-design/icons';
 import keycloak from '../services/keycloak';
 
 const { Header } = Layout;
@@ -12,6 +12,7 @@ interface HeaderComponentProps {
   onBackToHome?: () => void;
   onMcpConfigOpen?: () => void;
   onSkillsHubOpen?: () => void;
+  onRagViewerOpen?: () => void;
   onGlobalParamsOpen?: () => void;
   canManageSettings?: boolean;
   canManageMcp?: boolean;
@@ -25,6 +26,7 @@ const HeaderComponent: React.FC<HeaderComponentProps> = ({
   onBackToHome,
   onMcpConfigOpen,
   onSkillsHubOpen,
+  onRagViewerOpen,
   onGlobalParamsOpen,
   canManageSettings = false,
   canManageMcp = false,
@@ -80,6 +82,9 @@ const HeaderComponent: React.FC<HeaderComponentProps> = ({
           {canManageMcp && <Button type="default" onClick={onMcpConfigOpen} icon={<ApiOutlined />}>MCP</Button>}
           {canManageGlobalParams && <Button type="default" onClick={onGlobalParamsOpen} icon={<ControlOutlined />}>全局参数</Button>}
           {canManageSkills && <Button type="default" onClick={onSkillsHubOpen} icon={<BookOutlined />}>Skills</Button>}
+          {onRagViewerOpen && (
+            <Button type="default" onClick={onRagViewerOpen} icon={<SearchOutlined />}>检索</Button>
+          )}
           {canManageSettings && (
             <Button type="default" onClick={onSettingsOpen} disabled={settingButtonStatus} icon={<SettingOutlined />}>设置</Button>
           )}
