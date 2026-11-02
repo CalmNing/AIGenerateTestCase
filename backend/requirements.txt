@@ -2,6 +2,10 @@ python-dotenv>=1.0.0
 fastapi==0.127.0
 langchain>=1.0.0
 langgraph>=0.4.0
+# Agent 记忆（P1）：checkpointer/store 落盘到 backend/data/agent_memory.db
+# 缺失时 utils/agent_memory.py 会自动降级为内存实现，不影响生成主流程
+langgraph-checkpoint-sqlite>=2.0.0
+aiosqlite>=0.20.0
 langchain_deepseek==1.0.1
 langchain_ollama==1.0.1
 langchain-openai>=0.1.0

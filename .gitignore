@@ -2,6 +2,13 @@
 /frontend/node_modules/
 /backend/data/testcases.db
 /backend/data/config.json
+# Agent 记忆库与 FTS5 检索索引（均为可重建的缓存，禁止入库）
+/backend/data/agent_memory.db
+/backend/data/agent_memory.db-wal
+/backend/data/agent_memory.db-shm
+/backend/data/retrieval_index.db
+/backend/data/retrieval_index.db-wal
+/backend/data/retrieval_index.db-shm
 # Mock 代理自动生成的 CA/域名证书（含私钥，禁止入库）
 /backend/data/certs/
 # UI 执行登录态缓存(storage_state,含 token,禁止入库)
@@ -31,7 +38,14 @@ frontend/.env.*
 /.claude/
 /.codebuddy/
 /.superpowers/
-/docs/
+# docs 默认忽略；B6 调研文档与质量基线快照需要随代码提交（基线是测试对比基准）
+/docs/*
+!/docs/research/
+/docs/research/*
+!/docs/research/*.md
+!/docs/research/quality-baseline-snapshot.json
+!/docs/research/quality-baseline-after-fieldfix.json
+!/docs/research/quality-baseline-after-assertion-metrics.json
 /.agents/
 /backend/docs/
 /backend/data/
