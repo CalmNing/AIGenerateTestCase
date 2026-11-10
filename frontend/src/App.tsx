@@ -38,6 +38,7 @@ import TestCaseExecutionLogModal from './components/modals/TestCaseExecutionLogM
 import UIExecutionModal from './components/modals/UIExecutionModal';
 import ModuleSidebar from './components/ModuleSidebar';
 import { Permission, hasPermission } from './services/permissions';
+import { sortTestcasesByCreatedAtDesc } from './utils/testCaseOrder';
 import { useRef } from 'react';
 
 const { Content } = Layout;
@@ -53,6 +54,11 @@ const getStoredNumber = (key: string): number | null => {
   if (raw === null || raw === '') return null;
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
+};
+
+const getRequirementDraftKey = (sessionId?: number, moduleId?: number | string): string | null => {
+  if (!sessionId || !moduleId) return null;
+  return `ai-testcase:requirementDraft:${sessionId}:${moduleId}`;
 };
 
 const INITIAL_PERSISTED_STATE = {
@@ -160,6 +166,40 @@ const App: React.FC = () => {
   const [sessionToDelete, setSessionToDelete] = useState<number | null>(null);
   const canPersistSelectionRef = useRef(false);
   const hasRestoredModuleRef = useRef(false);
+  const requirementDraftKey = getRequirementDraftKey(selectedSession?.id, selectedModule);
+  const requirementDraftKeyRef = useRef(requirementDraftKey);
+  const skipRequirementDraftSaveRef = useRef(true);
+
+  useEffect(() => {
+    requirementDraftKeyRef.current = requirementDraftKey;
+    skipRequirementDraftSaveRef.current = true;
+    let draft = '';
+    if (requirementDraftKey) {
+      try {
+        draft = localStorage.getItem(requirementDraftKey) || '';
+      } catch {
+        draft = '';
+      }
+    }
+    setRequirement(draft);
+  }, [requirementDraftKey]);
+
+  useEffect(() => {
+    if (skipRequirementDraftSaveRef.current) {
+      skipRequirementDraftSaveRef.current = false;
+      return;
+    }
+    if (!requirementDraftKey || requirementDraftKeyRef.current !== requirementDraftKey) return;
+    try {
+      if (requirement) {
+        localStorage.setItem(requirementDraftKey, requirement);
+      } else {
+        localStorage.removeItem(requirementDraftKey);
+      }
+    } catch {
+      return;
+    }
+  }, [requirementDraftKey, requirement]);
 
   // 初始化数据
   useEffect(() => {
@@ -260,12 +300,12 @@ const App: React.FC = () => {
     }
   };
 
-  // 加载测试用例
+  // 加载测试用例（后端已按创建时间倒序，前端再兜底一次，保证最新创建的排在最前）
   const loadTestcases = async (sessionId: number | any, filters?: TestCaseFilters) => {
     try {
       const response: ApiResponse<TestCaseResponse> | any = await testcaseApi.getTestcases(sessionId, filters);
       if (response.code === 200 && response.data) {
-        setTestcases(response.data.items || []);
+        setTestcases(sortTestcasesByCreatedAtDesc(response.data.items || []));
         setTestcasesResponse(response.data || {});
       }
     } catch (error) {
@@ -275,7 +315,10 @@ const App: React.FC = () => {
 
   // 创建会话
   const handleCreateSession = async () => {
-    if (!newSessionName.trim()) return;
+    if (!newSessionName.trim()) {
+      showMessage('warning', '请输入会话名称');
+      return;
+    }
 
     try {
       const response: ApiResponse<Session> | any = await sessionApi.createSession(newSessionName.trim());
@@ -300,7 +343,14 @@ const App: React.FC = () => {
 
   // 创建模块
   const handleCreateModule = async () => {
-    if (!selectedSession || !newModuleName.trim()) return;
+    if (!selectedSession) {
+      showMessage('warning', '请先选择会话');
+      return;
+    }
+    if (!newModuleName.trim()) {
+      showMessage('warning', '请输入模块名称');
+      return;
+    }
 
     try {
       const response: ApiResponse<Module> | any = await moduleApi.createModule({

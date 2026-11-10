@@ -6,6 +6,7 @@ import { configApi, testcaseApi } from '../../services/api';
 import TestCaseTable from './TestCaseTable';
 import * as XLSX from 'xlsx';
 import { formatStep } from '../../utils/stepUtils';
+import { formatTestCaseLevel } from '../../utils/testCaseLevel';
 import './TestCaseManager.css';
 
 interface TestCaseManagerProps {
@@ -166,7 +167,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       const exportData = testcases.map((tc) => ({
         模块名称: tc.module_id ? modules.find((m) => m.id === tc.module_id)?.module_name || '未知模块' : '未分配模块',
         用例名称: tc.case_name,
-        用例级别: `P${tc.case_level}`,
+        用例级别: formatTestCaseLevel(tc.case_level),
         前置条件: tc.preset_conditions.map((item: any, idx) => {
           const text = typeof item === 'string' ? item : formatStep(item);
           return `${idx + 1}. ${text}`;

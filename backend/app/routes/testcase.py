@@ -297,9 +297,10 @@ def get_testcases(
         exist_bug: bool = False,
         test_point_id: int = None
 ):
-    """获取会话的测试用例"""
-    query = select(TestCase).where(TestCase.session_id == session_id).order_by(TestCase.case_level,
-                                                                               desc(TestCase.created_at))
+    """获取会话的测试用例（按创建时间倒序，最新创建的排在最前；同时间戳按 id 倒序保证稳定）"""
+    query = select(TestCase).where(TestCase.session_id == session_id).order_by(
+        desc(TestCase.created_at), desc(TestCase.id)
+    )
     if module_id:
         query = query.where(TestCase.module_id == module_id)
     if test_point_id:

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Drawer, Form, Input, message, Select, Tag } from 'antd';
 import { Module, Session } from '../../types';
 import { testcaseApi } from '../../services/api';
+import { TEST_CASE_LEVEL_OPTIONS } from '../../utils/testCaseLevel';
 import StructuredTestcaseSections, { createStepRow, expectedTemplateGroups, StepRow } from './TestcaseStructuredSections';
 import './TestcaseDrawerShared.css';
 import './AddTestcaseModal.css';
@@ -250,14 +251,7 @@ const AddTestcaseModal: React.FC<AddTestcaseModalProps> = ({
               rules={[{ required: true, message: '请选择用例级别' }]}
               initialValue={4}
             >
-              <Select
-                options={[
-                  { label: 'P0', value: 1 },
-                  { label: 'P1', value: 2 },
-                  { label: 'P2', value: 3 },
-                  { label: 'P3', value: 4 },
-                ]}
-              />
+              <Select options={TEST_CASE_LEVEL_OPTIONS} />
             </Form.Item>
 
             <Form.Item

@@ -787,6 +787,7 @@ body {
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-full);
   color: var(--tool-accent);
+  color: color-mix(in srgb, var(--tool-accent) 65%, var(--color-text));
   background: var(--tool-tint);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
@@ -1106,6 +1107,72 @@ body {
   .home-tool-card {
     min-height: 170px;
     padding: var(--space-5);
+  }
+}
+
+/* ===== AI Workspace Responsive ===== */
+@media (max-width: 768px) {
+  .ant-layout-header {
+    height: auto !important;
+    min-height: var(--header-height);
+    padding: 8px 12px !important;
+    line-height: normal !important;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ant-layout-header > div {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .ant-layout-header > div:last-child,
+  .ant-layout-header > div:last-child > .ant-space {
+    width: 100%;
+  }
+
+  .ant-layout-header > div:last-child > .ant-space {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .ant-layout-header h3 {
+    font-size: 18px !important;
+    line-height: 1.4;
+  }
+
+  .ant-layout:has(> .session-sidebar) {
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .ant-layout:has(> .session-sidebar) > .ant-layout-sider {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .ant-layout:has(> .session-sidebar) > .ant-layout-sider > div:nth-child(2) {
+    max-height: 160px !important;
+  }
+
+  .ant-layout:has(> .session-sidebar) > .ant-layout {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    height: calc(100vh - var(--header-height));
+    min-height: 480px;
+    padding: var(--space-2) !important;
+    overflow: hidden !important;
+  }
+
+  .ant-layout:has(> .session-sidebar) > .ant-layout > .ant-layout-content {
+    min-width: 0;
+    padding: var(--space-2) !important;
   }
 }
 

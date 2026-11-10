@@ -53,3 +53,4 @@ frontend/.env.*
 /backend/.claude/
 /.dsh-acl-recovery/
 /.superpowers/
+/dogfood-output/

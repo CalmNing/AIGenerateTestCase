@@ -1342,6 +1342,12 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       await handleWsConnect();
       return;
     }
+    const requestUrl = String(form.getFieldValue('url') ?? activeTab?.url ?? '').trim();
+    if (!requestUrl) {
+      form.scrollToField('url');
+      message.warning('请输入请求 URL');
+      return;
+    }
     try {
       const values = await form.validateFields();
       const { method, url, body } = values;
@@ -2212,7 +2218,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                       ))}
                     </Select>
                   </Form.Item>
-                  <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入URL' }]}>
+                  <Form.Item name="url" noStyle rules={[{ required: true, message: '请输入请求 URL' }]}>
                     <Input
                       placeholder="请输入请求 URL，支持 {{variable}} 变量"
                       className="iot-url-input"

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { BugOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
 import { formatStep } from '../../utils/stepUtils';
+import { formatTestCaseLevel } from '../../utils/testCaseLevel';
 
 interface TestcaseDetailViewProps {
   testcase: TestCase;
@@ -69,7 +70,7 @@ const TestcaseDetailView: React.FC<TestcaseDetailViewProps> = ({ testcase, bugLi
           <h2 className="vtm-title">{tc.case_name}</h2>
           <div className="vtm-meta">
             <span className={`vtm-level vtm-level--${tc.case_level || 4}`}>
-              P{tc.case_level || 4}
+              {formatTestCaseLevel(tc.case_level)}
             </span>
             <span className={`vtm-status ${status.cls}`}>
               <span className="vtm-status-dot" />

@@ -3,6 +3,7 @@ import { Button, Collapse, Drawer, Form, Input, Select, Switch, Tag } from 'antd
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { GlobalParameter, TestCase, TestCaseStatus } from '../../types';
 import { apiTestApi, globalParameterApi } from '../../services/api';
+import { formatTestCaseLevel, TEST_CASE_LEVEL_OPTIONS } from '../../utils/testCaseLevel';
 import StructuredTestcaseSections, { createStepRow, expectedTemplateGroups, StepRow } from './TestcaseStructuredSections';
 import './TestcaseDrawerShared.css';
 import './EditTestcaseModal.css';
@@ -353,7 +354,7 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
         <Form form={form} layout="vertical">
           <div className="etm-summary">
             <Tag color="blue">#{selectedTestcase.id}</Tag>
-            <Tag color="default">P{selectedTestcase.case_level || 4}</Tag>
+            <Tag color="default">{formatTestCaseLevel(selectedTestcase.case_level)}</Tag>
             {selectedTestcase.api_endpoint_id && <Tag color="purple">已关联 API</Tag>}
           </div>
 
@@ -376,14 +377,7 @@ const EditTestcaseModal: React.FC<EditTestcaseModalProps> = ({
                 label="用例级别"
                 rules={[{ required: true, message: '请选择用例级别' }]}
               >
-                <Select
-                  options={[
-                    { label: 'P0', value: 1 },
-                    { label: 'P1', value: 2 },
-                    { label: 'P2', value: 3 },
-                    { label: 'P3', value: 4 },
-                  ]}
-                />
+                <Select options={TEST_CASE_LEVEL_OPTIONS} />
               </Form.Item>
 
               <Form.Item

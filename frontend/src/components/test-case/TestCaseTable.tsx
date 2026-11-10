@@ -15,6 +15,8 @@ import {
 } from '@ant-design/icons';
 import { TestCase, TestCaseStatus } from '../../types';
 import { isUiExecutable } from '../modals/UIExecutionModal';
+import { formatTestCaseLevel } from '../../utils/testCaseLevel';
+import { compareTestcaseByCreatedAt, sortTestcasesByCreatedAtDesc } from '../../utils/testCaseOrder';
 
 interface TestCaseTableProps {
   testcases: TestCase[];
@@ -99,6 +101,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (name: string) => <span className="tcm-case-name">{name}</span>,
     },
     {
+      // 级别仅作展示，不参与列表排序；排序统一按创建时间倒序
       title: '级别',
       dataIndex: 'case_level',
       key: 'case_level',
@@ -106,7 +109,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       align: 'center' as const,
       render: (level: number) => {
         const cls = `tcm-level-badge tcm-level-badge--${level || 4}`;
-        return <span className={cls}>P{level || 4}</span>;
+        return <span className={cls}>{formatTestCaseLevel(level)}</span>;
       },
     },
     {
@@ -239,6 +242,8 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       key: 'created_at',
       width: 110,
       align: 'center' as const,
+      sorter: compareTestcaseByCreatedAt,
+      defaultSortOrder: 'descend' as const,
       render: (time: string) => {
         const date = new Date(time);
         const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -389,7 +394,7 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
         <Table
           rowSelection={{ type: 'checkbox', ...rowSelection }}
           columns={testcaseColumns}
-          dataSource={testcases}
+          dataSource={sortTestcasesByCreatedAtDesc(testcases)}
           rowKey="id"
           onRow={(record) => ({
             onClick: () => onView(record),

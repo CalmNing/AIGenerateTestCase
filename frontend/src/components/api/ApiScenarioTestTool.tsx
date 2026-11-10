@@ -485,6 +485,7 @@ const ApiScenarioTestTool: React.FC = () => {
   const [bodyPreviewTarget, setBodyPreviewTarget] = useState<BodyPreviewTarget>({ type: 'endpoint' });
   const [importName, setImportName] = useState('');
   const [importUrl, setImportUrl] = useState('');
+  const [importUrlError, setImportUrlError] = useState('');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [endpointSearch, setEndpointSearch] = useState('');
   const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(false);
@@ -739,11 +740,24 @@ const ApiScenarioTestTool: React.FC = () => {
       message.warning('请上传 Swagger/OpenAPI 文件或填写 URL');
       return;
     }
+    const normalizedImportUrl = importUrl.trim();
+    if (normalizedImportUrl) {
+      try {
+        const parsedUrl = new URL(normalizedImportUrl);
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          throw new Error('invalid protocol');
+        }
+      } catch {
+        setImportUrlError('请输入以 http:// 或 https:// 开头的有效地址');
+        return;
+      }
+    }
+    setImportUrlError('');
     setLoading(true);
     try {
       const res = await apiTestApi.importOpenApi({
         name: importName,
-        url: importUrl.trim(),
+        url: normalizedImportUrl,
         file: importFile,
       });
       if (res.code === 200 && res.data) {
@@ -2074,7 +2088,16 @@ const ApiScenarioTestTool: React.FC = () => {
       >
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input placeholder="项目名称" value={importName} onChange={(event) => setImportName(event.target.value)} />
-          <Input placeholder="OpenAPI URL（支持 swagger-config）" value={importUrl} onChange={(event) => setImportUrl(event.target.value)} />
+          <Form.Item validateStatus={importUrlError ? 'error' : ''} help={importUrlError || undefined} style={{ marginBottom: 0 }}>
+            <Input
+              placeholder="OpenAPI URL（支持 swagger-config）"
+              value={importUrl}
+              onChange={(event) => {
+                setImportUrl(event.target.value);
+                if (importUrlError) setImportUrlError('');
+              }}
+            />
+          </Form.Item>
           <Upload
             maxCount={1}
             beforeUpload={(file) => {
