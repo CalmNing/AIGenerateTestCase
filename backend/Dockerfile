@@ -11,11 +11,17 @@ WORKDIR /app
 # ------------------------------------------------------------------
 # Layer 1: 系统依赖（极少变化，充分利用 Docker layer cache）
 # ------------------------------------------------------------------
+# libatomic1 必须在这里装：playwright 的 CLI 是自带的 node 驱动
+# (/usr/local/lib/python3.11/site-packages/playwright/driver/node)，
+# 它链接 libatomic.so.1；缺了它，连 `playwright install --with-deps`
+# 都启动不了，--with-deps 根本没机会补装依赖（鸡生蛋）。
+# 同样，下面解压的官方 Node 20 二进制也依赖这个库。
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         sqlite3 \
         curl \
         xz-utils \
+        libatomic1 \
     && rm -rf /var/lib/apt/lists/* && \
     curl -fsSL https://nodejs.org/dist/v20.19.1/node-v20.19.1-linux-x64.tar.xz -o /tmp/node.tar.xz && \
     tar -xf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
