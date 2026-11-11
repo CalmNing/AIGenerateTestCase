@@ -93,12 +93,13 @@ class RetrievedItem:
 
 
 class FtsIndex:
-    """`HistoryPrompt.content` 的 FTS5 索引（内容表 + 检索表 + 同义词表）。
+    """需求实体（requirement_doc.content_snapshot）的 FTS5 索引。
 
     表结构：
-      - `retrieval_doc`：原文（rowid 对应 historyprompt.id）
+      - `retrieval_doc`：原文（rowid 对应 requirement_doc.id）
       - `retrieval_fts`：FTS5(tokens, content='retrieval_doc', content_rowid='rowid')
       - `retrieval_term`：同义词词典 (term, synonyms)
+      - `retrieval_index_info`：源实体标记（key/value），用于换源后自动失效重建
 
     索引缺失时由 `ensure_index()` 自动创建；源表删除的行在同步时清理。
     """
@@ -162,6 +163,10 @@ class FtsIndex:
                     term TEXT PRIMARY KEY,
                     synonyms TEXT
                 );
+                CREATE TABLE IF NOT EXISTS retrieval_index_info (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
                 """
             )
             conn.commit()
@@ -176,6 +181,38 @@ class FtsIndex:
             logger.warning("创建检索索引失败（将降级）: %s", exc)
             self._fts_available = False
             return False
+
+    def get_info(self, key: str):
+        """读取索引元信息（源实体版本等）。表不存在/异常返回 None。"""
+        if not self.ensure_index():
+            return None
+        with self._lock:
+            conn = self._connect()
+            if conn is None:
+                return None
+            try:
+                row = conn.execute(
+                    "SELECT value FROM retrieval_index_info WHERE key = ?", (key,)
+                ).fetchone()
+                return row[0] if row else None
+            except Exception:
+                return None
+
+    def set_info(self, key: str, value: str) -> None:
+        if not self.ensure_index():
+            return
+        with self._lock:
+            conn = self._connect()
+            if conn is None:
+                return
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO retrieval_index_info(key, value) VALUES (?,?)",
+                    (key, value),
+                )
+                conn.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("写入索引元信息失败(已忽略): %s", exc)
 
     # ---------------- 写入 ----------------
 

@@ -53,7 +53,9 @@ def create_db_and_tables():
     _backfill_mock_proxy_service_prefix(engine)
     # 一次性清理：登录态改为挂在页面对象上，旧的独立「登录配置」结构作废
     _drop_obsolete_login_profile_schema(engine)
-    # P2：重建 FTS5 检索索引（存量历史需求首次进入检索层）
+    # 实体合一：historyprompt 生成日志迁入 requirement_doc(source_type='generation')
+    _migrate_history_prompt_to_requirement_doc(engine)
+    # P2：重建 FTS5 检索索引（源实体 = requirement_doc）
     _rebuild_retrieval_index(engine)
 
 
@@ -102,21 +104,163 @@ def _drop_obsolete_login_profile_schema(engine):
         logger.warning(f"自动迁移: 清理登录配置遗留结构失败(忽略): {e}")
 
 
-def _rebuild_retrieval_index(engine):
-    """把 historyprompt 全量同步进 FTS5 检索索引（P2）。
+def _parse_sqlite_datetime(value):
+    """把 SQLite 读出的 datetime 字符串解析回 datetime;失败返回 None。"""
+    import datetime as _dt
+    if isinstance(value, _dt.datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return _dt.datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
 
-    索引是缓存，源表 historyprompt 才是唯一事实来源；
-    启动时全量重建一次，保证存量历史需求立即可被检索召回。
-    任何失败都只告警，不阻断启动。
+
+def _migrate_history_prompt_to_requirement_doc(engine):
+    """实体合一：把 historyprompt 生成日志迁入 requirement_doc(source_type='generation')。
+
+    历史需求描述与需求管理本就服务于同一业务——生成输入日志收编为需求实体的
+    generation 来源后，需求管理成为唯一需求入口。HistoryPrompt 表与模型保留
+    （回滚备份），代码层全部停写。幂等：requirement_doc 中已存在 generation/manual
+    来源时跳过。分批提交避免大表迁移阻塞启动；失败只告警不阻断。
     """
-    try:
-        from sqlalchemy import text
+    import re as _re
+    from sqlalchemy import inspect, text
 
+    try:
+        insp = inspect(engine)
+        if "historyprompt" not in insp.get_table_names():
+            return
+        if "requirement_doc" not in insp.get_table_names():
+            return  # 新表尚未建出（异常场景），等下次启动
+        with engine.begin() as conn:
+            done = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM requirement_doc "
+                    "WHERE source_type IN ('generation', 'manual')"
+                )
+            ).scalar() or 0
+            total = conn.execute(text("SELECT COUNT(*) FROM historyprompt")).scalar() or 0
+            if done > 0 or total == 0:
+                return
+
+        rows = None
         with engine.begin() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT id, content, module_id, user_id, session_id, created_at "
-                    "FROM historyprompt"
+                    "SELECT id, content, module_id, session_id, user_id, created_at "
+                    "FROM historyprompt ORDER BY id"
+                )
+            ).fetchall()
+        if not rows:
+            return
+
+        from utils.document_prefetch import FEISHU_URL_RE
+        from sqlmodel import Session as SqlSession
+        from db.models import RequirementDoc
+
+        batch: list[RequirementDoc] = []
+        migrated = 0
+        with SqlSession(engine) as session:
+            for r in rows:
+                hp_id, content, module_id, sess_id, user_id, created_at = r
+                text_content = (content or "").strip()
+                if not text_content:
+                    continue
+                title_match = _re.split(r"\r?\n", text_content, 1)[0].strip()
+                url = ""
+                token = ""
+                m = FEISHU_URL_RE.search(text_content)
+                if m:
+                    url = m.group(0)
+                    token = m.group(1)
+                doc = RequirementDoc(
+                    title=title_match[:60] or "未命名需求",
+                    url=url,
+                    feishu_token=token,
+                    content_snapshot=text_content,
+                    structured=[],
+                    session_id=sess_id,
+                    version=0,
+                    module_id=module_id,
+                    source_type="generation",
+                    user_id=user_id,
+                )
+                if created_at is not None:
+                    parsed = _parse_sqlite_datetime(created_at)
+                    if parsed is not None:
+                        doc.created_at = parsed
+                        doc.updated_at = parsed
+                batch.append(doc)
+                if len(batch) >= 500:
+                    session.add_all(batch)
+                    session.commit()
+                    migrated += len(batch)
+                    batch = []
+            if batch:
+                session.add_all(batch)
+                session.commit()
+                migrated += len(batch)
+        # structured 延迟解析放在插入后（避免启动期逐行调用解析器的开销堆在事务里）
+        if migrated:
+            _fill_structured_for_generation_docs(engine)
+            logger.info(
+                "实体合一迁移: historyprompt %s 条已迁入 requirement_doc(generation)，原表保留作回滚备份",
+                migrated,
+            )
+    except Exception as e:  # noqa: BLE001 - 迁移失败不阻断启动
+        logger.warning("historyprompt → requirement_doc 迁移失败(忽略，下次启动重试): %s", e)
+
+
+def _fill_structured_for_generation_docs(engine, batch_size: int = 200):
+    """为 generation 来源且 structured 为空的 requirement_doc 补解析结构。失败静默。"""
+    try:
+        from sqlalchemy import text as _text
+        from app.services.requirement_doc import parse_markdown_to_items
+
+        with SqlSession(engine) as session:
+            rows = session.exec(
+                _text(
+                    "SELECT id, content_snapshot FROM requirement_doc "
+                    "WHERE source_type = 'generation' AND (structured = '[]' OR structured IS NULL) "
+                    "LIMIT :lim"
+                ).params(lim=batch_size)
+            ).all()
+            for doc_id, snap in rows:
+                items = [it.to_dict() for it in parse_markdown_to_items(snap or "")]
+                session.exec(
+                    _text(
+                        "UPDATE requirement_doc SET structured = :s WHERE id = :i"
+                    ),
+                    {"s": __import__("json").dumps(items, ensure_ascii=False), "i": doc_id},
+                )
+            session.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("补解析 generation 文档结构失败(忽略): %s", e)
+
+
+def _rebuild_retrieval_index(engine):
+    """把 requirement_doc 全量同步进 FTS5 检索索引。
+
+    索引是缓存，源表 requirement_doc（需求实体：登记文档 + 生成日志 + 手动录入）
+    才是唯一事实来源；启动时全量重建一次，保证存量需求立即可被检索召回。
+    任何失败都只告警，不阻断启动。
+    """
+    try:
+        from sqlalchemy import inspect, text
+
+        insp = inspect(engine)
+        if "requirement_doc" not in insp.get_table_names():
+            return
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT id, content_snapshot, module_id, user_id, session_id, created_at, source_type "
+                    "FROM requirement_doc "
+                    "WHERE source_type IN ('generation', 'manual', 'feishu')"
                 )
             ).fetchall()
         if not rows:
@@ -138,14 +282,11 @@ def _rebuild_retrieval_index(engine):
         if idx is None:
             logger.warning("检索索引不可用（FTS5 未启用），历史召回将降级为时间序")
             return
-        # 增量写入已经保证索引跟上源表；只有条目数不一致（首次启动/索引丢失）时才全量重建，
-        # 避免每次启动都做 O(N) 的全量清空重建。
-        if idx.indexed_count() == len(source):
-            logger.debug("检索索引已是最新（%d 条），跳过重建", len(source))
-            return
+        # 实体换源后 rowid 语义变化（historyprompt.id ≠ requirement_doc.id），
+        # 增量比对不再可靠 → 启动时恒全量重建（文本索引重建成本低）。
         count = idx.sync_from_source(source)
         if count:
-            logger.info("已重建检索索引：%d 条历史需求", count)
+            logger.info("已重建检索索引：%d 条需求(requirement_doc 源)", count)
     except Exception as exc:  # noqa: BLE001 - 索引重建失败不该阻断启动
         logger.warning("重建检索索引失败（已忽略，检索降级为时间序）: %s", exc)
 

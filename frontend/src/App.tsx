@@ -4,7 +4,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { Layout, Form, Tabs, Modal, Input, Button, Select, Popconfirm, Tooltip, message, FloatButton } from 'antd';
 import { PlusOutlined, MinusOutlined, EditOutlined, GlobalOutlined, InfoCircleOutlined, KeyOutlined, AppstoreOutlined, MessageOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
-import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters, TestCaseExecutionLog } from './types';
+import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi, configApi } from './services/api';
 import { useEnvironments } from './hooks/useEnvironments';
 import HomePage from './components/HomePage';
@@ -22,6 +22,7 @@ import VariableAssistant from './components/VariableAssistant';
 import ChatAssistant from './components/chat/ChatAssistant';
 import MockProxyAssistant from './components/mock/MockProxyAssistant';
 import UIAutomationPlatform from './components/ui-automation/UIAutomationPlatform';
+import RequirementManager from './components/requirement/RequirementManager';
 import './components/ui-automation/UIAutomationPlatform.css';
 import DeleteSessionModal from './components/modals/DeleteSessionModal';
 import DeleteTestcaseModal from './components/modals/DeleteTestcaseModal';
@@ -34,7 +35,6 @@ import SkillsHubModal from './components/modals/SkillsHubModal';
 import RagViewer from './components/rag/RagViewer';
 import MoveTestcaseModal from './components/modals/MoveTestcaseModal';
 import AddTestcaseModal from './components/modals/AddTestcaseModal';
-import TestCaseExecutionLogModal from './components/modals/TestCaseExecutionLogModal';
 import UIExecutionModal from './components/modals/UIExecutionModal';
 import ModuleSidebar from './components/ModuleSidebar';
 import { Permission, hasPermission } from './services/permissions';
@@ -81,10 +81,10 @@ const showMessage = (
 const App: React.FC = () => {
 
   // 导航状态管理
-  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation'>(() => {
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation' | 'requirement'>(() => {
     // 从localStorage加载上次的平台状态
     const savedPlatform = localStorage.getItem('currentPlatform');
-    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation') || 'home';
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation' | 'requirement') || 'home';
   });
   const canManageSettings = hasPermission(Permission.CONFIG_MANAGE);
   const canManageMcp = hasPermission(Permission.MCP_MANAGE);
@@ -141,10 +141,6 @@ const App: React.FC = () => {
     handleConfirmEditEnvironment,
   } = useEnvironments(canManageGlobalParams);
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
-  const [executionLogTestcase, setExecutionLogTestcase] = useState<TestCase | null>(null);
-  const [executionLogs, setExecutionLogs] = useState<TestCaseExecutionLog[]>([]);
-  const [executionLogsLoading, setExecutionLogsLoading] = useState(false);
-  const [isExecutionLogModalVisible, setIsExecutionLogModalVisible] = useState(false);
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [returnToViewAfterEdit, setReturnToViewAfterEdit] = useState(false);
@@ -157,7 +153,6 @@ const App: React.FC = () => {
   // 图片状态管理
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   // 历史提示词刷新key
-  const [historyPromptRefreshKey, setHistoryPromptRefreshKey] = useState(0);
 
   // 创建表单实例
   const [form] = Form.useForm();
@@ -833,127 +828,6 @@ const App: React.FC = () => {
 
   // 打开批量移动测试用例对话框
 
-  const loadExecutionLogs = async (testcase: TestCase, openModal = true) => {
-    if (!selectedSession) return;
-    if (openModal) {
-      setExecutionLogTestcase(testcase);
-      setIsExecutionLogModalVisible(true);
-    }
-    setExecutionLogsLoading(true);
-    try {
-      const res = await testcaseApi.getExecutionLogs(selectedSession.id, testcase.id);
-      if (res.code === 200 && res.data) {
-        setExecutionLogs(res.data);
-      } else {
-        setExecutionLogs([]);
-        showMessage('error', '加载执行日志失败', res.message || '加载执行日志失败');
-      }
-    } catch (error: any) {
-      setExecutionLogs([]);
-      showMessage('error', '加载执行日志失败', error?.response?.data?.message || error.message || '加载执行日志失败');
-    } finally {
-      setExecutionLogsLoading(false);
-    }
-  };
-
-  const handleViewExecutionLogs = (testcase: TestCase) => {
-    loadExecutionLogs(testcase, true);
-  };
-
-  const handleInferTestcaseDependencies = async (testcase: TestCase) => {
-    if (!selectedSession) return;
-    try {
-      const res = await testcaseApi.inferDependencies(selectedSession.id, testcase.id);
-      if (res.code === 200) {
-        const data = res.data as { added_post_actions?: number; replaced_fields?: number; extra_endpoint_ids?: number[] } || {};
-        showMessage('success', '依赖推断完成', `发现 ${data.extra_endpoint_ids?.length || 0} 个依赖接口`);
-        loadTestcases(selectedSession.id, filters);
-      } else {
-        showMessage('error', '依赖推断失败', res.message || '依赖推断失败');
-      }
-    } catch (error: any) {
-      showMessage('error', '依赖推断失败', error?.response?.data?.message || error.message || '依赖推断失败');
-    }
-  };
-
-  // 执行测试用例 API 执行
-  const handleApiExecuteTestcase = async (testcase: TestCase) => {
-    if (!selectedSession) return;
-    // Set executing state in the table through a callback approach
-    showMessage('info', '正在执行...', `正在执行测试用例: ${testcase.case_name}`);
-    try {
-      const res = await testcaseApi.executeTestcase(selectedSession.id, testcase.id);
-      if (res.code === 200 && res.data) {
-        const result = res.data;
-        if (result.passed) {
-          showMessage('success', '执行成功', `测试用例 ${testcase.case_name} 已执行通过`);
-        } else {
-          // 构建详细的失败信息
-          const stepResult = result.result?.step;
-          let detailMessage = `测试用例 ${testcase.case_name} 执行未通过`;
-
-          if (stepResult) {
-            // 显示断言失败详情
-            const failedAssertions = (stepResult.assertions || []).filter((a: any) => !a.passed);
-            if (failedAssertions.length > 0) {
-              const assertionDetails = failedAssertions.map((a: any) =>
-                `${a.type}: 期望 ${a.expected}, 实际 ${a.actual}`
-              ).join('\n');
-              detailMessage += `\n\n断言失败:\n${assertionDetails}`;
-            }
-
-            // 显示请求和响应信息
-            if (stepResult.request) {
-              detailMessage += `\n\n请求: ${stepResult.request.method} ${stepResult.request.url}`;
-              if (stepResult.request.body) {
-                const reqBodyStr = typeof stepResult.request.body === 'string'
-                  ? stepResult.request.body
-                  : JSON.stringify(stepResult.request.body, null, 2);
-                detailMessage += `\n请求体: ${reqBodyStr.substring(0, 500)}${reqBodyStr.length > 500 ? '...' : ''}`;
-              }
-            }
-            if (stepResult.response) {
-              detailMessage += `\n响应状态码: ${stepResult.response.status_code}`;
-              if (stepResult.response.body) {
-                const bodyStr = typeof stepResult.response.body === 'string'
-                  ? stepResult.response.body
-                  : JSON.stringify(stepResult.response.body, null, 2);
-                detailMessage += `\n响应内容: ${bodyStr.substring(0, 500)}${bodyStr.length > 500 ? '...' : ''}`;
-              }
-            }
-
-            // 显示错误详情
-            if (stepResult.detail) {
-              detailMessage += `\n\n错误详情: ${stepResult.detail}`;
-            }
-          }
-
-          // 使用 Modal 显示详细错误信息
-          Modal.error({
-            title: '测试用例执行失败',
-            content: (
-              <div style={{ whiteSpace: 'pre-wrap', maxHeight: '60vh', overflow: 'auto' }}>
-                {detailMessage}
-              </div>
-            ),
-            width: 600,
-            okText: '确定',
-          });
-          await loadExecutionLogs(testcase, true);
-        }
-        // 重新加载测试用例
-        loadTestcases(selectedSession.id, filters);
-        if (result.passed && isExecutionLogModalVisible && executionLogTestcase?.id === testcase.id) {
-          await loadExecutionLogs(testcase, false);
-        }
-      } else {
-        showMessage('error', '执行失败', res.message || '执行失败');
-      }
-    } catch (error: any) {
-      showMessage('error', '执行失败', error?.response?.data?.message || error.message || '执行失败');
-    }
-  };
-
   // UI 执行 - 选中目标用例并打开执行弹窗
   const [uiExecTarget, setUiExecTarget] = useState<TestCase | null>(null);
   const handleUiExecuteTestcase = (testcase: TestCase) => setUiExecTarget(testcase);
@@ -1000,9 +874,6 @@ const App: React.FC = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
-  const [selectedApiEndpointId, setSelectedApiEndpointId] = useState<number[]>([]);
-  const [selectedApiProjectId, setSelectedApiProjectId] = useState<number | null>(null);
-  const [apiEndpointOverrides, setApiEndpointOverrides] = useState<Record<number, { body?: string; headers?: any[]; parameters?: any[] }>>({});
   const [settingForm] = Form.useForm();
   // 设置类型：api或ollama，单选
   const [settingType, setSettingType] = useState<'api' | 'ollama'>('api');
@@ -1207,18 +1078,13 @@ const App: React.FC = () => {
           modelConfig,
           imageBase64, // 传递图片base64数据
           selectedModule === 0 ? undefined : Number(selectedModule), // 传递模块ID
-          selectedSkills.length > 0 ? selectedSkills : undefined,
-          selectedApiEndpointId.length > 0 ? selectedApiEndpointId : undefined,
-          selectedApiProjectId,
-          Object.keys(apiEndpointOverrides).length > 0 ? apiEndpointOverrides : null
+          selectedSkills.length > 0 ? selectedSkills : undefined
         );
 
         if (response.code === 200) {
           loadTestcases(selectedSession.id);
           setRequirement('');
           setImageBase64(null); // 清空图片数据
-          // 刷新历史提示词列表
-          setHistoryPromptRefreshKey(prev => prev + 1);
           showMessage('success', '生成成功', '测试用例已成功生成');
         } else {
           showMessage('error', '生成失败', response.message || '生成测试用例失败，请重试');
@@ -1242,7 +1108,6 @@ const App: React.FC = () => {
       const detail = (e as CustomEvent).detail;
       if (detail?.sessionId && selectedSession && selectedSession.id === detail.sessionId) {
         loadTestcases(selectedSession.id, filters);
-        setHistoryPromptRefreshKey(prev => prev + 1);
       }
     };
 
@@ -1320,6 +1185,23 @@ const App: React.FC = () => {
     setCurrentPlatform('ui-automation');
     localStorage.setItem('currentPlatform', 'ui-automation');
   };
+
+  const navigateToRequirement = () => {
+    setCurrentPlatform('requirement');
+    localStorage.setItem('currentPlatform', 'requirement');
+  };
+
+  // 需求管理 → AI 用例平台直达：选中会话并打开「用例结构」页签
+  const navigateToAiStructure = (sessionId: number) => {
+    setCurrentPlatform('ai-testcase');
+    localStorage.setItem('currentPlatform', 'ai-testcase');
+    localStorage.setItem(STORAGE_KEYS.selectedSessionId, String(sessionId));
+    const target = sessions.find((s) => s.id === sessionId);
+    if (target) {
+      handleSelectSession(target);
+      setActiveTab('structure');
+    }
+  };
   
 
   return (
@@ -1359,6 +1241,7 @@ const App: React.FC = () => {
           onNavigateToScheduledTask={navigateToScheduledTask}
           onNavigateToMock={navigateToMock}
           onNavigateToUiAutomation={navigateToUiAutomation}
+          onNavigateToRequirement={navigateToRequirement}
           canAccessScheduledTask={canAccessScheduledTask}
           canAccessMock={canAccessMock}
           canAccessUiAutomation={canAccessUiAutomation}
@@ -1422,6 +1305,19 @@ const App: React.FC = () => {
             canManageGlobalParams={canManageGlobalParams}
           />
           <UIAutomationPlatform />
+        </div>
+      ) : currentPlatform === 'requirement' ? (
+        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <SubPlatformHeader
+            title="需求管理"
+            onBackToHome={navigateToHome}
+            environmentName={getCurrentEnvironment()?.name}
+            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
+            canManageGlobalParams={canManageGlobalParams}
+          />
+          <div style={{ flex: 1, minHeight: 0, padding: 'var(--space-4)' }}>
+            <RequirementManager sessions={sessions} onNavigateToStructure={navigateToAiStructure} />
+          </div>
         </div>
       ) : (
         <Layout style={{ height: '100vh', overflow: 'hidden' }}>
@@ -1507,9 +1403,6 @@ const App: React.FC = () => {
                                 onBatchMove={handleBatchMoveTestcase}
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
-                                onApiExecute={handleApiExecuteTestcase}
-                                onViewExecutionLogs={handleViewExecutionLogs}
-                                onInferDependencies={handleInferTestcaseDependencies}
                                 onUiExecute={handleUiExecuteTestcase}
                               />
                             ),
@@ -1543,13 +1436,6 @@ const App: React.FC = () => {
                                 requirement={requirement}
                                 loading={loading}
                                 onRequirementChange={setRequirement}
-                                historyPromptRefreshKey={historyPromptRefreshKey}
-                                selectedApiEndpointId={selectedApiEndpointId}
-                                onApiEndpointChange={(ids: number[]) => setSelectedApiEndpointId(ids)}
-                                selectedApiProjectId={selectedApiProjectId}
-                                onApiProjectChange={setSelectedApiProjectId}
-                                apiEndpointOverrides={apiEndpointOverrides}
-                                onApiEndpointOverridesChange={setApiEndpointOverrides}
                                 onRequireConfig={() => {
                                   setIsSettingModalVisible(true);
                                 }}
@@ -1598,9 +1484,6 @@ const App: React.FC = () => {
                                 onBatchMove={handleBatchMoveTestcase}
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
-                                onApiExecute={handleApiExecuteTestcase}
-                                onViewExecutionLogs={handleViewExecutionLogs}
-                                onInferDependencies={handleInferTestcaseDependencies}
                                 onUiExecute={handleUiExecuteTestcase}
                               />
                             ),
@@ -1651,17 +1534,6 @@ const App: React.FC = () => {
             onDelete={handleDeleteTestcaseFromView}
             onMarkPassed={(testcase) => updateTestcaseExecutionStatus(testcase, TestCaseStatus.PASSED)}
             onMarkFailed={(testcase, bugId) => updateTestcaseExecutionStatus(testcase, TestCaseStatus.FAILED, bugId)}
-          />
-          <TestCaseExecutionLogModal
-            visible={isExecutionLogModalVisible}
-            testcase={executionLogTestcase}
-            logs={executionLogs}
-            loading={executionLogsLoading}
-            onCancel={() => {
-              setIsExecutionLogModalVisible(false);
-              setExecutionLogTestcase(null);
-              setExecutionLogs([]);
-            }}
           />
           <CompleteTestcaseModal
             visible={confirmCompleteTestcaseVisible}

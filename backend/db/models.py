@@ -182,6 +182,9 @@ class RequirementPoint(BaseModel, table=True):
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
     api_project_id: Optional[int] = Field(default=None, description="关联的 API 项目ID（接口测试用，从需求点级联到测试点/用例）")
     api_endpoint_ids: Optional[str] = Field(default=None, description="关联的 API Endpoint ID 列表（逗号分隔，接口测试用）")
+    # 需求管理来源标记：需求点由需求文档条目「转为需求点」产生时记录来源，用于覆盖计算与追溯
+    doc_id: Optional[int] = Field(default=None, index=True, description="来源需求文档ID（requirement_doc.id，非文档来源为空）")
+    item_key: Optional[str] = Field(default=None, index=True, description="来源需求条目key（requirement_doc.structured[].key）")
 
     # 关系
     session: Optional[Session] = Relationship(back_populates="requirement_points")
@@ -490,3 +493,55 @@ class NavLink(BaseModel, table=True):
     open_type: str = Field(default="blank", max_length=16, description="打开方式：blank=新标签页，self=当前页")
     sort_order: int = Field(default=0, description="排序权重，越小越靠前")
     category: Optional["NavCategory"] = Relationship(back_populates="links")
+
+
+# ===== 需求管理（飞书需求文档 → 结构化需求 → 测试用例联动） =====
+class RequirementDoc(BaseModel, table=True):
+    """需求文档：记录飞书文档链接与最新解析后的结构化需求内容。
+
+    content_snapshot 保存最近一次同步/编辑成功解析后的完整 Markdown 正文；
+    structured 保存按章节+条目拆分的结构化需求数据（见
+    app.services.requirement_doc.RequirementDocStructured）。
+    """
+    __tablename__ = "requirement_doc"
+    title: str = Field(default="", max_length=256, description="需求名称（默认取文档首个标题，可编辑）")
+    url: str = Field(default="", max_length=1024, index=True, description="飞书文档链接（wiki 或 docx）")
+    feishu_token: str = Field(default="", max_length=128, index=True, description="飞书文档 token（由链接解析）")
+    content_snapshot: str = Field(default="", description="最近一次同步的文档 Markdown 正文快照")
+    structured: List[dict] = Field(default_factory=list, sa_type=JSON, description="结构化需求数据：[{key, section, content, order_index}]")
+    session_id: Optional[int] = Field(default=None, index=True, description="关联的测试用例会话ID")
+    version: int = Field(default=0, description="当前内容版本号，每次内容变更 +1")
+    module_id: Optional[int] = Field(default=None, index=True, description="所属模块ID（generation 来源继承生成时的模块）")
+    source_type: str = Field(default="feishu", max_length=32, index=False, description="来源：feishu=登记文档，generation=生成自动保存，manual=手动录入文本")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
+class RequirementRevision(BaseModel, table=True):
+    """需求变更历史：每次内容更新一条记录，differences 为逐条差异明细。
+
+    differences 由 app.services.requirement_doc.compute_diff 生成：
+    [{type: added|modified|removed, key, section, before, after}]。
+    """
+    __tablename__ = "requirement_revision"
+    doc_id: int = Field(default=0, foreign_key="requirement_doc.id", index=True, description="所属需求文档ID")
+    version: int = Field(default=0, description="变更后的版本号")
+    source: str = Field(default="manual", max_length=32, description="变更来源：sync=飞书同步，manual=手动编辑，apply_cases=用例联动回写")
+    summary: str = Field(default="", max_length=512, description="变更摘要")
+    differences: List[dict] = Field(default_factory=list, sa_type=JSON, description="差异明细列表")
+    content_snapshot: str = Field(default="", description="变更后的完整正文快照")
+    affected_case_ids: List[int] = Field(default_factory=list, sa_type=JSON, description="受影响的测试用例ID列表")
+    user_id: Optional[str] = Field(default=None, index=True, description="操作用户ID（Keycloak sub）")
+
+
+class RequirementTestcaseLink(BaseModel, table=True):
+    """结构化需求条目与测试用例的关联映射，用于变更影响分析。
+
+    item_key 为结构化需求条目的 key（同步/重新解析时内容未变的条目保持
+    key 稳定，内容变化、删除、新增的条目会换新 key，因此历史关联自动失效）。
+    """
+    __tablename__ = "requirement_testcase_link"
+    doc_id: int = Field(default=0, foreign_key="requirement_doc.id", index=True, description="需求文档ID")
+    item_key: str = Field(default="", max_length=64, index=True, description="结构化需求条目key")
+    testcase_id: int = Field(default=0, index=True, description="关联的测试用例ID")
+    session_id: Optional[int] = Field(default=None, index=True, description="测试用例所在会话ID")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")

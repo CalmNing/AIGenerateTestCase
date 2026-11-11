@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Table,
   Button,
@@ -11,9 +11,10 @@ import {
   Input,
   Select,
   InputNumber,
-  Radio
+  Radio,
+  Space
 } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, CaretRightOutlined, PlayCircleOutlined, PauseCircleOutlined, CopyOutlined } from '@ant-design/icons';
 import { scheduledTaskApi, savedRequestApi, globalParameterApi } from '../services/api';
 import type { ScheduledTask } from '../types';
 import FileUpload, { UploadedFileResult } from './FileUpload';
@@ -195,6 +196,94 @@ const ScheduledTaskManager: React.FC = () => {
     setSelectedRequestToAdd(undefined);
     setIsFormVisible(true);
   };
+
+  // ===== 批量操作（复选框选择后：批量执行 / 批量启用 / 批量禁用 / 批量复制） =====
+
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+
+  const selectedIds = useMemo(
+    () => selectedRowKeys.map(k => Number(k)).filter(n => Number.isFinite(n)),
+    [selectedRowKeys],
+  );
+
+  const selectedTasks = useMemo(
+    () => tasks.filter(t => selectedIds.includes(t.id as number)),
+    [tasks, selectedIds],
+  );
+
+  const clearSelection = () => setSelectedRowKeys([]);
+
+  /** 串行执行一个批量动作，汇总成功/失败数；action 返回是否成功。 */
+  const runBatch = async (
+    label: string,
+    action: (task: ScheduledTask) => Promise<boolean>,
+    doneMsg: (ok: number, fail: number) => string,
+  ) => {
+    if (selectedTasks.length === 0) {
+      message.warning('请先勾选任务');
+      return;
+    }
+    setBatchRunning(true);
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (const task of selectedTasks) {
+        try {
+          if (await action(task)) ok += 1;
+          else fail += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      if (fail === 0) message.success(doneMsg(ok, fail));
+      else if (ok === 0) message.error(`${label}全部失败（${fail} 条）`);
+      else message.warning(`${label}完成：成功 ${ok} 条，失败 ${fail} 条`);
+      clearSelection();
+      await fetchTasks();
+    } finally {
+      setBatchRunning(false);
+    }
+  };
+
+  const handleBatchRun = () => runBatch(
+    '批量执行',
+    async (task) => {
+      const response = await scheduledTaskApi.runTask(task.id as number);
+      return response.code === 200;
+    },
+    (ok) => `已触发 ${ok} 个任务执行`,
+  );
+
+  const handleBatchToggle = (enable: boolean) => runBatch(
+    enable ? '批量启用' : '批量禁用',
+    async (task) => {
+      if (task.enabled === enable) return true; // 目标状态一致，视为成功
+      const response = await scheduledTaskApi.updateTask(task.id as number, {
+        ...task,
+        enabled: enable,
+      });
+      return response.code === 200;
+    },
+    (ok) => `已${enable ? '启用' : '禁用'} ${ok} 个任务`,
+  );
+
+  const handleBatchCopy = () => runBatch(
+    '批量复制',
+    async (task) => {
+      const copied = {
+        ...task,
+        id: undefined,
+        name: `${task.name} (复制)`,
+        enabled: false,
+        last_run_at: null,
+        last_run_result: null,
+      } as unknown as Parameters<typeof scheduledTaskApi.createTask>[0];
+      const response = await scheduledTaskApi.createTask(copied);
+      return response.code === 200;
+    },
+    (ok) => `已复制 ${ok} 个任务（默认禁用，可编辑后启用）`,
+  );
 
   const handleOpenEdit = (task: ScheduledTask) => {
     setEditingTask(task);
@@ -392,6 +481,62 @@ const ScheduledTaskManager: React.FC = () => {
           <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
             {tasks.filter(t => t.enabled).length}/{tasks.length} 运行中
           </span>
+          {selectedIds.length > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--color-primary)', fontWeight: 500 }}>
+              已选 {selectedIds.length} 项
+            </span>
+          )}
+          <Space size={4} wrap>
+            <Popconfirm
+              title="批量执行确认"
+              description="将立即触发所选任务的执行（每个任务独立异步执行）。"
+              onConfirm={handleBatchRun}
+              okText="执行"
+              cancelText="取消"
+              disabled={selectedIds.length === 0}
+            >
+              <Button
+                size="small"
+                type="primary"
+                ghost
+                icon={<CaretRightOutlined />}
+                loading={batchRunning}
+                disabled={selectedIds.length === 0}
+              >
+                批量执行
+              </Button>
+            </Popconfirm>
+            <Button
+              size="small"
+              icon={<PlayCircleOutlined />}
+              loading={batchRunning}
+              disabled={selectedIds.length === 0}
+              onClick={() => handleBatchToggle(true)}
+            >
+              批量启用
+            </Button>
+            <Button
+              size="small"
+              icon={<PauseCircleOutlined />}
+              loading={batchRunning}
+              disabled={selectedIds.length === 0}
+              onClick={() => handleBatchToggle(false)}
+            >
+              批量禁用
+            </Button>
+            <Button
+              size="small"
+              icon={<CopyOutlined />}
+              loading={batchRunning}
+              disabled={selectedIds.length === 0}
+              onClick={handleBatchCopy}
+            >
+              批量复制
+            </Button>
+            {selectedIds.length > 0 && (
+              <Button size="small" type="text" onClick={clearSelection}>取消选择</Button>
+            )}
+          </Space>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleOpenCreate}>创建定时任务</Button>
         </div>
 
@@ -403,6 +548,11 @@ const ScheduledTaskManager: React.FC = () => {
             loading={loading}
             size="small"
             rowClassName={(record) => record.enabled ? '' : 'stm-row-disabled'}
+            rowSelection={{
+              selectedRowKeys,
+              onChange: (keys) => setSelectedRowKeys(keys),
+              selections: true,
+            }}
             pagination={{
               pageSize: 15,
               size: 'small',

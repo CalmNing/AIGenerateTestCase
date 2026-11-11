@@ -7,8 +7,6 @@ import {
   ApiOutlined,
   DragOutlined,
   ExclamationCircleOutlined,
-  HistoryOutlined,
-  BranchesOutlined,
   SafetyCertificateOutlined,
   ChromeOutlined,
   StopOutlined,
@@ -27,9 +25,6 @@ interface TestCaseTableProps {
   onDelete: (id: number) => void;
   onBatchDelete: (ids: number[]) => void;
   onMove: (testcase: TestCase) => void;
-  onApiExecute?: (testcase: TestCase) => void;
-  onViewExecutionLogs?: (testcase: TestCase) => void;
-  onInferDependencies?: (testcase: TestCase) => void;
   onValidate?: (testcase: TestCase) => void;
   onUiExecute?: (testcase: TestCase) => void;
   onReject?: (testcase: TestCase) => void;
@@ -68,9 +63,6 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
   onDelete: _onDelete,
   onBatchDelete,
   onMove,
-  onApiExecute,
-  onViewExecutionLogs,
-  onInferDependencies,
   onValidate,
   onUiExecute,
   onReject,
@@ -303,27 +295,6 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
               <CheckCircleOutlined />
             </button>
           </Tooltip>
-          {onApiExecute && record.api_endpoint_id && (
-            <Tooltip title="API 执行" placement="top">
-              <button className="tcm-action-btn tcm-action-btn--api" onClick={(event) => { stopRowClick(event); onApiExecute(record); }}>
-                <ApiOutlined />
-              </button>
-            </Tooltip>
-          )}
-          {onViewExecutionLogs && record.api_endpoint_id && (
-            <Tooltip title="执行日志" placement="top">
-              <button className="tcm-action-btn tcm-action-btn--log" onClick={(event) => { stopRowClick(event); onViewExecutionLogs(record); }}>
-                <HistoryOutlined />
-              </button>
-            </Tooltip>
-          )}
-          {onInferDependencies && record.api_endpoint_id && (
-            <Tooltip title="推断依赖" placement="top">
-              <button className="tcm-action-btn tcm-action-btn--infer" onClick={(event) => { stopRowClick(event); onInferDependencies(record); }}>
-                <BranchesOutlined />
-              </button>
-            </Tooltip>
-          )}
           {onValidate && record.api_endpoint_id && (
             <Tooltip title="验证（真实执行）" placement="top">
               <button className="tcm-action-btn tcm-action-btn--validate" onClick={(event) => { stopRowClick(event); onValidate!(record); }}>

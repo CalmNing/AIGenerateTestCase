@@ -50,7 +50,7 @@ def get_rag_stats(session: SessionDep, user: CurrentUser):
         rows = conn.execute(
             """
             SELECT f.rowid, f.content, m.created_at,
-                   CASE WHEN f.rowid >= 10000000 THEN 'example' ELSE 'history' END AS kind
+                   CASE WHEN f.rowid >= 10000000 THEN 'example' ELSE 'requirement' END AS kind
             FROM retrieval_fts f
             LEFT JOIN retrieval_meta m ON m.rowid = f.rowid
             ORDER BY (m.created_at IS NULL), m.created_at DESC, f.rowid DESC

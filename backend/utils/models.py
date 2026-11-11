@@ -170,3 +170,16 @@ class TestCaseDesignMethod(BaseModel):
 
     method: str
     description: str | None = None
+
+
+class CaseImpactSuggestion(BaseModel):
+    """需求变更影响分析：单条用例修改建议。"""
+
+    testcase_id: int = Field(..., description="受影响的测试用例ID")
+    suggestion: str = Field(default="", description="基于需求差异的修改建议")
+
+
+class CaseImpactSuggestionList(BaseModel):
+    """需求变更影响分析：批量用例修改建议。"""
+
+    suggestions: List[CaseImpactSuggestion] = Field(default_factory=list)

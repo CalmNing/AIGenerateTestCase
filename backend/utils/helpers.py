@@ -9,7 +9,6 @@ from typing import Any, Optional
 from langchain_core.callbacks import BaseCallbackHandler
 from sqlmodel import select, desc
 
-from db.models import HistoryPrompt
 from utils.history_prompt_cleaner import clean_history_prompt_content
 
 logger = logging.getLogger(__name__)
@@ -178,64 +177,21 @@ def _normalize_history_module_id(module_id) -> int | None:
         return None
 
 
-def _upsert_history_prompt(db_session, *, content: str | None, module_id, session_id: int, user_id: str | None = None) -> HistoryPrompt | None:
-    """Save one cleaned history prompt per request scope/content."""
-    cleaned_content = _clean_history_prompt_content(content)
-    if not cleaned_content or db_session is None:
-        return None
+def _upsert_history_prompt(db_session, *, content: str | None, module_id, session_id: int, user_id: str | None = None):
+    """实体合一后的统一入口（薄委托）。
 
-    normalized_module_id = _normalize_history_module_id(module_id)
-    filters = [
-        HistoryPrompt.content == cleaned_content,
-        HistoryPrompt.session_id == session_id,
-    ]
-    if normalized_module_id is None:
-        filters.append(HistoryPrompt.module_id.is_(None))
-    else:
-        filters.append(HistoryPrompt.module_id == normalized_module_id)
-    if user_id is None:
-        filters.append(HistoryPrompt.user_id.is_(None))
-    else:
-        filters.append(HistoryPrompt.user_id == user_id)
+    历史需求描述已并入需求管理实体：生成输入日志写入 requirement_doc
+    （source_type='generation'），HistoryPrompt 表停写（保留作回滚备份）。
+    """
+    from app.services.requirement_doc import upsert_generation_entry
 
-    existing = db_session.exec(select(HistoryPrompt).where(*filters)).first()
-    if existing:
-        # 已有记录也可能尚未进检索索引（索引是缓存，源表才是事实来源）→ 补一次
-        _index_history_prompt(history)
-        return existing
-
-    history = HistoryPrompt(
-        content=cleaned_content,
-        module_id=normalized_module_id,
+    return upsert_generation_entry(
+        db_session,
+        content=content,
+        module_id=module_id,
         session_id=session_id,
         user_id=user_id,
     )
-    db_session.add(history)
-    db_session.commit()
-    db_session.refresh(history)
-    # P2：写入即索引（增量），否则检索永远召不到新需求
-    _index_history_prompt(history)
-    return history
-
-
-def _index_history_prompt(history) -> None:
-    """把一条历史需求写入 FTS5 检索索引（失败静默忽略，不影响主流程）。"""
-    try:
-        from utils.retrieval import get_index
-
-        idx = get_index()
-        if idx is None:
-            return
-        idx.upsert(
-            row_id=history.id,
-            content=history.content or "",
-            module_id=history.module_id,
-            user_id=history.user_id,
-            session_id=history.session_id,
-            created_at=str(history.created_at) if history.created_at else None,
-        )
-    except Exception:  # noqa: BLE001 - 索引失败绝不能影响保存
-        logger.warning("写入检索索引失败（已忽略）", exc_info=True)
 
 
 def _repair_json(text: str) -> str:
@@ -808,17 +764,21 @@ def _build_history_context(
             logger.warning("历史相关性召回失败，回退时间序", exc_info=True)
             contents = []
 
-    # 2) 时间序兜底
+    # 2) 时间序兜底（源实体 = requirement_doc：登记文档 + 生成日志 + 手动录入）
     if not contents:
         try:
+            from db.models import RequirementDoc
             prompts = db_session.exec(
-                select(HistoryPrompt.content)
-                .where(HistoryPrompt.module_id == module_id)
-                .order_by(desc(HistoryPrompt.created_at))
+                select(RequirementDoc.content_snapshot)
+                .where(
+                    RequirementDoc.module_id == module_id,  # type: ignore[attr-defined]
+                    RequirementDoc.source_type.in_(["generation", "manual", "feishu"]),  # type: ignore[attr-defined]
+                )
+                .order_by(desc(RequirementDoc.updated_at))  # type: ignore[attr-defined]
                 .limit(_HISTORY_PROMPT_LIMIT)
             ).all()
         except Exception:
-            logger.warning("查询历史提示词失败", exc_info=True)
+            logger.warning("查询历史需求失败", exc_info=True)
             return ""
         contents = list(prompts)
 

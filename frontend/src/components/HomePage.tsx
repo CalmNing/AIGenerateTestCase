@@ -8,6 +8,7 @@ import {
   RocketOutlined,
   AppstoreOutlined,
   DesktopOutlined,
+  FileTextOutlined,
   SettingOutlined,
   LinkOutlined,
   ArrowRightOutlined,
@@ -25,6 +26,7 @@ interface HomePageProps {
   onNavigateToScheduledTask: () => void;
   onNavigateToMock: () => void;
   onNavigateToUiAutomation?: () => void;
+  onNavigateToRequirement?: () => void;
   canAccessScheduledTask?: boolean;
   canAccessMock?: boolean;
   canAccessUiAutomation?: boolean;
@@ -49,6 +51,7 @@ const HomePage: React.FC<HomePageProps> = ({
   onNavigateToScheduledTask,
   onNavigateToMock,
   onNavigateToUiAutomation,
+  onNavigateToRequirement,
   canAccessScheduledTask = false,
   canAccessMock = false,
   canAccessUiAutomation = false,
@@ -64,6 +67,16 @@ const HomePage: React.FC<HomePageProps> = ({
       tint: '#eff6ff',
       icon: <RocketOutlined />,
       onClick: onNavigateToAI,
+    },
+    {
+      key: 'requirement',
+      title: '需求管理',
+      label: '需求同步',
+      summary: '飞书需求文档接入、结构化解析、变更差异追溯与测试用例联动更新。',
+      accent: '#059669',
+      tint: '#ecfdf5',
+      icon: <FileTextOutlined />,
+      onClick: onNavigateToRequirement ?? (() => {}),
     },
     {
       key: 'api-test',
