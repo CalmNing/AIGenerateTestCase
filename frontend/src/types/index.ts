@@ -873,3 +873,107 @@ export interface NavTreeNode {
   category: NavCategory;
   links: NavLink[];
 }
+
+// ===== 需求管理（飞书文档 → 结构化需求 → 测试用例联动） =====
+
+export interface RequirementItem {
+  key: string;
+  section: string;
+  title: string;
+  content: string;
+  order_index: number;
+  status: string;
+}
+
+export interface RequirementDiffEntry {
+  type: 'added' | 'modified' | 'removed';
+  key: string;
+  section: string;
+  before: string;
+  after: string;
+}
+
+export interface RequirementDoc {
+  id: number;
+  title: string;
+  url: string;
+  feishu_token: string;
+  content_snapshot: string;
+  structured: RequirementItem[];
+  session_id: number | null;
+  version: number;
+  module_id: number | null;
+  source_type: 'feishu' | 'generation' | 'manual';
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RequirementRevision {
+  id: number;
+  version: number;
+  source: string;
+  summary: string;
+  differences: RequirementDiffEntry[];
+  affected_case_ids: number[];
+  content_snapshot: string;
+  created_at: string | null;
+}
+
+export interface AffectedCase {
+  testcase_id: number;
+  session_id: number | null;
+  case_name: string;
+  matched_item_keys: string[];
+  keywords: string[];
+  suggestion: string;
+  suggestion_source?: string;
+}
+
+export interface DocLinkEntry {
+  id: number;
+  item_key: string;
+  testcase_id: number;
+  session_id: number | null;
+}
+
+export interface CaseUpdateResult {
+  testcase_id: number;
+  session_id?: number | null;
+  case_name?: string;
+  status: 'updated' | 'suggested' | 'failed';
+  error?: string;
+  updated?: {
+    case_name: string;
+    steps: Array<string | Record<string, unknown>>;
+    preset_conditions: string[];
+    expected_results: string[];
+    case_level?: number | null;
+  };
+}
+
+export interface ItemCoverage {
+  item_key: string;
+  section: string;
+  title: string;
+  coverage: 'uncovered' | 'pending' | 'covered';
+  linked_case_ids: number[];
+  case_details: Array<{ id: number; case_name: string; status: string; session_id: number | null }>;
+  case_status: { not_run: number; passed: number; failed: number; total: number };
+  requirement_point_ids: number[];
+}
+
+export interface CoverageSummary {
+  total: number;
+  covered: number;
+  pending: number;
+  uncovered: number;
+  items: ItemCoverage[];
+}
+
+export interface GenerateFromItemsResult {
+  generated: number;
+  linked: number;
+  case_ids: number[];
+  case_names: string[];
+  warnings: string[];
+}

@@ -26,9 +26,6 @@ interface TestCaseManagerProps {
   onBatchDelete: (ids: number[]) => void;
   onBatchMove: (ids: number[]) => void;
   onAdd: () => void;
-  onApiExecute?: (testcase: TestCase) => void;
-  onViewExecutionLogs?: (testcase: TestCase) => void;
-  onInferDependencies?: (testcase: TestCase) => void;
   onValidate?: (testcase: TestCase) => void;
   onUiExecute?: (testcase: TestCase) => void;
   onMove: (testcase: TestCase) => void;
@@ -79,9 +76,6 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   onDelete,
   onBatchDelete,
   onAdd,
-  onApiExecute,
-  onViewExecutionLogs,
-  onInferDependencies,
   onValidate,
   onUiExecute,
   onMove,
@@ -306,9 +300,6 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             onDelete={onDelete}
             onBatchDelete={onBatchDelete}
             onMove={onMove}
-            onApiExecute={onApiExecute}
-            onViewExecutionLogs={onViewExecutionLogs}
-            onInferDependencies={onInferDependencies}
             onValidate={onValidate ?? handleValidate}
             onUiExecute={onUiExecute}
             onReject={openReject}
