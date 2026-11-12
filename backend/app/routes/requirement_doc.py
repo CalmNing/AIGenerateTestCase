@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import select, desc
 
 from app.deps import SessionDep, CurrentUser
+from config import config_manager
 from db.models import RequirementDoc, RequirementRevision, RequirementTestcaseLink
 from utils.base_response import Response
 from app.services import requirement_doc as svc
@@ -260,13 +261,13 @@ async def update_content(doc_id: int, req: DocContentUpdateRequest, db: SessionD
     strict = svc.has_markdown_headings(req.content)
     outline_levels = None
     if not strict:
-        from config import config_manager
-        if config_manager.get_model_type() == "api" and config_manager.get_api_key():
+        model_cfg = _get_effective_model_config(db)
+        if model_cfg:
             outline_levels = await svc.parse_outline_levels_with_llm(
                 req.content,
-                config_manager.get_api_key(),
-                config_manager.get_api_base_url(),
-                config_manager.get_api_model(),
+                model_cfg["api_key"],
+                model_cfg["api_base_url"],
+                model_cfg["api_model"],
             )
     new_items = [it.to_dict() for it in svc.parse_markdown_to_items(
         req.content, outline_levels=outline_levels, disable_short_heading=strict)]
@@ -341,13 +342,13 @@ async def _sync_doc_content(db, doc: RequirementDoc, user_id: str, current_user,
     strict = svc.has_markdown_headings(content)
     outline_levels = None
     if not strict:
-        from config import config_manager
-        if config_manager.get_model_type() == "api" and config_manager.get_api_key():
+        model_cfg = _get_effective_model_config(db)
+        if model_cfg:
             outline_levels = await svc.parse_outline_levels_with_llm(
                 content,
-                config_manager.get_api_key(),
-                config_manager.get_api_base_url(),
-                config_manager.get_api_model(),
+                model_cfg["api_key"],
+                model_cfg["api_base_url"],
+                model_cfg["api_model"],
             )
     new_items = [it.to_dict() for it in svc.parse_markdown_to_items(
         content, outline_levels=outline_levels, disable_short_heading=strict)]
@@ -390,6 +391,29 @@ def _latest_diffs(db, doc_id: int) -> list[dict]:
     return (rev.differences if rev and isinstance(rev.differences, list) else [])
 
 
+def _get_effective_model_config(session) -> "dict | None":
+    """与生成链路同源的模型配置：系统配置（设置页）优先，回退 data/config.json。
+
+    仅 api 模式且配置了 api_key 时返回 {api_key, api_base_url, api_model}；
+    未配置或 ollama 模式返回 None（飞书图片解析/大纲判定随之跳过）。
+    """
+    from app.services.system_config import get_shared_system_config
+    shared = get_shared_system_config(session)
+    if shared and (shared.model_type or "api") == "api" and (shared.api_key or "").strip():
+        return {
+            "api_key": (shared.api_key or "").strip(),
+            "api_base_url": (shared.api_base_url or "").strip(),
+            "api_model": (shared.api_model or "").strip(),
+        }
+    if config_manager.get_model_type() == "api" and config_manager.get_api_key():
+        return {
+            "api_key": config_manager.get_api_key(),
+            "api_base_url": config_manager.get_api_base_url(),
+            "api_model": config_manager.get_api_model(),
+        }
+    return None
+
+
 async def _fetch_feishu_content(url: str, current_user) -> "str | None":
     """通过用户已启用的 MCP 配置读取飞书文档正文（与生成链路共用实现）。
 
@@ -400,16 +424,15 @@ async def _fetch_feishu_content(url: str, current_user) -> "str | None":
     from app.deps import get_db
     with next(get_db()) as session:
         mcp_configs = load_user_mcp_configs(session, current_user)
-    if not mcp_configs:
-        return None
-    from config import config_manager
-    if config_manager.get_model_type() == "api" and config_manager.get_api_key():
-        vision_config = {
-            "api_key": config_manager.get_api_key(),
-            "api_base_url": config_manager.get_api_base_url(),
-            "api_model": config_manager.get_api_model(),
+        model_cfg = _get_effective_model_config(session)
+    vision_config = (
+        {
+            "api_key": model_cfg["api_key"],
+            "api_base_url": model_cfg["api_base_url"],
+            "api_model": model_cfg["api_model"],
             "api_proxy_url": None,
         }
-    else:
-        vision_config = None
+        if model_cfg
+        else None
+    )
     return await fetch_feishu_document(url, mcp_configs, vision_config=vision_config)
