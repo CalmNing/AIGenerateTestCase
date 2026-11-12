@@ -802,15 +802,15 @@ async def execute_testcase(
 ):
     """执行测试用例关联的 API 接口并保存执行日志。"""
     testcase = session.get(TestCase, testcase_id)
-    if not testcase or int(testcase.session_id) != session_id or (testcase.user_id and testcase.user_id != user.user_id):
+    if not testcase or int(testcase.session_id) != session_id:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     # 优先使用关联的场景执行（保持参数同步）
     if testcase.scenario_id:
         scenario = session.get(ApiScenario, testcase.scenario_id)
-        if scenario and scenario.user_id == user.user_id:
+        if scenario:
             project = session.get(ApiProject, scenario.project_id)
-            if project and project.user_id == user.user_id:
+            if project:
                 try:
                     from app.services.api_test_tool import run_scenario
                     # 获取 session headers
@@ -891,7 +891,7 @@ def infer_testcase_dependencies(
 ):
     """推断测试用例的接口依赖关系，返回需要补全的接口 ID 列表。"""
     testcase = session.get(TestCase, testcase_id)
-    if not testcase or int(testcase.session_id) != session_id or (testcase.user_id and testcase.user_id != user.user_id):
+    if not testcase or int(testcase.session_id) != session_id:
         return Response(code=status.HTTP_404_NOT_FOUND, message="测试用例不存在")
 
     if not testcase.api_endpoint_id or not testcase.api_project_id:

@@ -15,7 +15,6 @@ import SessionSidebar from './components/SessionSidebar';
 import TestCaseGenerator from './components/test-case/TestCaseGenerator';
 import TestCaseManager from './components/test-case/TestCaseManager';
 import RequirementTestPointManager from './components/test-case/RequirementTestPointManager';
-import SessionApiConfig from './components/api/SessionApiConfig';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
 import ApiScenarioTestTool from './components/api/ApiScenarioTestTool';
 import VariableAssistant from './components/VariableAssistant';
@@ -64,7 +63,7 @@ const getRequirementDraftKey = (sessionId?: number, moduleId?: number | string):
 const INITIAL_PERSISTED_STATE = {
   selectedSessionId: getStoredNumber(STORAGE_KEYS.selectedSessionId),
   selectedModuleId: getStoredNumber(STORAGE_KEYS.selectedModuleId),
-  activeTab: localStorage.getItem(STORAGE_KEYS.activeTab) || 'generate',
+  activeTab: (localStorage.getItem(STORAGE_KEYS.activeTab) || 'generate').replace('api-config', 'manage'),
 };
 
 const showMessage = (
@@ -81,10 +80,10 @@ const showMessage = (
 const App: React.FC = () => {
 
   // 导航状态管理
-  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation' | 'requirement'>(() => {
+  const [currentPlatform, setCurrentPlatform] = useState<'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation'>(() => {
     // 从localStorage加载上次的平台状态
     const savedPlatform = localStorage.getItem('currentPlatform');
-    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation' | 'requirement') || 'home';
+    return (savedPlatform as 'home' | 'ai-testcase' | 'iot-mock' | 'api-test' | 'scheduled-task' | 'mock-api' | 'ui-automation') || 'home';
   });
   const canManageSettings = hasPermission(Permission.CONFIG_MANAGE);
   const canManageMcp = hasPermission(Permission.MCP_MANAGE);
@@ -1186,22 +1185,6 @@ const App: React.FC = () => {
     localStorage.setItem('currentPlatform', 'ui-automation');
   };
 
-  const navigateToRequirement = () => {
-    setCurrentPlatform('requirement');
-    localStorage.setItem('currentPlatform', 'requirement');
-  };
-
-  // 需求管理 → AI 用例平台直达：选中会话并打开「用例结构」页签
-  const navigateToAiStructure = (sessionId: number) => {
-    setCurrentPlatform('ai-testcase');
-    localStorage.setItem('currentPlatform', 'ai-testcase');
-    localStorage.setItem(STORAGE_KEYS.selectedSessionId, String(sessionId));
-    const target = sessions.find((s) => s.id === sessionId);
-    if (target) {
-      handleSelectSession(target);
-      setActiveTab('structure');
-    }
-  };
   
 
   return (
@@ -1241,7 +1224,6 @@ const App: React.FC = () => {
           onNavigateToScheduledTask={navigateToScheduledTask}
           onNavigateToMock={navigateToMock}
           onNavigateToUiAutomation={navigateToUiAutomation}
-          onNavigateToRequirement={navigateToRequirement}
           canAccessScheduledTask={canAccessScheduledTask}
           canAccessMock={canAccessMock}
           canAccessUiAutomation={canAccessUiAutomation}
@@ -1306,19 +1288,6 @@ const App: React.FC = () => {
           />
           <UIAutomationPlatform />
         </div>
-      ) : currentPlatform === 'requirement' ? (
-        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <SubPlatformHeader
-            title="需求管理"
-            onBackToHome={navigateToHome}
-            environmentName={getCurrentEnvironment()?.name}
-            onGlobalParamsOpen={() => canManageGlobalParams && setIsGlobalParamsModalVisible(true)}
-            canManageGlobalParams={canManageGlobalParams}
-          />
-          <div style={{ flex: 1, minHeight: 0, padding: 'var(--space-4)' }}>
-            <RequirementManager sessions={sessions} onNavigateToStructure={navigateToAiStructure} />
-          </div>
-        </div>
       ) : (
         <Layout style={{ height: '100vh', overflow: 'hidden' }}>
           <HeaderComponent
@@ -1371,7 +1340,19 @@ const App: React.FC = () => {
                   items={
                     selectedModule === 0
                       ? [
-                          // 只显示"管理测试用例"和"API调用配置"页签
+                          // 显示"需求管理"和"管理测试用例"页签
+                          {
+                            key: 'requirements',
+                            label: '需求管理',
+                            children: (
+                              <div style={{ height: '100%' }}>
+                                <RequirementManager
+                                  selectedSession={selectedSession}
+                                  selectedModule={selectedModule}
+                                />
+                              </div>
+                            ),
+                          },
                           {
                             key: 'manage',
                             label: '管理测试用例',
@@ -1407,24 +1388,21 @@ const App: React.FC = () => {
                               />
                             ),
                           },
-                          {
-                            key: 'api-config',
-                            label: 'API调用配置',
-                            children: (
-                              <SessionApiConfig
-                                selectedSession={selectedSession}
-                                onConfigUpdated={() => {
-                                  // 配置更新后的回调
-                                  if (selectedSession) {
-                                    loadTestcases(selectedSession.id, filters);
-                                  }
-                                }}
-                              />
-                            ),
-                          },
                         ]
                       : [
-                          // 显示三个页签
+                          // 显示四个页签
+                          {
+                            key: 'requirements',
+                            label: '需求管理',
+                            children: (
+                              <div style={{ height: '100%' }}>
+                                <RequirementManager
+                                  selectedSession={selectedSession}
+                                  selectedModule={selectedModule}
+                                />
+                              </div>
+                            ),
+                          },
                           {
                             key: 'generate',
                             label: '生成测试用例',
@@ -1485,21 +1463,6 @@ const App: React.FC = () => {
                                 onAdd={handleOpenAddTestcaseModal}
                                 onMove={handleMoveTestcase}
                                 onUiExecute={handleUiExecuteTestcase}
-                              />
-                            ),
-                          },
-                          {
-                            key: 'api-config',
-                            label: 'API调用配置',
-                            children: (
-                              <SessionApiConfig
-                                selectedSession={selectedSession}
-                                onConfigUpdated={() => {
-                                  // 配置更新后的回调
-                                  if (selectedSession) {
-                                    loadTestcases(selectedSession.id, filters);
-                                  }
-                                }}
                               />
                             ),
                           },

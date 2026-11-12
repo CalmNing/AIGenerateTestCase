@@ -122,13 +122,10 @@ async def chat(
     if not req.messages:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
-    # 从数据库获取用户配置（与前端设置页面一致）
+    # 从数据库获取系统配置（全局共享，不按用户隔离）
     try:
-        from sqlmodel import select
-        from db.models import SystemConfig
-        user_id = current_user.user_id if current_user else None
-        statement = select(SystemConfig).where(SystemConfig.user_id == user_id)
-        db_config = session.exec(statement).first()
+        from app.services.system_config import get_shared_system_config
+        db_config = get_shared_system_config(session)
         if db_config:
             api_key = db_config.api_key or ""
             api_base_url = db_config.api_base_url or "https://api.deepseek.com"

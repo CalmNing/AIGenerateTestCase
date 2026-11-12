@@ -183,3 +183,16 @@ class CaseImpactSuggestionList(BaseModel):
     """需求变更影响分析：批量用例修改建议。"""
 
     suggestions: List[CaseImpactSuggestion] = Field(default_factory=list)
+
+
+class OutlineLevelItem(BaseModel):
+    """文档大纲层级判定：单个候选标题行。"""
+
+    line_no: int = Field(..., description="原文行号（1-based）")
+    level: int = Field(..., description="层级深度（1=顶级章节）")
+
+
+class OutlineLevelList(BaseModel):
+    """文档大纲层级判定：候选标题行的层级映射。"""
+
+    levels: List[OutlineLevelItem] = Field(default_factory=list)

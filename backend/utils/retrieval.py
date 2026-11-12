@@ -11,7 +11,7 @@
    SQLite FTS5 的 unicode61 分词器不切中文，trigram 又要求 ≥3 字符，
    所以用"二元组预分词 + unicode61 索引"这一组合，兼顾中文召回与零新依赖。
 2. `FtsIndex`：对 `HistoryPrompt.content` 建 FTS5 虚表（外部内容表 + 同义词词典），
-   支持增量 upsert 与按 (module_id / user_id / session_id) 的过滤召回。
+   支持增量 upsert 与按 (module_id / session_id) 的过滤召回（数据全局共享，不再按 user_id 过滤）。
 3. `retrieve_similar()`：BM25 排序 + 确定性重排（命中词覆盖率、时间衰减），
    返回 top-k 供 prompt 注入。
 
@@ -372,8 +372,9 @@ class FtsIndex:
     ) -> list[RetrievedItem]:
         """按相关性召回。
 
-        过滤策略：`module_id` 命中优先；`user_id` / `session_id` 作为软过滤
+        过滤策略：`module_id` 命中优先；`session_id` 作为软过滤
         （同一条需求点在不同模块下的经验仍然有价值，不做硬排除）。
+        数据全局共享，不再按 user_id 过滤（参数保留仅为兼容）。
         """
         if not self.ensure_index():
             return []
@@ -397,9 +398,6 @@ class FtsIndex:
         if module_id is not None:
             where.append("m.module_id = ?")
             params.append(module_id)
-        if user_id:
-            where.append("(m.user_id = ? OR m.user_id IS NULL)")
-            params.append(user_id)
         if session_id is not None:
             where.append("(m.session_id = ? OR m.session_id IS NULL)")
             params.append(session_id)

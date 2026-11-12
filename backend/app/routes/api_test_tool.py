@@ -146,13 +146,11 @@ def match_endpoint(
     query = select(ApiEndpoint)
     if request.project_id:
         project = session.get(ApiProject, request.project_id)
-        if not project or project.user_id != user.user_id:
+        if not project:
             return Response(code=status.HTTP_404_NOT_FOUND, message="项目不存在")
         query = query.where(ApiEndpoint.project_id == request.project_id)
     else:
-        projects = session.exec(
-            select(ApiProject).where(ApiProject.user_id == user.user_id)
-        ).all()
+        projects = session.exec(select(ApiProject)).all()
         project_ids = [p.id for p in projects]
         if not project_ids:
             return Response(data={"matches": []})
@@ -185,7 +183,6 @@ def match_endpoint(
 def list_projects(session: SessionDep, user: CurrentUser):
     projects = session.exec(
         select(ApiProject)
-        .where(ApiProject.user_id == user.user_id)
         .order_by(ApiProject.updated_at.desc())
     ).all()
     return Response(data=projects)
@@ -194,7 +191,7 @@ def list_projects(session: SessionDep, user: CurrentUser):
 @router.put("/projects/{project_id}", response_model=Response[ApiProject])
 def update_project(project_id: int, project: ApiProject, session: SessionDep, user: CurrentUser):
     db_project = session.get(ApiProject, project_id)
-    if not db_project or db_project.user_id != user.user_id:
+    if not db_project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     data = project.model_dump(exclude_unset=True)
     data.pop("id", None)
@@ -235,7 +232,7 @@ def toggle_project_mock(project_id: int, request: ToggleProjectMockRequest, sess
     响应按接口文档的 response schema 实时生成。
     """
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
 
     if request.mock_prefix is not None:
@@ -250,7 +247,6 @@ def toggle_project_mock(project_id: int, request: ToggleProjectMockRequest, sess
         # 前缀不能与其它已开启项目冲突
         conflict = session.exec(
             select(ApiProject)
-            .where(ApiProject.user_id == user.user_id)
             .where(ApiProject.id != project_id)
             .where(ApiProject.mock_enabled == True)
             .where(ApiProject.mock_prefix == project.mock_prefix)
@@ -278,7 +274,7 @@ def toggle_project_mock(project_id: int, request: ToggleProjectMockRequest, sess
 @router.delete("/projects/{project_id}", response_model=Response)
 def delete_project(project_id: int, session: SessionDep, user: CurrentUser):
     db_project = session.get(ApiProject, project_id)
-    if not db_project or db_project.user_id != user.user_id:
+    if not db_project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     endpoints = session.exec(select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)).all()
     scenarios = session.exec(select(ApiScenario).where(ApiScenario.project_id == project_id)).all()
@@ -355,7 +351,7 @@ async def import_openapi(
 @router.post("/projects/{project_id}/sync", response_model=Response[dict])
 async def sync_openapi_project(project_id: int, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="Project not found")
     if project.source_type != "url" or not project.source_url:
         return Response(code=status.HTTP_400_BAD_REQUEST, message="Only URL imported projects can be synced")
@@ -378,7 +374,7 @@ async def sync_openapi_project(project_id: int, session: SessionDep, user: Curre
 @router.get("/projects/{project_id}/endpoints", response_model=Response[List[ApiEndpoint]])
 def list_endpoints(project_id: int, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     endpoints = session.exec(
         select(ApiEndpoint)
@@ -391,7 +387,7 @@ def list_endpoints(project_id: int, session: SessionDep, user: CurrentUser):
 @router.post("/projects/{project_id}/endpoints", response_model=Response[ApiEndpoint])
 def create_endpoint(project_id: int, endpoint: ApiEndpoint, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     endpoint.id = None
     endpoint.project_id = project_id
@@ -405,7 +401,7 @@ def create_endpoint(project_id: int, endpoint: ApiEndpoint, session: SessionDep,
 @router.put("/endpoints/{endpoint_id}", response_model=Response[ApiEndpoint])
 def update_endpoint(endpoint_id: int, endpoint: ApiEndpoint, session: SessionDep, user: CurrentUser):
     db_endpoint = session.get(ApiEndpoint, endpoint_id)
-    if not db_endpoint or db_endpoint.user_id != user.user_id:
+    if not db_endpoint:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口不存在")
     data = endpoint.model_dump(exclude_unset=True)
     for key in ("id", "created_at", "updated_at", "user_id"):
@@ -452,12 +448,11 @@ def _scenario_inference_step(step: dict, endpoint: ApiEndpoint | None) -> dict:
 @router.post("/projects/{project_id}/infer-dependencies", response_model=Response[dict])
 def infer_project_dependencies(project_id: int, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     endpoints = session.exec(
         select(ApiEndpoint)
         .where(ApiEndpoint.project_id == project_id)
-        .where(ApiEndpoint.user_id == user.user_id)
         .order_by(ApiEndpoint.id)
     ).all()
     steps = [_endpoint_inference_step(endpoint) for endpoint in endpoints]
@@ -472,14 +467,13 @@ def infer_project_dependencies(project_id: int, session: SessionDep, user: Curre
 @router.post("/scenarios/{scenario_id}/infer-dependencies", response_model=Response[dict])
 def infer_scenario_dependencies(scenario_id: int, session: SessionDep, user: CurrentUser):
     scenario = session.get(ApiScenario, scenario_id)
-    if not scenario or scenario.user_id != user.user_id:
+    if not scenario:
         return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
     endpoints = {
         endpoint.id: endpoint
         for endpoint in session.exec(
             select(ApiEndpoint)
             .where(ApiEndpoint.project_id == scenario.project_id)
-            .where(ApiEndpoint.user_id == user.user_id)
         ).all()
     }
     original_steps = []
@@ -512,7 +506,7 @@ def infer_scenario_dependencies(scenario_id: int, session: SessionDep, user: Cur
 @router.delete("/endpoints/{endpoint_id}", response_model=Response)
 def delete_endpoint(endpoint_id: int, session: SessionDep, user: CurrentUser):
     db_endpoint = session.get(ApiEndpoint, endpoint_id)
-    if not db_endpoint or db_endpoint.user_id != user.user_id:
+    if not db_endpoint:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口不存在")
     session.delete(db_endpoint)
     session.commit()
@@ -522,10 +516,10 @@ def delete_endpoint(endpoint_id: int, session: SessionDep, user: CurrentUser):
 @router.post("/endpoints/{endpoint_id}/run", response_model=Response[dict])
 async def run_api_endpoint(endpoint_id: int, request: RunEndpointRequest, session: SessionDep, user: CurrentUser):
     endpoint = session.get(ApiEndpoint, endpoint_id)
-    if not endpoint or endpoint.user_id != user.user_id:
+    if not endpoint:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口不存在")
     project = session.get(ApiProject, endpoint.project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     result = await run_endpoint(session, project, endpoint, request.model_dump(exclude_unset=True))
     return Response(data=result, message="接口调试完成")
@@ -534,7 +528,7 @@ async def run_api_endpoint(endpoint_id: int, request: RunEndpointRequest, sessio
 @router.post("/endpoints/{endpoint_id}/generate-body", response_model=Response[dict])
 async def generate_endpoint_body(endpoint_id: int, request: GenerateBodyRequest, session: SessionDep, user: CurrentUser):
     endpoint = session.get(ApiEndpoint, endpoint_id)
-    if not endpoint or endpoint.user_id != user.user_id:
+    if not endpoint:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口不存在")
     if not endpoint.request_schema:
         return Response(code=status.HTTP_400_BAD_REQUEST, message="当前接口没有可用的 request schema")
@@ -558,10 +552,10 @@ async def generate_endpoint_body(endpoint_id: int, request: GenerateBodyRequest,
 @router.post("/endpoints/{endpoint_id}/generate-scenario-tests", response_model=Response[ApiScenario])
 def generate_endpoint_scenario_tests(endpoint_id: int, session: SessionDep, user: CurrentUser):
     endpoint = session.get(ApiEndpoint, endpoint_id)
-    if not endpoint or endpoint.user_id != user.user_id:
+    if not endpoint:
         return Response(code=status.HTTP_404_NOT_FOUND, message="Endpoint not found")
     project = session.get(ApiProject, endpoint.project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="Project not found")
     scenario = create_unit_test_scenario(session, project, endpoint, user.user_id)
     return Response(data=scenario, message="Scenario tests generated")
@@ -570,7 +564,7 @@ def generate_endpoint_scenario_tests(endpoint_id: int, session: SessionDep, user
 @router.get("/projects/{project_id}/scenarios", response_model=Response[List[ApiScenario]])
 def list_scenarios(project_id: int, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     scenarios = session.exec(
         select(ApiScenario)
@@ -584,7 +578,7 @@ def list_scenarios(project_id: int, session: SessionDep, user: CurrentUser):
 def get_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
     """获取场景详情"""
     scenario = session.get(ApiScenario, scenario_id)
-    if not scenario or scenario.user_id != user.user_id:
+    if not scenario:
         return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
     return Response(data=scenario)
 
@@ -592,7 +586,7 @@ def get_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
 @router.post("/projects/{project_id}/scenarios", response_model=Response[ApiScenario])
 def create_scenario(project_id: int, scenario: ApiScenario, session: SessionDep, user: CurrentUser):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     scenario.id = None
     scenario.project_id = project_id
@@ -606,7 +600,7 @@ def create_scenario(project_id: int, scenario: ApiScenario, session: SessionDep,
 @router.put("/scenarios/{scenario_id}", response_model=Response[ApiScenario])
 def update_scenario(scenario_id: int, scenario: ApiScenario, session: SessionDep, user: CurrentUser):
     db_scenario = session.get(ApiScenario, scenario_id)
-    if not db_scenario or db_scenario.user_id != user.user_id:
+    if not db_scenario:
         return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
     data = scenario.model_dump(exclude_unset=True)
     for key in ("id", "created_at", "updated_at", "user_id"):
@@ -621,7 +615,7 @@ def update_scenario(scenario_id: int, scenario: ApiScenario, session: SessionDep
 @router.delete("/scenarios/{scenario_id}", response_model=Response)
 def delete_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
     db_scenario = session.get(ApiScenario, scenario_id)
-    if not db_scenario or db_scenario.user_id != user.user_id:
+    if not db_scenario:
         return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
     results = session.exec(select(ApiScenarioResult).where(ApiScenarioResult.scenario_id == scenario_id)).all()
     for item in results:
@@ -639,12 +633,11 @@ def list_scenario_results(
     limit: int = Query(MAX_SCENARIO_RESULT_RECORDS, ge=1, le=50),
 ):
     scenario = session.get(ApiScenario, scenario_id)
-    if not scenario or scenario.user_id != user.user_id:
+    if not scenario:
         return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
     results = session.exec(
         select(ApiScenarioResult)
         .where(ApiScenarioResult.scenario_id == scenario_id)
-        .where(ApiScenarioResult.user_id == user.user_id)
         .order_by(ApiScenarioResult.created_at.desc(), ApiScenarioResult.id.desc())
         .limit(limit)
     ).all()
@@ -659,7 +652,7 @@ async def run_api_scenarios_batch(
     user: CurrentUser,
 ):
     project = session.get(ApiProject, project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
 
     if not request.run_all and not request.scenario_ids:
@@ -668,7 +661,6 @@ async def run_api_scenarios_batch(
     query = (
         select(ApiScenario)
         .where(ApiScenario.project_id == project_id)
-        .where(ApiScenario.user_id == user.user_id)
         .order_by(ApiScenario.updated_at.desc(), ApiScenario.id.desc())
     )
     scenarios = session.exec(query).all()
@@ -681,7 +673,7 @@ async def run_api_scenarios_batch(
             missing_text = ", ".join(str(scenario_id) for scenario_id in missing_ids)
             return Response(
                 code=status.HTTP_400_BAD_REQUEST,
-                message=f"场景不存在或无权限: {missing_text}",
+                message=f"场景不存在: {missing_text}",
             )
         scenarios = [scenario for scenario in scenarios if scenario.id in requested_ids]
 
@@ -738,7 +730,6 @@ def _store_scenario_result(
     records = session.exec(
         select(ApiScenarioResult)
         .where(ApiScenarioResult.scenario_id == scenario.id)
-        .where(ApiScenarioResult.user_id == user_id)
         .order_by(ApiScenarioResult.created_at.desc(), ApiScenarioResult.id.desc())
     ).all()
     for old_record in records[MAX_SCENARIO_RESULT_RECORDS:]:
@@ -752,10 +743,10 @@ def _store_scenario_result(
 @router.post("/scenarios/{scenario_id}/run", response_model=Response[ApiScenarioResult])
 async def run_api_scenario(scenario_id: int, session: SessionDep, user: CurrentUser):
     scenario = session.get(ApiScenario, scenario_id)
-    if not scenario or scenario.user_id != user.user_id:
+    if not scenario:
         return Response(code=status.HTTP_404_NOT_FOUND, message="场景不存在")
     project = session.get(ApiProject, scenario.project_id)
-    if not project or project.user_id != user.user_id:
+    if not project:
         return Response(code=status.HTTP_404_NOT_FOUND, message="接口项目不存在")
     result = await run_scenario(session, scenario, project)
     record = _store_scenario_result(session, scenario, project, user.user_id, result)

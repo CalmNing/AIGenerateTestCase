@@ -1,4 +1,4 @@
-"""需求管理核心服务：结构化解析、差异计算、影响分析、用例联动文本块构建。
+"""需求管理核心服务：结构化解析（严格按标题等级）、差异计算。
 
 供 app.routes.requirement_doc 路由调用，全部为纯函数/无状态逻辑，
 不依赖网络（飞书读取在路由层完成），可离线单测。
@@ -6,9 +6,9 @@
 结构化模型：
 - 飞书文档 rawContent 返回纯文本（标题无 # 前缀、无表格线），
   Markdown 文档（含 # 标题、| 表格）同样支持；
+- 带标题标记的正文进入严格标题等级模式：仅标题行定义章节并按等级嵌套；
 - 解析结果为章节（heading 路径）+ 条目（非空文本块）两级结构；
-- 条目 key = 章节路径 + 内容 hash，内容不变则 key 稳定，
-  因此需求条目 ↔ 测试用例 的关联映射在重新解析后自动保持。
+- 条目 key = 章节路径 + 内容 hash，内容不变则 key 稳定。
 """
 import hashlib
 import logging
@@ -30,18 +30,6 @@ _CN_NUM_HEAD_RE = re.compile(
     r'[一二三四五六七八九十百]+\s*[^\d\s、.，。]{0,12}$|'
     r'\d+(?:\.\d+){0,4}+\.?\s*\S.*)$'
 )
-
-# 中文/字母数字分词（中文连续片段 + 英数词），用于需求文本 ↔ 用例文本的词元匹配
-_TOKEN_RE = re.compile(r'[\u4e00-\u9fff]+|[A-Za-z][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?')
-
-_STOPWORDS = {
-    "的", "了", "和", "与", "或", "在", "是", "为", "对", "从", "到", "中", "等", "需",
-    "支持", "用户", "系统", "页面", "进行", "可以", "能够", "并且", "然后", "当", "时",
-    "并", "该", "此", "其", "按", "被", "把", "请", "应", "将", "要求", "相关", "情况",
-    "数据", "信息", "内容", "操作", "使用", "如果", "则", "即", "如", "见", "同", "个",
-    "一", "二", "三", "点", "条", "项", "及", "且", "后", "前", "上", "下", "出", "入",
-}
-
 
 class RequirementItem:
     """一条结构化需求条目（章节下的一个文本块）。"""
@@ -97,14 +85,159 @@ def parse_feishu_token(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def parse_markdown_to_items(content: str) -> list[RequirementItem]:
+_ATTACH_HEADING_RE = re.compile(r'^#{0,6}\s*(文档图片|附件|附图|配图|截图)\s*[（(]', re.IGNORECASE)
+_ATTACH_IMAGE_HEADING_RE = re.compile(r'^#{1,6}\s*图片\s*\d+')
+_IMAGE_LINE_RE = re.compile(r'^(image\d*\.(png|jpe?g|gif|bmp|webp)|图片\d*\.png)$', re.IGNORECASE)
+
+# 短标题启发式的上限(与 parse 主循环保持一致)
+_SHORT_HEADING_MAX_LEN = 20
+
+
+def _candidate_outline_lines(content: str) -> list[dict]:
+    """抽出候选大纲行（短、无句末标点、非 image/表格/纯数字），供 LLM 判定层级。
+
+    返回 [{line_no(1-based 原文行号), text}]。
+    """
+    lines = content.replace("\r\n", "\n").split("\n")
+    candidates: list[dict] = []
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if not s or len(s) > _SHORT_HEADING_MAX_LEN:
+            continue
+        if _IMAGE_LINE_RE.match(s):
+            continue
+        if re.fullmatch(r'\d+(\.\d+)*', s):
+            continue
+        if re.search(r'[。！？；，、：]', s):
+            continue
+        if s.startswith("|") or s.startswith("#"):
+            continue
+        # 飞书编号标题由编号启发式处理，不进 LLM 判定池
+        if re.match(r'^(第[一二三四五六七八九十百0-9]+[章节篇部分]|[一二三四五六七八九十百]+[、.]|\d+(?:\.\d+){0,4}+\.?)', s):
+            continue
+        candidates.append({"line_no": i + 1, "text": s})
+    return candidates
+
+
+async def parse_outline_levels_with_llm(content: str, api_key: str, api_base_url: str,
+                                        api_model: str, api_proxy_url=None) -> "dict[int, int] | None":
+    """用 LLM 判定候选大纲行的层级（1-based 深度），失败返回 None（降级启发式）。
+
+    只发送候选行（非全文），成本可控；输出 {"line_no": level} 映射。
+    """
+    if not api_key:
+        return None
+    candidates = _candidate_outline_lines(content)
+    if len(candidates) < 2:
+        return None  # 候选太少，启发式足够
+
+    try:
+        from utils.llm_factory import build_chat_model
+        from utils.models import OutlineLevelList
+        from utils.model_utils import _structured_output_robust
+
+        cand_text = "\n".join(f"{c['line_no']}: {c['text']}" for c in candidates)
+        model = build_chat_model(api_key, api_base_url, api_model, api_proxy_url, max_tokens=4096)
+        result = await _structured_output_robust(model, OutlineLevelList, [
+            {"role": "system", "content": (
+                "你是文档结构分析专家。输入是从需求文档抽出的候选标题行（带行号），"
+                "请根据标题间的语义包含关系推断每行的层级深度（1=顶级章节，2=其子章节，以此类推）。"
+                "判断依据：标题的含义从属关系（如「待办」是「工作台」下的场景则层级更深）、"
+                "上下级包含词（如「撤回之后数据怎么显示」隶属于「撤回」）。"
+                "同级并列的标题层级相同。只输出 JSON。")},
+            {"role": "user", "content": (
+                "候选标题行：\n" + cand_text +
+                "\n\n请为每行输出层级深度（1 起始），JSON 数组格式：[{\"line_no\": 行号, \"level\": 层级}, ...]，"
+                "必须覆盖所有候选行。")},
+        ])
+        rows = None
+        if isinstance(result, OutlineLevelList):
+            rows = [{"line_no": r.line_no, "level": r.level} for r in result.levels]
+        elif isinstance(result, dict):
+            rows = result.get("levels") or []
+        if not rows:
+            return None
+
+        mapping: dict[int, int] = {}
+        for r in rows:
+            try:
+                ln = int(r.get("line_no"))
+                lv = int(r.get("level"))
+            except (TypeError, ValueError):
+                continue
+            if ln > 0 and 1 <= lv <= 6:
+                mapping[ln] = lv
+        # 覆盖率检查：至少覆盖 80% 候选行才算可用
+        if len(mapping) < int(len(candidates) * 0.8):
+            return None
+        return mapping
+    except Exception as e:
+        logger.warning("LLM 大纲层级判定失败（降级启发式）: %s", e)
+        return None
+
+
+def _strip_attachment_appendix(content: str) -> str:
+    """剥离文档尾部的附件附录（图片清单等），只保留正文需求内容。
+
+    飞书同步会在正文后追加 "## 文档图片（共 N 张…）" 附录块，其中只有图片
+    标题与 image.png 引用行，不携带任何需求语义；混进结构化条目会稀释覆盖视图。
+    """
+    lines = content.replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        s = line.strip()
+        if _ATTACH_HEADING_RE.match(s) or _ATTACH_IMAGE_HEADING_RE.match(s):
+            skipping = True
+            continue
+        if skipping:
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _is_image_reference(line: str) -> bool:
+    """裸图片引用行（image.png 等），不承载需求语义。"""
+    s = line.strip()
+    if not s or len(s) > 60:
+        return False
+    return bool(_IMAGE_LINE_RE.match(s))
+
+
+def has_markdown_headings(content: str) -> bool:
+    """正文是否携带 Markdown 标题标记（# 前缀行）。
+
+    飞书 blocks API 重建成功时，标题级别在 # 前缀里（飞书官方权威）。
+    此时解析必须严格按标题等级分类：仅 # 标题行定义章节并按等级嵌套，
+    编号/短标题启发式全部禁用，避免正文行被误抬为章节、打乱真实层级。
+    """
+    for line in (content or "").replace("\r\n", "\n").split("\n"):
+        if _MD_HEADING_RE.match(line.strip()):
+            return True
+    return False
+
+
+def parse_markdown_to_items(content: str, outline_levels: "dict[int, int] | None" = None,
+                            disable_short_heading: bool = False) -> list[RequirementItem]:
     """把飞书正文（rawContent 纯文本或 Markdown）解析为结构化需求条目。
 
     - Markdown # 标题 → 章节路径（按标题层级拼接，同级替换末段）；
+    - 严格标题等级模式（正文带 # 标题标记，或 disable_short_heading=True）：
+      仅 # 标题行定义章节并严格按标题等级嵌套（1/2/3…级对应章节路径深度），
+      编号/短标题启发式全部禁用——正文行（含"对我司而言/知识范围"等短行）
+      不再被抬为章节，全部归属其上方最近的标题章节；
     - 飞书 rawContent 纯文本使用中文编号启发式识别章节（一、/1.1/第N章…）；
+    - 短标题启发式：无编号但"短、无句末标点、后跟正文"的独立行视为子标题
+      （飞书 rawContent 的大纲行如"底层逻辑/台账页面/工作台"）；
+    - outline_levels：LLM 判定的候选大纲行层级映射（原文行号 1-based → 深度），
+      提供时短标题层级以此为准；缺省用启发式深度；
     - 其余非空文本行聚合为该章节下的条目；
-    - 表格（Markdown | 行 / 飞书文本制表符分隔行）整块合并为一个条目。
+    - 表格（Markdown | 行 / 飞书文本制表符分隔行）整块合并为一个条目；
+    - 附件附录（图片清单）与裸 image 行被过滤，不产生条目。
     """
+    content = _strip_attachment_appendix(content or "")
+    # 严格标题等级模式：正文自带 # 标题标记（飞书 blocks 重建）时只信标记
+    strict_levels = bool(disable_short_heading) or has_markdown_headings(content)
     items: list[RequirementItem] = []
     section_path: dict[int, str] = {}
     buf: list[str] = []
@@ -122,12 +255,23 @@ def parse_markdown_to_items(content: str) -> list[RequirementItem]:
         s = line.strip()
         if not s or len(s) > 60:
             return False
+        # 纯数字行是数据值（如 A/Q 问答里的"200"），不是标题
+        if re.fullmatch(r'\d+(\.\d+)*', s):
+            return False
         if _MD_HEADING_RE.match(s):
             return False
         if is_table_line(s):
             return False
-        # 1. / 1.1 / 1.1.1 开头
-        if re.match(r'^\d+(?:\.\d+){0,4}+\.?\s*\S', s):
+        # 数字编号标题：编号后须有 ./、/空格 分隔，且整行是短标题形态
+        # （避免把以数字开头的正文句当标题，如"2 个子能力共享同一张…"）
+        mnum = re.match(r'^(\d+(?:\.\d+){0,4})[.、]?\s+(\S.*)$', s)
+        if mnum:
+            title_part = mnum.group(2)
+            if len(title_part) <= 40 and not re.search(r'[。]', s):
+                return True
+            return False
+        # 1.1.1 / 1.1 紧贴文本（无空格分隔）的短标题
+        if re.match(r'^\d+(?:\.\d+){1,4}[^\s.]', s) and len(s) <= 40 and not re.search(r'[。]', s):
             return True
         # 一、 / （一） / 第一章
         if re.match(r'^(第[一二三四五六七八九十百0-9]+[章节篇部分])', s):
@@ -154,16 +298,60 @@ def parse_markdown_to_items(content: str) -> list[RequirementItem]:
         order += 1
         items.append(_make_item(current_section(), text, order))
 
-    for raw_line in (content or "").replace("\r\n", "\n").split("\n"):
-        line = raw_line.rstrip()
+    def is_short_heading(line: str, next_line: str) -> bool:
+        """短标题启发式：无编号短行 + 后跟较长正文行 → 视为子标题。
 
-        md = _MD_HEADING_RE.match(line.strip())
+        飞书 rawContent 的大纲行（如"底层逻辑/台账页面/工作台"）没有编号前缀，
+        特征：短（≤20字）、无句末标点、独立成行、下一行是明显更长的正文。
+        A/Q 问答的值行（如"根据选择进行显示"后跟"200"）不满足"更长"条件。
+        """
+        s = line.strip()
+        if not s or len(s) > 20:
+            return False
+        if is_table_line(s) or _IMAGE_LINE_RE.match(s):
+            return False
+        if _MD_HEADING_RE.match(s):
+            return False
+        if is_plain_number_heading(s):
+            return False
+        # 含句末标点/冒号/顿号的行更像正文或引导语，不当标题
+        if re.search(r'[。！？；，、：]', s):
+            return False
+        n = (next_line or "").strip()
+        if not n:
+            return False
+        # 下一行必须是明显更长的正文（差值 ≥4 字），避免 A/Q 值行误判
+        if len(n) < len(s) + 4:
+            return False
+        return True
+
+    # 预扫描下一非空行,供短标题判断
+    all_lines = (content or "").replace("\r\n", "\n").split("\n")
+    next_nonempty: dict[int, str] = {}
+    for i, raw in enumerate(all_lines):
+        for j in range(i + 1, len(all_lines)):
+            if all_lines[j].strip():
+                next_nonempty[i] = all_lines[j]
+                break
+
+    for li, raw_line in enumerate(all_lines):
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        # 兼容旧快照:剥掉历史版本给 bullet 行加的 "- " 前缀
+        if stripped.startswith("- "):
+            stripped = stripped[2:].strip()
+
+        if _is_image_reference(stripped):
+            # 裸图片引用行：不产生条目
+            continue
+
+        md = _MD_HEADING_RE.match(stripped)
         if md:
             flush()
             set_section(len(md.group(1)), md.group(2).strip())
             continue
 
-        if is_plain_number_heading(line):
+        if not strict_levels and is_plain_number_heading(line):
             flush()
             title = line.strip()
             # 数字编号按点数确定层级（1.1 → 二级）；中文编号视为一级
@@ -177,11 +365,20 @@ def parse_markdown_to_items(content: str) -> list[RequirementItem]:
             buf.append(line.strip())
             continue
 
-        if line.strip() == "":
+        if stripped == "":
             flush()
             continue
 
-        buf.append(line.strip())
+        if not strict_levels and is_short_heading(stripped, next_nonempty.get(li, "")):
+            flush()
+            llm_level = (outline_levels or {}).get(li + 1)
+            if llm_level:
+                set_section(llm_level, stripped)
+            else:
+                set_section(len(section_path) + 1 if section_path else 1, stripped)
+            continue
+
+        buf.append(stripped)
 
     flush()
     return items
@@ -283,203 +480,6 @@ def _compact(text: str, limit: int = 500) -> str:
     return t[:limit] + ("…" if len(t) > limit else "")
 
 
-def extract_keywords(text: str) -> set[str]:
-    """需求文本关键词：中文字符 2-gram + 英数词，去停用词。"""
-    tokens = _TOKEN_RE.findall((text or "").lower())
-    words: set[str] = set()
-    for tok in tokens:
-        if re.fullmatch(r'[a-z][a-z0-9_]*', tok) or re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', tok):
-            if tok not in _STOPWORDS:
-                words.add(tok)
-            continue
-        # 中文：连续片段按单字切分后组 2-gram（单字区分度太低）
-        buf: list[str] = []
-        for ch in tok:
-            if ch in _STOPWORDS:
-                if buf:
-                    _add_grams(words, buf)
-                    buf = []
-                continue
-            buf.append(ch)
-        if buf:
-            _add_grams(words, buf)
-    return words
-
-
-def _add_grams(words: set[str], chars: list[str]) -> None:
-    if len(chars) == 1:
-        words.add(chars[0])
-        return
-    for i in range(len(chars) - 1):
-        words.add(chars[i] + chars[i + 1])
-
-
-def _item_text(it: dict) -> str:
-    return f"{it.get('section') or ''}\n{it.get('content') or ''}"
-
-
-def _case_text(case) -> str:
-    """测试用例的可匹配文本（预置条件/步骤/预期结果为 JSON 数组）。"""
-    parts = [case.case_name or ""]
-    for field in (case.preset_conditions, case.steps, case.expected_results):
-        if isinstance(field, list):
-            parts.extend(str(x) for x in field)
-        elif field:
-            parts.append(str(field))
-    return "\n".join(parts)
-
-
-def _overlap_score(item_words: set[str], case_words: set[str]) -> int:
-    if not item_words or not case_words:
-        return 0
-    return len(item_words & case_words)
-
-
-def find_affected_testcases(db, doc_id: int, session_id: Optional[int],
-                            old_items: list[dict], new_items: list[dict],
-                            case_ids: Optional[list[int]] = None) -> list[dict]:
-    """根据差异自动识别受影响的测试用例。
-
-    匹配策略（可解释、无网络依赖）：
-    1. 关联映射优先：RequirementTestcaseLink 记录了条目 key ↔ 用例；
-    2. 关键词重合兜底：条目文本与用例名称/步骤/预期结果的词元重合度排序。
-
-    返回 [{testcase_id, session_id, case_name, matched_item_keys, keywords,
-           suggestion}]，按重合度降序。
-    """
-    from sqlmodel import select
-    from db.models import TestCase, RequirementTestcaseLink
-
-    old_map = {it.get("key"): it for it in (old_items or []) if it.get("key")}
-    new_map = {it.get("key"): it for it in (new_items or []) if it.get("key")}
-    changed = [k for k, old in old_map.items()
-               if k not in new_map
-               or (old_map[k].get("content") or "").strip() != (new_map[k].get("content") or "").strip()]
-    if not changed:
-        return []
-
-    # 1) 关联映射
-    stmt = select(RequirementTestcaseLink).where(
-        RequirementTestcaseLink.doc_id == doc_id,
-        RequirementTestcaseLink.item_key.in_(changed),  # type: ignore[attr-defined]
-    )
-    link_map: dict[int, set[str]] = {}
-    for link in db.exec(stmt).all():
-        link_map.setdefault(link.testcase_id, set()).add(link.item_key)
-
-    # 2) 关键词重合
-    changed_items = [new_map[k] for k in changed if k in new_map]
-    removed_items = [old_map[k] for k in changed if k not in new_map]
-    match_pool = changed_items + removed_items
-    item_words = {it["key"]: extract_keywords(_item_text(it)) for it in match_pool}
-
-    q = select(TestCase)
-    if session_id:
-        q = q.where(TestCase.session_id == session_id)  # type: ignore[attr-defined]
-    if case_ids:
-        q = q.where(TestCase.id.in_(case_ids))  # type: ignore[attr-defined]
-    cases = db.exec(q).all()
-
-    scored: dict[int, dict] = {}
-    for case in cases:
-        keys_by_link = link_map.get(case.id or 0, set())
-        case_words = extract_keywords(_case_text(case))
-        best_score = 0
-        matched_keys: list[str] = []
-        for it in match_pool:
-            score = _overlap_score(item_words.get(it["key"], set()), case_words)
-            if it["key"] in keys_by_link:
-                score += 2  # 显式关联加权
-            if score > 0:
-                matched_keys.append(it["key"])
-            best_score = max(best_score, score)
-        if best_score <= 0 and not keys_by_link:
-            continue
-        removed_keys = [it["key"] for it in removed_items if it["key"] in matched_keys]
-        suggestion = build_case_suggestion(changed, removed_keys, keys_by_link)
-        scored[case.id] = {
-            "testcase_id": case.id,
-            "session_id": case.session_id,
-            "case_name": case.case_name,
-            "matched_item_keys": matched_keys,
-            "keywords": sorted(list(item_words.get(matched_keys[0], set()) & case_words))[:8] if matched_keys else [],
-            "score": best_score,
-            "suggestion": suggestion,
-        }
-
-    results = sorted(scored.values(), key=lambda x: -x["score"])
-    for r in results:
-        r.pop("score", None)
-    return results
-
-
-def build_case_suggestion(changed_keys: list[str], removed_keys: list[str],
-                          linked_keys: set[str]) -> str:
-    """为受影响用例生成一句修改建议。"""
-    if removed_keys:
-        return "关联的需求条目已删除，建议确认用例是否需要移除或合并到其他用例。"
-    return "关联的需求条目内容发生变更，建议核对用例步骤与预期结果并同步修改。"
-
-
-def build_case_update_blocks(items: list[dict], case) -> str:
-    """构建用于 LLM 修改测试用例的需求上下文文本块。"""
-    lines: list[str] = []
-    for it in items or []:
-        section = (it.get("section") or "").strip()
-        content = (it.get("content") or "").strip()
-        lines.append(f"【{section}】" if section else "【需求】")
-        lines.append(content)
-    lines.append("")
-    lines.append(f"当前测试用例「{case.case_name}」：")
-    if isinstance(case.preset_conditions, list) and case.preset_conditions:
-        lines.append("预置条件：" + "；".join(str(x) for x in case.preset_conditions))
-    if isinstance(case.steps, list) and case.steps:
-        lines.append("测试步骤：")
-        for i, s in enumerate(case.steps, 1):
-            lines.append(f"  {i}. {s}")
-    if isinstance(case.expected_results, list) and case.expected_results:
-        lines.append("预期结果：" + "；".join(str(x) for x in case.expected_results))
-    return "\n".join(lines)
-
-
-async def analyze_case_impact_with_llm(diffs: list[dict], blocks: list[dict],
-                                       api_key: str, api_base_url: str,
-                                       api_model: str, api_proxy_url: Optional[str] = None) -> list[dict]:
-    """用 LLM 逐用例生成基于差异的修改建议（失败时回退到规则建议，不抛错）。"""
-    if not blocks:
-        return []
-    try:
-        from utils.llm_factory import build_chat_model
-        from utils.models import CaseImpactSuggestionList
-        from utils.model_utils import _structured_output_robust
-
-        model = build_chat_model(api_key, api_base_url, api_model, api_proxy_url, max_tokens=4096)
-        diff_lines = []
-        for d in diffs or []:
-            diff_lines.append(f"- [{d.get('type')}] {d.get('section') or ''} "
-                              f"{_compact(d.get('after') or d.get('before') or '', 200)}")
-        result = await _structured_output_robust(model, CaseImpactSuggestionList, [
-            {"role": "system", "content": (
-                "你是测试用例维护专家。用户给出需求文档的差异明细和若干受影响的测试用例，"
-                "请为每个用例给出简短的中文修改建议（1~2 句，说明应如何同步修改步骤或预期结果）。"
-                "按顺序为每个用例输出建议。")},
-            {"role": "user", "content": (
-                "## 需求差异\n" + "\n".join(diff_lines)
-                + "\n\n## 受影响的测试用例\n" + "\n\n".join(b["block"] for b in blocks))},
-        ])
-        if isinstance(result, CaseImpactSuggestionList):
-            return [s.model_dump() for s in result.suggestions]
-        if isinstance(result, dict):
-            return result.get("suggestions", [])
-        return []
-    except Exception as e:
-        logger.warning("LLM 影响分析失败，回退规则建议: %s", e)
-        return []
-
-
-
-# ===== 实体合一:生成输入日志统一入口 =====
-
 def upsert_generation_entry(db, *, content, module_id, session_id, user_id=None):
     """把一次生成的需求输入写入需求实体（source_type='generation'）。
 
@@ -506,10 +506,7 @@ def upsert_generation_entry(db, *, content, module_id, session_id, user_id=None)
         filters.append(RequirementDoc.module_id.is_(None))  # type: ignore[attr-defined]
     else:
         filters.append(RequirementDoc.module_id == normalized_module_id)  # type: ignore[attr-defined]
-    if user_id is None:
-        filters.append(RequirementDoc.user_id.is_(None))  # type: ignore[attr-defined]
-    else:
-        filters.append(RequirementDoc.user_id == user_id)  # type: ignore[attr-defined]
+    # 数据全局共享：去重不再按 user_id 过滤（user_id 仅作创建人记录）
 
     existing = db.exec(select(RequirementDoc).where(*filters)).first()
     if existing:

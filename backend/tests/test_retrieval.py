@@ -102,11 +102,17 @@ def test_search_across_modules_when_not_specified(idx):
     assert {h.row_id for h in hits} >= {2, 5}
 
 
-def test_search_user_filter_excludes_other_users(idx):
-    idx.upsert(row_id=1, content="仅用户u2的需求", module_id=10,
+def test_search_ignores_user_filter_shares_all_rows(idx):
+    """数据全局共享：user_id 参数不再过滤，其他用户的行同样可见。"""
+    idx.upsert(row_id=1, content="用户u2的需求", module_id=10,
                user_id="u2", session_id=1, created_at=None)
+    idx.upsert(row_id=2, content="用户u1的需求", module_id=10,
+               user_id="u1", session_id=1, created_at=None)
     hits = idx.search("需求", module_id=10, user_id="u1")
-    assert hits == []
+    assert {h.row_id for h in hits} == {1, 2}
+    # 不传 user_id 行为一致
+    hits2 = idx.search("需求", module_id=10)
+    assert {h.row_id for h in hits2} == {1, 2}
 
 
 def test_search_exclude_ids(idx):

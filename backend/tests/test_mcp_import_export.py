@@ -354,8 +354,8 @@ class TestExportMcpServers:
         entry = result["mcpServers"]["env-srv"]
         assert entry["env"] == {"FOO": "bar", "BAZ": "qux"}
 
-    def test_export_excludes_other_users_data(self, db_session):
-        """Export should only return current user's servers."""
+    def test_export_includes_all_users_data(self, db_session):
+        """数据不按用户隔离：导出返回所有用户的 MCP 服务器配置。"""
         srv_a = McpServer(name="user-a-srv", type="http", url="http://a/mcp",
                           command=None, args=[], timeout=60, env=[],
                           enabled=True, user_id="user-a")
@@ -369,7 +369,7 @@ class TestExportMcpServers:
         mock_user = MagicMock()
         mock_user.user_id = "user-a"
         result = export_mcp_servers(session=db_session, user=mock_user)
-        assert list(result["mcpServers"].keys()) == ["user-a-srv"]
+        assert sorted(result["mcpServers"].keys()) == ["user-a-srv", "user-b-srv"]
 
     def test_export_empty_returns_empty_mcpServers(self, db_session):
         """Export with no servers returns empty mcpServers dict."""

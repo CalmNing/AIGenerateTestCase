@@ -59,18 +59,20 @@ def build_thread_id(
 
     与旧实现（`f"{session_id}-{uuid4()}"`）的差异：
     - 旧：每次调用都是新 thread → checkpointer 永远读不到历史（等于没用）；
-    - 新：同一 (scope, user, session, module) 组合恒等 → 同模块多次生成共享轨迹。
+    - 新：同一 (scope, session, module) 组合恒等 → 同模块多次生成共享轨迹。
+    - 数据不按用户隔离后，记忆轨迹全局共享：thread_id 不再包含 user_id 段
+      （user_id 参数保留仅为兼容，不再参与拼接）。
 
     参数：
         scope: 业务域标签，例如 "testcase" / "chat" / "pipeline"。
-        user_id: Keycloak sub；匿名/无权限时为 None。
+        user_id: 已废弃（不参与拼接），保留参数仅为兼容旧调用。
         session_id: 会话 ID。
         module_id: 模块 ID；未选模块时传 None（会被规范成 "none"）。
     """
+    # 数据全局共享：thread_id 不含 user_id 段
     return ":".join(
         [
             sanitize_thread_part(scope),
-            sanitize_thread_part(user_id),
             sanitize_thread_part(session_id),
             sanitize_thread_part(module_id),
         ]

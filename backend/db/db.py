@@ -55,6 +55,8 @@ def create_db_and_tables():
     _drop_obsolete_login_profile_schema(engine)
     # 实体合一：historyprompt 生成日志迁入 requirement_doc(source_type='generation')
     _migrate_history_prompt_to_requirement_doc(engine)
+    # 一次性清洗：testcase 存量脏值（module_id='NaN'、ui_binding='[]'）
+    _clean_testcase_dirty_values(engine)
     # P2：重建 FTS5 检索索引（源实体 = requirement_doc）
     _rebuild_retrieval_index(engine)
 
@@ -117,6 +119,36 @@ def _parse_sqlite_datetime(value):
         except ValueError:
             continue
     return None
+
+
+def _clean_testcase_dirty_values(engine):
+    """一次性清洗 testcase 存量脏值（历史前端把 NaN/[] 直接提交所致）：
+
+    - module_id = 'NaN' → NULL（NaN 不是合法模块引用）
+    - ui_binding = '[]' → '{}'（模型声明为 dict，JSON 列误存了 list）
+    幂等：无脏行时跳过。失败不阻断启动。
+    """
+    import json
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        if "testcase" not in insp.get_table_names():
+            return
+        with engine.begin() as conn:
+            r1 = conn.execute(
+                text("UPDATE testcase SET module_id = NULL WHERE module_id = 'NaN'")
+            )
+            r2 = conn.execute(
+                text("UPDATE testcase SET ui_binding = '{}' WHERE ui_binding = '[]'")
+            )
+            if r1.rowcount or r2.rowcount:
+                logger.info(
+                    "数据清洗: testcase 脏值修正 module_id NaN %s 行, ui_binding [] %s 行",
+                    r1.rowcount, r2.rowcount,
+                )
+    except Exception as e:  # noqa: BLE001 - 清洗失败不阻断启动
+        logger.warning("testcase 脏值清洗失败(忽略，下次启动重试): %s", e)
 
 
 def _migrate_history_prompt_to_requirement_doc(engine):

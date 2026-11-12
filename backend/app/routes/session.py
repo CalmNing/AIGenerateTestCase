@@ -25,7 +25,7 @@ router = APIRouter(prefix="/sessions", tags=["session"])
 # 会话管理API
 @router.get("/", response_model=Response[List[Session]])
 def get_sessions(session: SessionDep, user: CurrentUser):
-    """获取当前用户的所有会话"""
+    """获取所有会话（数据全局共享，不按用户隔离）"""
     sessions = session.exec(select(Session)).all()
     return Response(data=sessions)
 

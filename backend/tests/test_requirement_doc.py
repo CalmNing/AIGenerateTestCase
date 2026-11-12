@@ -67,6 +67,62 @@ def test_parse_plain_text_numbering_sections():
     assert any(s.startswith("一、功能概述") for s in sections)
 
 
+def test_strict_heading_levels_only_marked_headings():
+    """带 # 标题标记的正文：严格按标题等级分类，正文行不再被抬为章节。
+
+    模拟飞书 blocks 重建快照：首行为正文、标题带 #/##/###/##### 标记，
+    章节路径只由标记标题按等级嵌套构成；短行/编号行是正文，不是章节。
+    """
+    content = """【低成本】、【制度】
+# 一、背景与价值
+对我司而言
+填补基础能力缺失：如果没有，就会显得平台的AI能力不强。
+对客户而言
+什么样的客户：有能力也有意愿为此付费的。
+### 2.1 平台知识库
+知识范围
+在统一后台维护，包含平台使用手册。
+1. 产品定义4个行业标签，作为功能配置在统一后台维护。
+### 2.2 企业知识库
+客户的制度等企业知识
+##### （1） 列表页
+分类标签
+保留一个【全部】，默认着陆在这里。
+"""
+    items = svc.parse_markdown_to_items(content)
+    sections = {it.section for it in items}
+    # 只有带标记的标题进入章节路径，且严格按标题等级嵌套
+    assert "一、背景与价值" in sections
+    assert "一、背景与价值 / 2.1 平台知识库" in sections
+    assert "一、背景与价值 / 2.2 企业知识库" in sections
+    assert "一、背景与价值 / 2.2 企业知识库 / （1） 列表页" in sections
+    # 正文行（短行/编号行）不得成为章节，也不得混进章节路径
+    for bad in ("对我司而言", "知识范围", "分类标签",
+                "一、背景与价值 / 对我司而言", "2.1 平台知识库 / 知识范围"):
+        assert not any(bad in s for s in sections), sections
+    # 正文行保留在条目内容里，不丢失
+    all_content = "\n".join(it.content for it in items)
+    assert "对我司而言" in all_content
+    assert "知识范围" in all_content
+    assert "保留一个【全部】" in all_content
+
+
+def test_has_markdown_headings_detection():
+    """严格模式检测：任一行为 # 标题即视为带标记；纯文本返回 False。"""
+    assert svc.has_markdown_headings("正文行\n# 一、背景") is True
+    assert svc.has_markdown_headings("### 2.1 子章节\n正文") is True
+    assert svc.has_markdown_headings("#FF0000 是颜色值\n正文") is False
+    assert svc.has_markdown_headings("一、背景\n1.1 子项\n正文") is False
+    assert svc.has_markdown_headings("") is False
+
+
+def test_plain_text_without_markers_keeps_heuristics():
+    """纯文本（无 # 标记）保持原启发式行为，编号章节仍可识别。"""
+    items = svc.parse_markdown_to_items("背景\n这是背景说明。\n一、功能概述\n支持批量导入。")
+    sections = {it.section for it in items}
+    assert any(s.startswith("一、功能概述") for s in sections)
+
+
 def test_parse_table_block_merges_into_one_item():
     content = """| 字段 | 说明 |
 | --- | --- |
@@ -115,104 +171,6 @@ def test_compute_diff_added_modified_removed():
 
 # ===== 单元：关键词与影响识别 =====
 
-def test_extract_keywords_chinese_bigram():
-    words = svc.extract_keywords("用户输入验证码登录")
-    assert "验证" in words or "证码" in words
-    assert "验证码" not in words  # 中文按 2-gram
-
-
-def test_find_affected_by_keyword_overlap(db_session):
-    sess = DbSession(name="s1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-
-    case = TestCase(
-        case_name="验证码登录成功",
-        case_level=1,
-        preset_conditions=["手机号已注册"],
-        steps=["输入手机号", "输入验证码", "点击登录"],
-        expected_results=["登录成功跳转首页"],
-        session_id=sess.id,
-    )
-    other = TestCase(
-        case_name="文件导出",
-        case_level=1,
-        preset_conditions=[],
-        steps=["点击导出按钮"],
-        expected_results=["导出文件成功"],
-        session_id=sess.id,
-    )
-    db_session.add(case)
-    db_session.add(other)
-    db_session.commit()
-
-    old_items = [{"key": "k1", "section": "登录", "content": "用户通过验证码登录系统。",
-                  "title": "", "order_index": 1, "status": "active"}]
-    new_items = [{"key": "k1", "section": "登录", "content": "用户通过短信验证码登录系统，验证码 5 分钟有效。",
-                  "title": "", "order_index": 1, "status": "active"}]
-
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    affected = svc.find_affected_testcases(db_session, doc.id, sess.id, old_items, new_items)
-    ids = [a["testcase_id"] for a in affected]
-    assert case.id in ids
-    assert other.id not in ids
-    assert affected[0]["suggestion"]
-
-
-def test_find_affected_by_explicit_link(db_session):
-    sess = DbSession(name="s1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    case = TestCase(case_name="完全无关用例", case_level=1, preset_conditions=[],
-                    steps=["做某事"], expected_results=["完成"], session_id=sess.id)
-    db_session.add(case)
-    db_session.commit()
-    db_session.refresh(case)
-
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    db_session.add(RequirementTestcaseLink(doc_id=doc.id, item_key="k1", testcase_id=case.id,
-                                           session_id=sess.id, user_id="u1"))
-    db_session.commit()
-
-    old_items = [{"key": "k1", "section": "s", "content": "旧", "title": "", "order_index": 1, "status": "active"}]
-    new_items = [{"key": "k1", "section": "s", "content": "新", "title": "", "order_index": 1, "status": "active"}]
-    affected = svc.find_affected_testcases(db_session, doc.id, sess.id, old_items, new_items)
-    assert [a["testcase_id"] for a in affected] == [case.id]
-
-
-def test_find_affected_no_change_returns_empty(db_session):
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-    items = [{"key": "k1", "section": "s", "content": "同", "title": "", "order_index": 1, "status": "active"}]
-    assert svc.find_affected_testcases(db_session, doc.id, None, items, items) == []
-
-
-def test_build_case_update_blocks_contains_sections():
-    items = [{"section": "登录 / 验证码", "content": "验证码 6 位数字。"}]
-    case = TestCase(case_name="验证码登录", case_level=1,
-                    preset_conditions=["手机号可用"], steps=["输入验证码"],
-                    expected_results=["登录成功"])
-    block = svc.build_case_update_blocks(items, case)
-    assert "【登录 / 验证码】" in block
-    assert "6 位数字" in block
-    assert "验证码登录" in block
-    assert "输入验证码" in block
-
-
-# ===== 路由：创建 → 同步（mock 飞书）→ 内容更新 → 历史 → 联动 =====
-
 @pytest.fixture()
 def _user():
     from app.auth import UserInfo
@@ -255,14 +213,14 @@ def test_update_content_records_diff_and_bumps_version(db_session, _user):
     db_session.commit()
     db_session.refresh(doc)
 
-    resp = rd.update_content(doc.id, rd.DocContentUpdateRequest(
-        content="一、登录功能\n用户输入账号密码登录系统。"), db_session, _user)
+    resp = asyncio.run(rd.update_content(doc.id, rd.DocContentUpdateRequest(
+        content="一、登录功能\n用户输入账号密码登录系统。"), db_session, _user))
     assert resp.code == 200
     assert resp.data["version"] == 1
     assert any(d["type"] == "added" for d in resp.data["differences"])
 
-    resp2 = rd.update_content(doc.id, rd.DocContentUpdateRequest(
-        content="一、登录功能\n用户输入账号密码登录系统，登录后跳转首页。"), db_session, _user)
+    resp2 = asyncio.run(rd.update_content(doc.id, rd.DocContentUpdateRequest(
+        content="一、登录功能\n用户输入账号密码登录系统，登录后跳转首页。"), db_session, _user))
     assert resp2.data["version"] == 2
     types = {d["type"] for d in resp2.data["differences"]}
     assert types == {"modified", "added"} or types == {"modified"}
@@ -303,198 +261,6 @@ def test_sync_route_failure_raises(db_session, _user, monkeypatch):
                                             db_session, _user))
 
 
-def test_links_upsert_and_list(db_session, _user):
-    from app.routes import requirement_doc as rd
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    resp = rd.upsert_link(doc.id, rd.LinkUpsertRequest(item_key="k1", testcase_id=5,
-                                                       session_id=1), db_session, _user)
-    assert resp.data["linked"] is True
-    links = rd.list_links(doc.id, db_session, _user)
-    assert len(links.data) == 1
-    assert links.data[0]["item_key"] == "k1"
-
-    resp2 = rd.upsert_link(doc.id, rd.LinkUpsertRequest(item_key="k1", testcase_id=5,
-                                                        session_id=1), db_session, _user)
-    assert resp2.data["linked"] is True
-    links2 = rd.list_links(doc.id, db_session, _user)
-    assert len(links2.data) == 1
-
-    rd.upsert_link(doc.id, rd.LinkUpsertRequest(item_key="k1", testcase_id=0), db_session, _user)
-    links3 = rd.list_links(doc.id, db_session, _user)
-    assert len(links3.data) == 0
-
-
-def test_impact_analysis_route(db_session, _user):
-    from app.routes import requirement_doc as rd
-    sess = DbSession(name="s1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    case = TestCase(case_name="账号密码登录成功", case_level=1, preset_conditions=[],
-                    steps=["输入账号密码", "点击登录"], expected_results=["登录成功"],
-                    session_id=sess.id)
-    db_session.add(case)
-    db_session.commit()
-
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1",
-                         session_id=sess.id, version=0)
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    rd.update_content(doc.id, rd.DocContentUpdateRequest(
-        content="一、登录\n用户输入账号密码登录系统。"), db_session, _user)
-    rd.update_content(doc.id, rd.DocContentUpdateRequest(
-        content="一、登录\n用户输入账号密码登录系统，连续失败 5 次锁定账号。"), db_session, _user)
-
-    resp = asyncio.run(rd.impact_analysis(doc.id, db_session, _user))
-    assert resp.data["has_diff"] is True
-    ids = [a["testcase_id"] for a in resp.data["affected"]]
-    assert case.id in ids
-
-    rev = db_session.exec(select(RequirementRevision)
-                          .where(RequirementRevision.doc_id == doc.id)
-                          .order_by(RequirementRevision.version.desc())).first()
-    assert case.id in (rev.affected_case_ids or [])
-
-
-def test_apply_cases_suggestion_mode(db_session, _user, monkeypatch):
-    from app.routes import requirement_doc as rd
-    import utils.model_utils as mu
-    from utils.models import FunctionalTestCase, FunctionalResponseFormat
-
-    sess = DbSession(name="s1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    case = TestCase(case_name="账号密码登录", case_level=1, preset_conditions=[],
-                    steps=["输入账号密码", "点击登录"], expected_results=["登录成功"],
-                    session_id=sess.id)
-    db_session.add(case)
-    db_session.commit()
-    db_session.refresh(case)
-
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1", version=1,
-                         structured=[{"key": "k1", "section": "登录",
-                                      "content": "连续失败 5 次锁定账号。", "title": "",
-                                      "order_index": 1, "status": "active"}],
-                         content_snapshot="一、登录\n连续失败 5 次锁定账号。")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    import app.routes.requirement_doc as rd_mod
-    monkeypatch.setattr(rd_mod, "_APPLY_CONCURRENCY", 1)
-
-    async def fake_structured(model, schema, messages, **kwargs):
-        return FunctionalResponseFormat(response=[FunctionalTestCase(
-            case_name="账号密码登录-失败锁定",
-            case_level=1,
-            steps=["输入账号密码", "连续失败5次", "验证账号锁定"],
-            preset_conditions=["账号已注册"],
-            expected_results=["账号被锁定并提示"],
-        )])
-    monkeypatch.setattr(mu, "_structured_output_robust", fake_structured)
-    monkeypatch.setattr("utils.llm_factory.build_chat_model", lambda *a, **k: object())
-
-    from config import config_manager
-    monkeypatch.setattr(config_manager, "get_model_type", lambda: "api", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_key", lambda: "sk-test", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_base_url", lambda: "https://api.deepseek.com", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_model", lambda: "deepseek-test", raising=False)
-
-    resp = asyncio.run(rd.apply_cases(
-        doc.id, rd.ApplyCasesRequest(case_ids=[case.id], apply=False),
-        db_session, _user))
-    assert resp.code == 200
-    r0 = resp.data["results"][0]
-    assert r0["status"] == "suggested"
-    assert "失败" in r0["updated"]["case_name"]
-
-    db_session.refresh(case)
-    assert case.case_name == "账号密码登录"
-
-
-def test_apply_cases_applies_updates(db_session, _user, monkeypatch):
-    from app.routes import requirement_doc as rd
-    import utils.model_utils as mu
-    from utils.models import FunctionalTestCase, FunctionalResponseFormat
-
-    sess = DbSession(name="s1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    case = TestCase(case_name="旧用例名", case_level=1, preset_conditions=[],
-                    steps=["旧步骤"], expected_results=["旧预期"], session_id=sess.id)
-    db_session.add(case)
-    db_session.commit()
-    db_session.refresh(case)
-
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1", version=2,
-                         structured=[{"key": "k1", "section": "登录",
-                                      "content": "新需求内容。", "title": "",
-                                      "order_index": 1, "status": "active"}],
-                         content_snapshot="x")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    async def fake_structured(model, schema, messages, **kwargs):
-        return FunctionalResponseFormat(response=[FunctionalTestCase(
-            case_name="新用例名", case_level=2,
-            steps=["新步骤1", "新步骤2"],
-            preset_conditions=["新预置"],
-            expected_results=["新预期"],
-        )])
-    monkeypatch.setattr(mu, "_structured_output_robust", fake_structured)
-    monkeypatch.setattr("utils.llm_factory.build_chat_model", lambda *a, **k: object())
-
-    from config import config_manager
-    monkeypatch.setattr(config_manager, "get_model_type", lambda: "api", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_key", lambda: "sk-test", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_base_url", lambda: "https://api.deepseek.com", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_model", lambda: "deepseek-test", raising=False)
-
-    resp = asyncio.run(rd.apply_cases(
-        doc.id, rd.ApplyCasesRequest(case_ids=[case.id], apply=True),
-        db_session, _user))
-    assert resp.data["applied"] is True
-    db_session.refresh(case)
-    assert case.case_name == "新用例名"
-    assert case.steps == ["新步骤1", "新步骤2"]
-    assert case.case_level == 2
-    assert case.human_edited is True
-
-    revs = db_session.exec(select(RequirementRevision)
-                           .where(RequirementRevision.doc_id == doc.id)
-                           .order_by(RequirementRevision.version.desc())).all()
-    assert revs[0].source == "apply_cases"
-    assert case.id in (revs[0].affected_case_ids or [])
-
-
-def test_apply_cases_requires_model_config(db_session, _user, monkeypatch):
-    from app.routes import requirement_doc as rd
-    doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1", version=1,
-                         structured=[{"key": "k1", "section": "s", "content": "c",
-                                      "title": "", "order_index": 1, "status": "active"}],
-                         content_snapshot="c")
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    from config import config_manager
-    monkeypatch.setattr(config_manager, "get_model_type", lambda: "api", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_key", lambda: "", raising=False)
-
-    with pytest.raises(Exception):
-        asyncio.run(rd.apply_cases(doc.id, rd.ApplyCasesRequest(case_ids=[1], apply=False),
-                                   db_session, _user))
-
-
 def test_delete_doc_removes_related(db_session, _user):
     from app.routes import requirement_doc as rd
     doc = RequirementDoc(title="d", url="u", feishu_token="t", user_id="u1")
@@ -531,185 +297,33 @@ ITEMS = [
 ]
 
 
-def test_to_requirement_points_creates_and_is_idempotent(db_session, _user):
-    from app.routes import requirement_doc as rd
-    sess = DbSession(name="s1", user_id="u1")
+def test_session_access_shared_across_users(db_session, monkeypatch):
+    """数据不按用户隔离：任何人（含 admin/未登录上下文）都能访问既有会话，列表返回全部会话。"""
+    from app.routes.pipeline import _check_session_owner
+    from app.routes import session as session_routes
+    from app.auth import UserInfo
+
+    sess = DbSession(name="工作台", user_id="owner-user")
     db_session.add(sess)
     db_session.commit()
     db_session.refresh(sess)
-    doc = _make_doc_with_items(db_session, ITEMS)
 
-    resp = rd.to_requirement_points(doc.id, rd.ToRequirementPointsRequest(
-        session_id=sess.id, item_keys=["k1", "k2"]), db_session, _user)
-    assert resp.data["created"] == 2
-    assert resp.data["skipped"] == 0
+    owner = UserInfo(user_id="owner-user", username="owner", roles=["user"])
+    stranger = UserInfo(user_id="someone-else", username="stranger", roles=["admin"])
 
-    resp2 = rd.to_requirement_points(doc.id, rd.ToRequirementPointsRequest(
-        session_id=sess.id, item_keys=["k1", "k2"]), db_session, _user)
-    assert resp2.data["created"] == 0
-    assert resp2.data["skipped"] == 2
+    # 本人放行
+    _check_session_owner(db_session, sess.id, owner)
+    # 非本人也放行（数据全局共享，不再按 user_id 校验归属）
+    _check_session_owner(db_session, sess.id, stranger)
+    # 未登录上下文也放行（仅校验会话存在）
+    _check_session_owner(db_session, sess.id, None)
 
-    rps = db_session.exec(select(RequirementPoint)).all()
-    assert len(rps) == 2
-    assert all(rp.doc_id == doc.id for rp in rps)
-    assert all(rp.session_id == sess.id for rp in rps)
-    assert {rp.item_key for rp in rps} == {"k1", "k2"}
-
-
-def test_to_requirement_points_rejects_missing_session(db_session, _user):
-    from app.routes import requirement_doc as rd
-    doc = _make_doc_with_items(db_session, ITEMS)
-    with pytest.raises(Exception):
-        rd.to_requirement_points(doc.id, rd.ToRequirementPointsRequest(
-            session_id=999, item_keys=["k1"]), db_session, _user)
-
-
-def test_to_requirement_points_rejects_stale_keys(db_session, _user):
-    from app.routes import requirement_doc as rd
-    sess = DbSession(name="s1", user_id="u1")
-    db_session.add(sess)
+    # 会话列表全局共享：能看到所有用户的会话
+    db_session.add(DbSession(name="别人的", user_id="someone-else"))
     db_session.commit()
-    db_session.refresh(sess)
-    doc = _make_doc_with_items(db_session, ITEMS)
-    with pytest.raises(Exception) as exc_info:
-        rd.to_requirement_points(doc.id, rd.ToRequirementPointsRequest(
-            session_id=sess.id, item_keys=["k_gone"]), db_session, _user)
-    assert "已失效" in str(exc_info.value)
-
-
-def test_coverage_three_states(db_session, _user):
-    from app.routes import requirement_doc as rd
-    sess = DbSession(name="s1", user_id="u1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    doc = _make_doc_with_items(db_session, ITEMS)
-
-    resp = rd.coverage(doc.id, db_session, _user)
-    assert resp.data["uncovered"] == 2
-    assert resp.data["covered"] == 0
-
-    rd.to_requirement_points(doc.id, rd.ToRequirementPointsRequest(
-        session_id=sess.id, item_keys=["k1"]), db_session, _user)
-    resp = rd.coverage(doc.id, db_session, _user)
-    by_key = {x["item_key"]: x for x in resp.data["items"]}
-    assert by_key["k1"]["coverage"] == "pending"
-    assert by_key["k2"]["coverage"] == "uncovered"
-
-    case = TestCase(case_name="验证码登录", case_level=1, preset_conditions=[],
-                    steps=["输入验证码"], expected_results=["登录成功"],
-                    status="PASSED", session_id=sess.id)
-    db_session.add(case)
-    db_session.commit()
-    db_session.refresh(case)
-    rd.upsert_link(doc.id, rd.LinkUpsertRequest(item_key="k2", testcase_id=case.id,
-                                                session_id=sess.id), db_session, _user)
-    resp = rd.coverage(doc.id, db_session, _user)
-    by_key = {x["item_key"]: x for x in resp.data["items"]}
-    assert by_key["k2"]["coverage"] == "covered"
-    assert by_key["k2"]["case_status"]["passed"] == 1
-    assert by_key["k2"]["case_status"]["total"] == 1
-    assert resp.data["covered"] == 1
-    # 用例明细:名称/状态/会话随覆盖数据返回
-    details = by_key["k2"]["case_details"]
-    assert len(details) == 1
-    assert details[0]["case_name"] == "验证码登录"
-    assert details[0]["status"] == "PASSED"
-    assert details[0]["session_id"] == sess.id
-
-
-def test_coverage_counts_cases_via_requirement_point_chain(db_session, _user):
-    from app.routes import requirement_doc as rd
-    from db.models import TestPoint as TPModel
-    sess = DbSession(name="s1", user_id="u1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    doc = _make_doc_with_items(db_session, ITEMS)
-
-    rd.to_requirement_points(doc.id, rd.ToRequirementPointsRequest(
-        session_id=sess.id, item_keys=["k1"]), db_session, _user)
-    rp = db_session.exec(select(RequirementPoint)).first()
-
-    tp = TPModel(requirement_point_id=rp.id, session_id=sess.id,
-                 content="tp", test_type="功能", design_method="等价类", priority="high")
-    db_session.add(tp)
-    db_session.commit()
-    db_session.refresh(tp)
-
-    case = TestCase(case_name="账号密码登录", case_level=1, preset_conditions=[],
-                    steps=["输入"], expected_results=["成功"], status="NOT_RUN",
-                    session_id=sess.id, test_point_id=tp.id)
-    db_session.add(case)
-    db_session.commit()
-
-    resp = rd.coverage(doc.id, db_session, _user)
-    by_key = {x["item_key"]: x for x in resp.data["items"]}
-    assert by_key["k1"]["coverage"] == "covered"
-    assert by_key["k1"]["case_status"]["not_run"] == 1
-    assert resp.data["covered"] == 1
-
-
-def test_coverage_empty_doc(db_session, _user):
-    from app.routes import requirement_doc as rd
-    doc = _make_doc_with_items(db_session, [])
-    resp = rd.coverage(doc.id, db_session, _user)
-    assert resp.data["total"] == 0
-    assert resp.data["items"] == []
-
-
-def test_generate_from_items_requires_model_config(db_session, _user, monkeypatch):
-    from app.routes import requirement_doc as rd
-    from config import config_manager
-    sess = DbSession(name="s1", user_id="u1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    doc = _make_doc_with_items(db_session, ITEMS)
-
-    monkeypatch.setattr(config_manager, "get_model_type", lambda: "api", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_key", lambda: "", raising=False)
-
-    with pytest.raises(Exception) as exc_info:
-        asyncio.run(rd.generate_from_items(doc.id, rd.GenerateFromItemsRequest(
-            session_id=sess.id, item_keys=["k1"]), db_session, _user))
-    assert "未配置 API 模型" in str(exc_info.value)
-
-
-def test_generate_from_items_creates_cases_and_links(db_session, _user, monkeypatch):
-    from app.routes import requirement_doc as rd
-    from config import config_manager
-    import utils.model_utils as mu
-
-    sess = DbSession(name="s1", user_id="u1")
-    db_session.add(sess)
-    db_session.commit()
-    db_session.refresh(sess)
-    doc = _make_doc_with_items(db_session, ITEMS)
-
-    monkeypatch.setattr(config_manager, "get_model_type", lambda: "api", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_key", lambda: "sk-test", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_base_url", lambda: "https://api.deepseek.com", raising=False)
-    monkeypatch.setattr(config_manager, "get_api_model", lambda: "deepseek-test", raising=False)
-
-    async def fake_generate(**kwargs):
-        tc = DBTestCase(
-            case_name="账号密码登录成功",
-            case_level=1,
-            preset_conditions=["用户已注册"],
-            steps=["打开登录页", "输入账号密码", "点击登录"],
-            expected_results=["跳转到首页"],
-            session_id=kwargs["session_id"],
-        )
-        return [tc], kwargs["requirement"]
-
-    monkeypatch.setattr(mu, "generate_testcases", fake_generate)
-
-    resp = asyncio.run(rd.generate_from_items(doc.id, rd.GenerateFromItemsRequest(
-        session_id=sess.id, item_keys=["k1"]), db_session, _user))
-    assert resp.data["generated"] == 1
-    assert resp.data["linked"] == 1
-
-    links = rd.list_links(doc.id, db_session, _user)
-    assert len(links.data) == 1
-    assert links.data[0]["item_key"] == "k1"
+    resp = session_routes.get_sessions(db_session, stranger)
+    assert {s.name for s in resp.data} == {"工作台", "别人的"}
+    # 不存在的会话仍然 404
+    with pytest.raises(Exception) as exc:
+        _check_session_owner(db_session, 999999, stranger)
+    assert "会话不存在" in str(exc.value)

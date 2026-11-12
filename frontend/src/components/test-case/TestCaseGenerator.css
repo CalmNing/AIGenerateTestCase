@@ -5,13 +5,17 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  height: 100%;
+  height: calc(100vh - 160px);
+  min-height: 560px;
   overflow: hidden;
 }
 
 .tcg-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px 20px;
@@ -26,7 +30,8 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 120px);
+  flex: 1;
+  min-height: 0;
 }
 
 .tcg-card-header {
@@ -50,6 +55,12 @@
 /* Keep controls at their intrinsic height and scroll instead of overlapping. */
 .tcg-card-body > * {
   flex-shrink: 0;
+}
+
+/* 需求区吃满剩余高度，让输入框填满可视空间 */
+.tcg-card-body > .tcg-requirement-section {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* --- Pipeline 进度面板（横向紧凑，避免卡片被撑高出现滚动条） --- */
@@ -231,7 +242,7 @@
 
 .tcg-textarea-wrapper {
   position: relative;
-  flex: 1 0 120px;
+  flex: 1 1 120px;
   min-height: 120px;
 }
 

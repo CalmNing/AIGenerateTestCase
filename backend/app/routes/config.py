@@ -9,7 +9,6 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
-from sqlmodel import select
 
 from app.deps import SessionDep, CurrentUser
 from db.models import SystemConfig
@@ -34,15 +33,22 @@ class ConfigUpdateRequest(BaseModel):
 
 
 def _get_or_create_config(session, user_id: Optional[str] = None) -> SystemConfig:
-    """获取或创建用户配置"""
-    # 尝试获取现有配置
-    statement = select(SystemConfig).where(SystemConfig.user_id == user_id)
-    config = session.exec(statement).first()
+    """获取或创建系统配置（全局共享，不按用户隔离；user_id 参数保留仅为兼容）"""
+    from app.services.system_config import get_shared_system_config
+
+    config = get_shared_system_config(session)
+
+    # 历史遗留的按用户配置行：晋升为全局配置（user_id 置空）
+    if config and config.user_id is not None:
+        config.user_id = None
+        session.add(config)
+        session.commit()
+        session.refresh(config)
 
     if not config:
-        # 创建默认配置
+        # 创建默认配置（user_id 置空表示全局配置）
         config = SystemConfig(
-            user_id=user_id,
+            user_id=None,
             model_type="api",
             api_key="",
             api_base_url="https://api.deepseek.com",
@@ -63,9 +69,8 @@ async def get_config(
     session: SessionDep = None,
     user: CurrentUser = None,
 ):
-    """获取当前用户的系统配置"""
-    user_id = user.user_id if user else None
-    config = _get_or_create_config(session, user_id)
+    """获取系统配置（全局共享，不按用户隔离）"""
+    config = _get_or_create_config(session)
 
     return Response(data={
         "model_type": config.model_type,
@@ -86,9 +91,8 @@ async def update_config(
     session: SessionDep = None,
     user: CurrentUser = None,
 ):
-    """更新当前用户的系统配置"""
-    user_id = user.user_id if user else None
-    config = _get_or_create_config(session, user_id)
+    """更新系统配置（全局共享，不按用户隔离）"""
+    config = _get_or_create_config(session)
 
     # 记录旧的蓝湖 Cookie 值，用于比较
     old_cookie = config.lanhu_cookie or ""

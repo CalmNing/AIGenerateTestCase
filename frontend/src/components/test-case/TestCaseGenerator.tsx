@@ -1,15 +1,13 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { Button, Checkbox, Input, Select, Spin, Tag, message as antMessage, Modal, Progress, Steps } from 'antd';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { Button, Checkbox, Input, TreeSelect, Spin, Tag, message as antMessage, Modal, Progress, Steps } from 'antd';
 import {
   MessageOutlined, BulbOutlined,
   FileTextOutlined, ExperimentOutlined, UploadOutlined,
-  CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined, FolderOpenOutlined, HistoryOutlined,
+  CheckCircleOutlined, LoadingOutlined, CloseCircleOutlined, HistoryOutlined,
 } from '@ant-design/icons';
-import { Session, Module } from '../../types';
+import { Session, Module, RequirementDoc, RequirementItem } from '../../types';
 import GenerationHistoryModal from '../requirement/GenerationHistoryModal';
 import './TestCaseGenerator.css';
-
-const FEISHU_URL_RE = /https?:\/\/[a-zA-Z0-9-]+\.feishu\.cn\/(?:wiki|docx)\/[\w-]+/i;
 
 /** P0 失败可见性：后端返回的降级警告 / 质量提示 */
 export interface PipelineWarning {
@@ -21,27 +19,6 @@ export interface PipelineWarning {
   /** warning=结果确实缺内容（任务状态 partial）；quality=仅质量提示 */
   severity?: 'warning' | 'quality';
 }
-
-const extractFeishuSections = (content: string): { label: string; value: string }[] => {
-  const sections = new Map<string, { label: string; value: string }>();
-  content.split(/\r?\n/).forEach((rawLine) => {
-    const line = rawLine.trim();
-    if (!line) return;
-
-    const markdown = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);
-    const numbered = line.match(/^([一二三四五六七八九十百]+[、.．]\s*.+|\d+(?:\.\d+)*(?:[、.．]|\s+)\s*.+)$/);
-    const chapter = line.match(/^第[一二三四五六七八九十百\d]+(?:章|节|部分)\s*.+$/);
-    if (!markdown && !numbered && !chapter) return;
-
-    const value = line;
-    const level = markdown ? markdown[1].length :
-      (/^[一二三四五六七八九十百]+[、.．]/.test(line) || /^第[一二三四五六七八九十百\d]+(?:章|部分)/.test(line)
-        ? 1
-        : (line.match(/^\d+(?:\.\d+)*/)?.[0].match(/\./g)?.length || 0) + 2);
-    sections.set(value, { label: `${'　'.repeat(Math.max(0, level - 1))}${value}`, value });
-  });
-  return Array.from(sections.values());
-};
 
 /** 从 pipeline 状态里取出"真正导致结果缺失"的降级项（不含 quality 提示）。 */
 const getDegradationWarnings = (status: {
@@ -95,41 +72,6 @@ const getContextWarnings = (status: {
   return out;
 };
 
-const getFeishuHeading = (line: string): { level: number; title: string } | null => {
-  const value = line.trim();
-  const markdown = value.match(/^(#{1,6})\s+(.+?)\s*#*$/);
-  if (markdown) return { level: markdown[1].length, title: markdown[2].trim() };
-
-  const chineseNumber = value.match(/^([一二三四五六七八九十百]+)[、.．]\s*(.+?)\s*$/);
-  if (chineseNumber) return { level: 1, title: chineseNumber[2].trim() };
-
-  const arabicNumber = value.match(/^(\d+(?:\.\d+)*)(?:[、.．]|\s+)\s*(.+?)\s*$/);
-  if (arabicNumber) return { level: arabicNumber[1].split('.').length + 1, title: arabicNumber[2].trim() };
-
-  const chapter = value.match(/^第[一二三四五六七八九十百\d]+(章|节|部分)\s*(.+?)\s*$/);
-  if (chapter) return { level: chapter[1] === '节' ? 2 : 1, title: chapter[2].trim() };
-  return null;
-};
-
-const extractPreviewSection = (content: string, selectedHeading: string): string => {
-  if (!selectedHeading) return content;
-  const lines = content.split(/\r?\n/);
-  const start = lines.findIndex(line => line.trim() === selectedHeading.trim());
-  if (start < 0) return content;
-
-  const level = getFeishuHeading(lines[start])?.level;
-  if (level === undefined) return content;
-  let end = lines.length;
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const heading = getFeishuHeading(lines[index]);
-    if (heading && heading.level <= level) {
-      end = index;
-      break;
-    }
-  }
-  return lines.slice(start, end).join('\n').trim();
-};
-
 const PIPELINE_STAGES = [
   { stage: 1, label: '需求拆分' },
   { stage: 2, label: '测试点生成' },
@@ -161,12 +103,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [feishuSection, setFeishuSection] = useState('');
-  const [feishuSections, setFeishuSections] = useState<{ label: string; value: string }[]>([]);
-  const [loadingFeishuSections, setLoadingFeishuSections] = useState(false);
-  const [loadedFeishuUrl, setLoadedFeishuUrl] = useState('');
-  const [feishuPreviewContent, setFeishuPreviewContent] = useState('');
-  const [feishuPreviewVisible, setFeishuPreviewVisible] = useState(false);
   // 4阶段 Pipeline 状态
   const [pipelineTaskId, setPipelineTaskId] = useState<string | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<{
@@ -242,56 +178,129 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
   }, [pipelineTaskId, pipelinePolling, selectedSession?.id]);
 
   const handleRequirementInputChange = (value: string) => {
-    const nextUrl = value.match(FEISHU_URL_RE)?.[0] || '';
-    if (loadedFeishuUrl && nextUrl !== loadedFeishuUrl) {
-      setFeishuSections([]);
-      setFeishuSection('');
-      setFeishuPreviewContent('');
-      setFeishuPreviewVisible(false);
-      setLoadedFeishuUrl('');
-    }
     onRequirementChange(value);
   };
 
-  const handleLoadFeishuSections = async () => {
-    const url = requirement.match(FEISHU_URL_RE)?.[0];
-    if (!url) {
-      antMessage.warning('请先在需求描述中填写飞书文档链接');
+  // ===== 引用需求（按需求文档的解析结构选择章节，正文填入输入框）=====
+  const [requirementDocs, setRequirementDocs] = useState<RequirementDoc[]>([]);
+  const [filledKey, setFilledKey] = useState<string | null>(null);
+  const [loadingReqDocs, setLoadingReqDocs] = useState(false);
+
+  // 引用需求只取当前会话 + 当前模块的需求文档，不跨会话/模块
+  const loadRequirementDocs = useCallback(async () => {
+    if (!selectedSession?.id) {
+      setRequirementDocs([]);
       return;
     }
-
-    setLoadingFeishuSections(true);
+    setLoadingReqDocs(true);
     try {
-      const { documentApi } = await import('../../services/api');
-      const res = await documentApi.getFeishuContent(url);
-      if (res.code !== 200 || !res.data?.text) {
-        throw new Error(res.message || '读取飞书文档失败');
+      const { requirementDocApi } = await import('../../services/api');
+      const filters: { session_id: number; module_id?: number } = { session_id: selectedSession.id };
+      if (selectedModule && selectedModule !== 0 && Number.isFinite(Number(selectedModule))) {
+        filters.module_id = Number(selectedModule);
       }
-      const sections = extractFeishuSections(res.data.text);
-      setFeishuSections(sections);
-      setFeishuPreviewContent(res.data.text);
-      setFeishuPreviewVisible(true);
-      setLoadedFeishuUrl(url);
-      setFeishuSection('');
-      if (!sections.length) {
-        antMessage.info('已解析文档，但未识别到编号或 Markdown 标题');
+      const res = await requirementDocApi.list(filters);
+      if (res.code === 200 && res.data) {
+        // 只列需求文档，排除生成历史（source_type=generation）
+        setRequirementDocs(res.data.filter((d) => d.source_type !== 'generation'));
       }
-    } catch (e: any) {
-      console.error('Load Feishu sections failed:', e);
-      antMessage.error('读取飞书目录失败：' + (e?.response?.data?.message || e?.message || '未知错误'));
+    } catch (e) {
+      console.error('加载需求文档失败', e);
     } finally {
-      setLoadingFeishuSections(false);
+      setLoadingReqDocs(false);
     }
+  }, [selectedSession?.id, selectedModule]);
+
+  useEffect(() => {
+    loadRequirementDocs();
+    setFilledKey(null); // 会话/模块切换后清空已选引用，避免指向不存在的节点
+  }, [loadRequirementDocs]);
+
+  // 解析结构章节填充：value = `${docId}::${sectionPath}`（sectionPath 为 '__all__' 时填整篇）
+  const handleFillRequirement = (val?: string) => {
+    setFilledKey(val ?? null);
+    if (!val) return;
+    const sep = val.indexOf('::');
+    if (sep < 0) return;
+    const docId = Number(val.slice(0, sep));
+    const secPath = val.slice(sep + 2);
+    const doc = requirementDocs.find((d) => d.id === docId);
+    if (!doc) return;
+    if (secPath === '__all__') {
+      onRequirementChange((doc.content_snapshot || '').trim());
+      return;
+    }
+    const sorted = [...(doc.structured || [])].sort((a, b) => a.order_index - b.order_index);
+    const sectionOf = (it: RequirementItem) => (it.section || '').trim();
+    // 选中的章节 + 其全部子章节，按文档顺序重建带子标题的正文
+    const descendants: string[] = [];
+    for (const it of sorted) {
+      const sPath = sectionOf(it);
+      if (sPath.startsWith(secPath + ' / ') && !descendants.includes(sPath)) descendants.push(sPath);
+    }
+    const bodyOf = (path: string) => sorted
+      .filter((it) => sectionOf(it) === path)
+      .map((it) => (it.content || '').trim())
+      .filter(Boolean)
+      .join('\n\n');
+    let text = bodyOf(secPath);
+    for (const dPath of descendants) {
+      const body = bodyOf(dPath);
+      if (!body) continue;
+      const rel = dPath.slice(secPath.length + 3); // 去掉 "父路径 / " 前缀
+      text += (text ? '\n\n' : '') + `#### ${rel}\n\n${body}`;
+    }
+    onRequirementChange((`## ${secPath}\n\n${text}`).trim());
   };
+
+  // 下拉树：文档根节点（默认收起）→ 解析结构层级章节，与需求管理大纲一致
+  const refTreeData = useMemo(() => requirementDocs.map((d) => {
+    interface RefTreeNode {
+      title: string;
+      value: string;
+      selectable: boolean;
+      children?: RefTreeNode[];
+    }
+    const nodeByPath = new Map<string, RefTreeNode>();
+    const roots: RefTreeNode[] = [];
+    const ensureNode = (path: string, parts: string[]): RefTreeNode => {
+      const existing = nodeByPath.get(path);
+      if (existing) return existing;
+      const depth = parts.length;
+      const parentPath = depth > 1 ? parts.slice(0, depth - 1).join(' / ') : '';
+      const parent = depth > 1 ? ensureNode(parentPath, parts.slice(0, depth - 1)) : null;
+      const node: RefTreeNode = { title: parts[depth - 1], value: `${d.id}::${path}`, selectable: true, children: [] };
+      nodeByPath.set(path, node);
+      if (parent && parent.children) parent.children.push(node);
+      else roots.push(node);
+      return node;
+    };
+    const sorted = [...(d.structured || [])].sort((a, b) => a.order_index - b.order_index);
+    for (const it of sorted) {
+      const sec = (it.section || '').trim();
+      if (!sec) continue;
+      ensureNode(sec, sec.split(' / ').filter(Boolean));
+    }
+    // 空子级置空，避免出现无内容却带展开箭头的节点
+    const prune = (nodes: RefTreeNode[]): RefTreeNode[] =>
+      nodes.map((n) => (n.children && n.children.length > 0
+        ? { title: n.title, value: n.value, selectable: n.selectable, children: prune(n.children) }
+        : { title: n.title, value: n.value, selectable: n.selectable }));
+    return {
+      title: `${d.title || '未命名需求'}（v${d.version}）`,
+      value: `${d.id}::__doc__`,
+      selectable: false,
+      children: [
+        { title: '整篇文档', value: `${d.id}::__all__`, selectable: true },
+        ...prune(roots),
+      ],
+    };
+  }), [requirementDocs]);
 
   const handleDeepGenerate = async () => {
     if (!selectedSession || (!requirement.trim() && !selectedFile)) return;
     if (selectedStages.length === 0) {
       antMessage.warning('请至少选择一个生成阶段');
-      return;
-    }
-    if (feishuSection.trim() && !/https?:\/\/[a-zA-Z0-9-]+\.feishu\.cn\/(?:wiki|docx)\/[\w-]+/i.test(requirement)) {
-      antMessage.warning('填写飞书目录标题时，请在需求描述中提供对应的飞书文档链接');
       return;
     }
 
@@ -313,7 +322,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
         file: selectedFile,
         pipelineMode: selectedStages.length === 4 ? 'auto' : 'manual',
         stopAfterStage: Math.max(...selectedStages) as 1 | 2 | 3 | 4,
-        feishuSection,
       });
       if (res.code === 200 && res.data?.task_id) {
         setPipelineTaskId(res.data.task_id);
@@ -375,7 +383,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
     ? modules.find(m => m.id === selectedModule)?.module_name || '无'
     : '无';
 
-  const previewContent = extractPreviewSection(feishuPreviewContent, feishuSection);
 
   return (
     <div className="tcg-container">
@@ -454,6 +461,40 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                   )}
                   <span className="tcg-file-hint">支持 .docx / .txt / .md，文件内容作为生成主体（文本框文字作补充）</span>
                 </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, marginBottom: 12, alignItems: 'flex-start' }}>
+                  {/* Chrome 会把此搜索框误判为登录用户名框并弹密码填充提示；
+                      放一对屏幕外的诱饵输入框吸收该判定（业界通用做法） */}
+                  <input
+                    type="text"
+                    name="tcg-decoy-username"
+                    autoComplete="off"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    style={{ position: 'absolute', left: -9999, top: 0, width: 1, height: 1, opacity: 0, border: 'none' }}
+                  />
+                  <input
+                    type="password"
+                    name="tcg-decoy-password"
+                    autoComplete="new-password"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    style={{ position: 'absolute', left: -9999, top: 0, width: 1, height: 1, opacity: 0, border: 'none' }}
+                  />
+                  <TreeSelect
+                    showSearch
+                    allowClear
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={filledKey ?? undefined}
+                    treeData={refTreeData}
+                    treeNodeFilterProp="title"
+                    placeholder="引用需求：展开文档按解析结构选章节，正文填入下方输入框（可选）"
+                    onChange={(v) => handleFillRequirement(v as string | undefined)}
+                    disabled={pipelinePolling || loading || loadingReqDocs}
+                    loading={loadingReqDocs}
+                    treeDefaultExpandAll={false}
+                    notFoundContent={loadingReqDocs ? <Spin size="small" /> : '暂无可引用的需求文档（先在需求管理登记）'}
+                  />
+                </div>
                 <div className="tcg-textarea-wrapper">
                   <Input.TextArea
                     ref={textAreaRef}
@@ -463,30 +504,7 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
                     className="tcg-textarea"
                   />
                 </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'flex-start' }}>
-                  <Select
-                    showSearch
-                    allowClear
-                    style={{ flex: 1, minWidth: 0 }}
-                    value={feishuSection || undefined}
-                    placeholder="从飞书文档选择目录（可不选）"
-                    options={feishuSections.map(section => ({ label: section.label, value: section.value }))}
-                    optionFilterProp="label"
-                    onChange={(value) => setFeishuSection(value || '')}
-                    disabled={pipelinePolling || loading || loadingFeishuSections}
-                    notFoundContent={feishuSections.length ? '无匹配目录' : '请先读取目录'}
-                  />
-                  <Button
-                    icon={<FolderOpenOutlined />}
-                    onClick={handleLoadFeishuSections}
-                    loading={loadingFeishuSections}
-                    disabled={pipelinePolling || loading}
-                  >
-                    解析并预览
-                  </Button>
-                </div>
               </div>
-
               <div className="tcg-mode-switch">
                 <span className="tcg-mode-switch-label">
                   <ExperimentOutlined style={{ color: 'var(--color-primary)' }} />
@@ -695,60 +713,6 @@ const TestCaseGenerator: React.FC<TestCaseGeneratorProps> = ({
           </div>
         )}
 
-        {/* Feishu parsed document preview */}
-        <Modal
-          title="飞书文档解析预览"
-          open={feishuPreviewVisible}
-          onCancel={() => setFeishuPreviewVisible(false)}
-          width={900}
-          footer={[
-            <Button key="close" onClick={() => setFeishuPreviewVisible(false)}>
-              关闭
-            </Button>,
-            <Button key="use-section" type="primary" onClick={() => setFeishuPreviewVisible(false)}>
-              使用所选目录
-            </Button>,
-          ]}
-        >
-          <div style={{ marginBottom: 12, color: 'var(--color-text-secondary)', fontSize: 13 }}>
-            {feishuSection
-              ? `当前预览目录：${feishuSection}，显示 ${previewContent.length.toLocaleString()} / ${feishuPreviewContent.length.toLocaleString()} 个字符。`
-              : `已解析 ${feishuPreviewContent.length.toLocaleString()} 个字符，识别到 ${feishuSections.length} 个目录。`}
-            此操作仅读取文档，不会生成用例。
-          </div>
-          {feishuSections.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-              <span style={{ flexShrink: 0, fontWeight: 500 }}>生成目录</span>
-              <Select
-                showSearch
-                allowClear
-                style={{ flex: 1 }}
-                value={feishuSection || undefined}
-                placeholder="可选：选择章节作为生成范围"
-                options={feishuSections.map(section => ({ label: section.label, value: section.value }))}
-                optionFilterProp="label"
-                onChange={(value) => setFeishuSection(value || '')}
-              />
-            </div>
-          )}
-          <pre style={{
-            margin: 0,
-            padding: 14,
-            maxHeight: '55vh',
-            overflow: 'auto',
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-            border: '1px solid var(--color-border-secondary)',
-            borderRadius: 4,
-            background: 'var(--color-bg-layout)',
-            color: 'var(--color-text)',
-            fontFamily: 'inherit',
-            fontSize: 13,
-            lineHeight: 1.6,
-          }}>
-            {previewContent}
-          </pre>
-        </Modal>
 
       </div>
 

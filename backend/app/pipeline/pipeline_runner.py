@@ -2644,3 +2644,71 @@ class PipelineRunner:
         except Exception as e:
             logger.error(f"批量生成用例失败: {e}", exc_info=True)
             self._fail_task(task_id, str(e))
+
+    async def generate_from_requirement_points(
+        self,
+        task_id: str,
+        rp_ids: List[int],
+        user_id: Optional[str] = None,
+        *,
+        module_id: Optional[int] = None,
+    ) -> None:
+        """为给定需求点按 pipeline 顺序生成测试点与用例（条目圈选路径）。
+
+        需求点已由路由层从文档条目圈选产生（带 doc_id/item_key 来源），
+        本方法逐需求点走「测试点生成（Stage 2）→ 用例设计（Stage 3）」，
+        每个用例带 test_point_id，「用例结构」页签完整呈现层级。
+        """
+        from db.db import engine
+        from sqlmodel import Session as DBSession
+        from db.models import RequirementPoint, TestCase
+        try:
+            with DBSession(engine) as session:
+                self.db = session
+                total = len(rp_ids)
+                total_tps = 0
+                total_cases = 0
+                for i, rp_id in enumerate(rp_ids):
+                    self._update_progress(
+                        task_id, 2, "测试点生成",
+                        int(10 + (i / total) * 75),
+                        f"需求点 {i + 1}/{total}：生成测试点并级联设计用例",
+                    )
+                    rp = session.get(RequirementPoint, rp_id)
+                    if not rp:
+                        continue
+                    # 未显式传入时继承需求点已有的 module_id（与 regenerate 一致）
+                    effective_module = module_id if module_id is not None else rp.module_id
+                    is_api_test, api_context, endpoint_index_to_id, api_project_id, api_endpoint_ids = \
+                        self._resolve_api_context(rp.api_project_id, rp.api_endpoint_ids)
+                    tps = await self._inplace_update_test_points(
+                        rp,
+                        rp.content,
+                        is_api_test=is_api_test,
+                        api_context=api_context,
+                        endpoint_index_to_id=endpoint_index_to_id,
+                        api_project_id=api_project_id,
+                        api_endpoint_ids=api_endpoint_ids,
+                        module_id=effective_module,
+                        user_id=user_id,
+                    )
+                    total_tps += len(tps)
+                    for tp in tps:
+                        rows = self.db.exec(
+                            select(TestCase).where(TestCase.test_point_id == tp.id)
+                        ).all()
+                        total_cases += len(rows)
+
+                self._update_progress(
+                    task_id, 3, "用例设计", 95,
+                    f"生成完成：需求点 {total}，测试点 {total_tps}，用例 {total_cases}",
+                )
+                self._complete_task(task_id, {
+                    "mode": "from_items",
+                    "requirement_points_count": total,
+                    "test_points_count": total_tps,
+                    "cases_count": total_cases,
+                })
+        except Exception as e:
+            logger.error(f"条目圈选 pipeline 生成失败: {e}", exc_info=True)
+            self._fail_task(task_id, str(e))

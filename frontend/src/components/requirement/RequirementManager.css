@@ -143,7 +143,6 @@
 .req-mgr-revisions,
 .req-mgr-links {
   height: 100%;
-  overflow-y: auto;
 }
 
 .req-mgr-content .ant-collapse {
@@ -223,6 +222,10 @@
   background: #f8fafc;
   border: 1px solid var(--color-border-light, #f1f5f9);
   border-radius: 8px;
+  /* 冻结按钮栏：滚动时固定在页签内容区顶部 */
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .req-mgr-item.checked {
@@ -261,6 +264,26 @@
   background: #f43f5e;
   flex-shrink: 0;
   display: inline-block;
+}
+
+/* ===== 页签内容滚动：antd Tabs 高度链 ===== */
+/* Tabs 根（内联 flex:1/minHeight:0）的内容容器必须撑满，否则三个页签内容超长时无法滚动 */
+.req-mgr-detail .ant-tabs {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.req-mgr-detail .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.req-mgr-detail .ant-tabs-content,
+.req-mgr-detail .ant-tabs-tabpane {
+  height: 100%;
+  overflow-y: auto;
 }
 
 /* 来源过滤 chips */

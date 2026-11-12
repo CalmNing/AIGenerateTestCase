@@ -35,7 +35,7 @@ default_config = {
     "feishu_image_enabled": True,
     # 默认 8 张：图片描述会显著加长需求文本，20 张时曾把生成输出顶到 max_tokens 上限
     # （>=16384 截断），6~10 张是实测比较稳的区间；可按需调大。
-    "feishu_image_max": 8,
+    "feishu_image_max": 30,
     "feishu_image_max_chars": 300,
     "vision_model": "",
     "vision_api_base_url": "",

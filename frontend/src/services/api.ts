@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PlatformMockCoverage, MockPreviewRequest, MockPreviewResult, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult, RequirementDoc, RequirementItem, RequirementDiffEntry, RequirementRevision, AffectedCase, DocLinkEntry, CaseUpdateResult, CoverageSummary, GenerateFromItemsResult } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PlatformMockCoverage, MockPreviewRequest, MockPreviewResult, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult, RequirementDoc, RequirementItem, RequirementDiffEntry, RequirementRevision } from '../types';
 
 // 创建axios实例
 // RAG 类型定义（B6 观测页用）
@@ -1099,7 +1099,7 @@ export const requirementDocApi = {
     api.get('/requirement-docs', { params: filters }),
 
   // 登记飞书文档并立即同步
-  create: (data: { url: string; title?: string; session_id?: number | null }): Promise<ApiResponse<RequirementDoc>> =>
+  create: (data: { url: string; title?: string; session_id?: number | null; module_id?: number | null }): Promise<ApiResponse<RequirementDoc>> =>
     api.post('/requirement-docs', data),
 
   // 手动录入文本需求（manual）
@@ -1132,31 +1132,4 @@ export const requirementDocApi = {
   revisions: (docId: number): Promise<ApiResponse<RequirementRevision[]>> =>
     api.get(`/requirement-docs/${docId}/revisions`),
 
-  // 变更影响分析：识别受影响的测试用例
-  impact: (docId: number): Promise<ApiResponse<{ affected: AffectedCase[]; has_diff: boolean; version?: number }>> =>
-    api.post(`/requirement-docs/${docId}/impact`),
-
-  // 需求条目 ↔ 测试用例 关联登记/解除（testcase_id=0 解除）
-  upsertLink: (docId: number, data: { item_key: string; testcase_id: number; session_id?: number | null }): Promise<ApiResponse> =>
-    api.post(`/requirement-docs/${docId}/links`, data),
-
-  // 关联映射列表
-  links: (docId: number): Promise<ApiResponse<DocLinkEntry[]>> =>
-    api.get(`/requirement-docs/${docId}/links`),
-
-  // 用例联动更新（apply=false 仅生成建议；apply=true 直接写回用例）
-  applyCases: (docId: number, data: { case_ids: number[]; item_keys?: string[]; apply?: boolean }): Promise<ApiResponse<{ results: CaseUpdateResult[]; applied: boolean }>> =>
-    api.post(`/requirement-docs/${docId}/apply-cases`, data),
-
-  // 需求条目圈选为会话需求点（幂等）
-  toRequirementPoints: (docId: number, data: { session_id: number; module_id?: number | null; item_keys: string[] }): Promise<ApiResponse<{ created: number; skipped: number; total: number }>> =>
-    api.post(`/requirement-docs/${docId}/to-requirement-points`, data),
-
-  // 需求条目覆盖视图（三态 + 执行状态聚合）
-  coverage: (docId: number): Promise<ApiResponse<CoverageSummary>> =>
-    api.get(`/requirement-docs/${docId}/coverage`),
-
-  // 按勾选条目直接生成测试用例（自动建立关联）
-  generateFromItems: (docId: number, data: { session_id: number; module_id?: number | null; item_keys: string[] }): Promise<ApiResponse<GenerateFromItemsResult>> =>
-    api.post(`/requirement-docs/${docId}/generate-from-items`, data),
 };

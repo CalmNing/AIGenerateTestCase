@@ -119,15 +119,8 @@ def match_page_object(page_objects: Iterable[PageObject], target_url: str) -> Op
 
 
 def load_user_page_objects(db: Session, user_id: Optional[str]) -> list[PageObject]:
-    """当前用户可见的 PageObject;无 user_id 时取全部(与现有宽松访问口径一致)。"""
-    stmt = select(PageObject)
-    if user_id:
-        stmt = stmt.where(PageObject.user_id == user_id)
-    rows = list(db.exec(stmt.order_by("id")).all())
-    if not rows and user_id:
-        # 旧数据 user_id 为空时仍可见,避免编译永远匹配不到
-        rows = list(db.exec(select(PageObject).order_by("id")).all())
-    return rows
+    """全部 PageObject(数据全局共享,不按用户隔离;user_id 参数保留仅为兼容)。"""
+    return list(db.exec(select(PageObject).order_by("id")).all())
 
 
 # ---------------------------------------------------------------------------

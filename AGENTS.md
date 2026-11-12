@@ -69,7 +69,7 @@ alembic revision --autogenerate -m "描述"
 
 ### MCP 配置
 
-- 后端只读当前用户**服务端已保存且启用**的 MCP 配置
+- 后端读取**服务端已保存且启用**的全部 MCP 配置（数据全局共享，不按用户隔离）
 - 客户端传入的 `mcp_servers` 字段**会被忽略**（避免绕过 `/api/mcp` 权限控制）
 - 支持 HTTP（短连接到外部 URL）和 STDIO（临时子进程，用后 `_safe_kill()`）
 

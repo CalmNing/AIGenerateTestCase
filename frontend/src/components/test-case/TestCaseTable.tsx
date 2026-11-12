@@ -4,7 +4,6 @@ import {
   EyeOutlined,
   EditOutlined,
   CheckCircleOutlined,
-  ApiOutlined,
   DragOutlined,
   ExclamationCircleOutlined,
   SafetyCertificateOutlined,
@@ -102,74 +101,6 @@ const TestCaseTable: React.FC<TestCaseTableProps> = ({
       render: (level: number) => {
         const cls = `tcm-level-badge tcm-level-badge--${level || 4}`;
         return <span className={cls}>{formatTestCaseLevel(level)}</span>;
-      },
-    },
-    {
-      title: '接口',
-      key: 'api_steps',
-      width: 260,
-      render: (_: unknown, record: TestCase) => {
-        const scenarioSteps = record.scenario_steps || [];
-        if (scenarioSteps.length > 0) {
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {scenarioSteps.map((step, i: number) => {
-                const method = step.method ? step.method.toUpperCase() : '';
-                const path = step.path || '';
-                const label = method && path ? `${method} ${path}` : (step.name || `步骤 ${i + 1}`);
-                return (
-                  <Tooltip key={i} title={label}>
-                    <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 230, display: 'inline-flex', alignItems: 'center' }}>
-                      <ApiOutlined style={{ marginRight: 4, flexShrink: 0 }} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
-                    </Tag>
-                  </Tooltip>
-                );
-              })}
-            </div>
-          );
-        }
-
-        const allSteps = [
-          ...((record.preset_conditions || []).filter((step: any) => typeof step === 'object' && step.type === 'api_call')),
-          ...((record.steps || []).filter((step: any) => typeof step === 'object' && step.type === 'api_call')),
-        ];
-
-        if (allSteps.length === 0) {
-          if (!record.api_endpoint_id) {
-            return <span style={{ color: 'var(--color-text-disabled)', fontSize: 12 }}>-</span>;
-          }
-
-          const ids = String(record.api_endpoint_id).split(',').map((item) => item.trim()).filter(Boolean);
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {ids.map((id, i) => (
-                <Tag key={i} color="default" style={{ fontSize: 11, margin: 0 }}>
-                  <ApiOutlined style={{ marginRight: 4 }} />
-                  接口 #{id}
-                </Tag>
-              ))}
-            </div>
-          );
-        }
-
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {allSteps.map((step: any, i: number) => {
-              const method = step.method ? step.method.toUpperCase() : '';
-              const path = step.path || step.url || '';
-              const label = method && path ? `${method} ${path}` : (step.description || step.name || `步骤 ${i + 1}`);
-              return (
-                <Tooltip key={i} title={label}>
-                  <Tag color="blue" style={{ fontSize: 11, margin: 0, cursor: 'pointer', maxWidth: 230, display: 'inline-flex', alignItems: 'center' }}>
-                    <ApiOutlined style={{ marginRight: 4, flexShrink: 0 }} />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{label}</span>
-                  </Tag>
-                </Tooltip>
-              );
-            })}
-          </div>
-        );
       },
     },
     {

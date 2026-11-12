@@ -198,11 +198,11 @@ docker-compose.yml
 
 MCP config supports **server-side persistence** and **browser localStorage**:
 
-- **Persistence model:** `db.models.McpServer` — stored in SQLite `mcpserver` table, isolated by `user_id`
+- **Persistence model:** `db.models.McpServer` — stored in SQLite `mcpserver` table, shared across users (`user_id` kept only as creator metadata)
 - **API routes:** `backend/app/routes/mcp.py` `GET/POST/PUT/DELETE /mcp/servers` CRUD endpoints
 - **Frontend load order:** McpConfigModal loads from server first; falls back to localStorage if server unavailable
 - **Save logic:** Writes to both server and localStorage (localStorage as UI fallback only)
-- **Generation flow:** Backend reads only current user's server-saved enabled MCP configs; client `mcp_servers` field ignored to prevent bypassing `/api/mcp` permission control
+- **Generation flow:** Backend reads all server-saved enabled MCP configs (shared across users, no per-user isolation); client `mcp_servers` field ignored to prevent bypassing `/api/mcp` permission control
 - **Execution:**
   - HTTP type: Backend short-connects to external URL, disconnects after use
   - STDIO type: Backend uses `asyncio.create_subprocess_exec` to temporarily start subprocess (e.g., `npx ...`), killed via `_safe_kill()` after generation

@@ -666,10 +666,9 @@ from utils.base_response import Response
 
 @router.get("/servers", response_model=Response[List[McpServer]])
 def list_mcp_servers(session: SessionDep, user: CurrentUser):
-    """获取当前用户的所有持久化 MCP 服务器配置"""
+    """获取所有持久化 MCP 服务器配置（全局共享，不按用户隔离）"""
     servers = session.exec(
         select(McpServer)
-        .where(McpServer.user_id == user.user_id)
         .order_by(McpServer.created_at.desc())
     ).all()
     return Response(data=servers)
@@ -691,8 +690,6 @@ def update_mcp_server(session: SessionDep, user: CurrentUser, server_id: int, se
     db_server = session.get(McpServer, server_id)
     if not db_server:
         return Response(code=404, message="MCP 服务器配置不存在")
-    if db_server.user_id != user.user_id:
-        return Response(code=403, message="无权修改此配置")
     server_data = server.model_dump(exclude_unset=True)
     server_data.pop("created_at", None)
     server_data.pop("updated_at", None)
@@ -710,8 +707,6 @@ def delete_mcp_server(session: SessionDep, user: CurrentUser, server_id: int):
     db_server = session.get(McpServer, server_id)
     if not db_server:
         return Response(code=404, message="MCP 服务器配置不存在")
-    if db_server.user_id != user.user_id:
-        return Response(code=403, message="无权删除此配置")
     session.delete(db_server)
     session.commit()
     return Response(message="MCP 服务器配置已删除")
@@ -817,11 +812,10 @@ def import_mcp_servers(session: SessionDep, user: CurrentUser, data = Body(None)
         if not entry.get("name"):
             continue
 
-        # 按 name + user_id 查找已有配置
+        # 按名称查找已有配置（全局共享，不按用户隔离）
         existing = session.exec(
             select(McpServer).where(
                 McpServer.name == entry["name"],
-                McpServer.user_id == user.user_id
             )
         ).first()
 
@@ -887,7 +881,6 @@ def export_mcp_servers(session: SessionDep, user: CurrentUser):
     """导出为标准 JSON 格式（mcpServers 格式）"""
     servers = session.exec(
         select(McpServer)
-        .where(McpServer.user_id == user.user_id)
         .order_by(McpServer.created_at.desc())
     ).all()
 

@@ -85,6 +85,32 @@ class TestCase(BaseModel, table=True):
     status: str = Field(default="NOT_RUN")  # 使用字符串类型，直接设置默认值created_at
     bug_id: Optional[int] = Field(default=None)
     module_id: Optional[int] = Field(default=None)
+
+    @field_validator("module_id", mode="before")
+    @classmethod
+    def _coerce_module_id(cls, v):
+        """历史前端曾把 NaN 序列化成字符串提交；非法值一律归 None。"""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            s = v.strip()
+            if not s or s.lower() == "nan":
+                return None
+            try:
+                return int(s)
+            except ValueError:
+                return None
+        if isinstance(v, float) and v != v:  # NaN float
+            return None
+        return v
+
+    @field_validator("ui_binding", mode="before")
+    @classmethod
+    def _coerce_ui_binding(cls, v):
+        """ui_binding 声明为 dict；历史数据误存 list([]) 时归 None。"""
+        if isinstance(v, list):
+            return None if not v else None  # list 不含合法绑定语义，统一归 None
+        return v
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
     api_endpoint_id: Optional[str] = Field(default=None, description="关联的 API Endpoint ID（逗号分隔）")
     api_project_id: Optional[int] = Field(default=None, description="关联的 API Project ID")

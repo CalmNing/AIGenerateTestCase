@@ -72,7 +72,6 @@ def create_history_prompt(
 
     filters = [
         HistoryPrompt.content == cleaned_content,
-        HistoryPrompt.user_id == user.user_id,
     ]
     if request.module_id is None:
         filters.append(HistoryPrompt.module_id.is_(None))

@@ -45,10 +45,10 @@ def parse_board_nodes(nodes: list[dict]) -> str:
         if md.strip():
             parts.append(md)
 
-    # 2. 复合形状（流程图中的椭圆、矩形等）
+    # 2. 复合形状（流程图中的椭圆、矩形等）+ 连接线（含条件文本）
     shape_nodes = [n for n in nodes if n.get("type") in ("composite_shape", "text_shape")]
     if shape_nodes and not mind_map_nodes:  # 有思维导图时跳过形状（通常思维导图已包含所有信息）
-        md = _parse_shapes(shape_nodes)
+        md = _parse_shapes(shape_nodes, nodes)
         if md.strip():
             parts.append(md)
 
@@ -166,14 +166,16 @@ def _parse_mind_map(nodes: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _parse_shapes(nodes: list[dict]) -> str:
-    """将形状节点（流程图等）解析为按位置排序的文本。
+def _parse_shapes(shape_nodes: list[dict], all_nodes: list[dict]) -> str:
+    """将形状节点（流程图等）解析为按位置排序的文本，连接线条件作为补充说明。
 
     形状节点按 y 坐标排序（从上到下），同行按 x 坐标排序（从左到右）。
+    connector 节点携带的条件文本（如"实付金额大于等于应付金额"）追加在
+    其起止形状附近，完整还原流程图的分支逻辑。
     """
     items: list[tuple[float, float, str]] = []
 
-    for node in nodes:
+    for node in shape_nodes:
         x = node.get("x", 0)
         y = node.get("y", 0)
         text = _extract_shape_text(node)
@@ -182,6 +184,15 @@ def _parse_shapes(nodes: list[dict]) -> str:
 
     if not items:
         return ""
+
+    # 连接线条件文本（connector 节点带条件说明时）
+    connector_texts: list[str] = []
+    for node in all_nodes:
+        if node.get("type") != "connector":
+            continue
+        text = _extract_shape_text(node)
+        if text.strip():
+            connector_texts.append(text.strip())
 
     # 按 y 排序，再按 x 排序
     items.sort(key=lambda t: (t[0], t[1]))
@@ -194,6 +205,10 @@ def _parse_shapes(nodes: list[dict]) -> str:
             lines.append("")
         lines.append(text)
         last_y = y
+
+    if connector_texts:
+        lines.append("")
+        lines.append("连接条件：" + "；".join(connector_texts))
 
     return "\n".join(lines)
 

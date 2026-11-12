@@ -98,9 +98,10 @@ def _build_api_context(
 
 
 def _get_user_config(session, user_id: Optional[str] = None) -> dict:
-    """从数据库获取用户配置，如果不存在则返回默认值"""
-    statement = select(SystemConfig).where(SystemConfig.user_id == user_id)
-    config = session.exec(statement).first()
+    """获取系统配置（全局共享，不按用户隔离；user_id 参数保留仅为兼容）"""
+    from app.services.system_config import get_shared_system_config
+
+    config = get_shared_system_config(session)
 
     if config:
         return {
@@ -126,14 +127,11 @@ def _get_user_config(session, user_id: Optional[str] = None) -> dict:
 
 
 def _check_session_owner(session, session_id: int, user: "CurrentUser"):
-    """校验 session 归属当前用户（user_id 匹配或管理员）。"""
+    """校验会话存在（数据全局共享，不再按 user_id 校验归属）。"""
     from db.models import Session as SessionModel
     s = session.get(SessionModel, session_id)
     if not s:
         raise HTTPException(status_code=404, detail="会话不存在")
-    # 仅当用户登录且 session 绑定了 user_id 时校验；管理员/未绑定不强制
-    if user and s.user_id and user.user_id and s.user_id != user.user_id:
-        raise HTTPException(status_code=403, detail="无权操作该会话的数据")
 
 
 @router.post("/generate-v2")
@@ -519,8 +517,6 @@ async def delete_requirement_point(
     rp = session.get(RequirementPoint, point_id)
     if not rp:
         raise HTTPException(status_code=404, detail="需求点不存在")
-    if user and rp.user_id and user.user_id and rp.user_id != user.user_id:
-        raise HTTPException(status_code=403, detail="无权删除该需求点")
 
     tps = session.exec(select(TPModel).where(TPModel.requirement_point_id == point_id)).all()
     for tp in tps:
@@ -548,8 +544,6 @@ async def delete_test_point(
     tp = session.get(TestPoint, point_id)
     if not tp:
         raise HTTPException(status_code=404, detail="测试点不存在")
-    if user and tp.user_id and user.user_id and tp.user_id != user.user_id:
-        raise HTTPException(status_code=403, detail="无权删除该测试点")
 
     cases = session.exec(select(TCModel).where(TCModel.test_point_id == point_id)).all()
     for c in cases:

@@ -1,8 +1,8 @@
-"""Shared loader for a user's enabled, server-persisted MCP configs.
+"""Shared loader for the shared, server-persisted MCP configs (all users).
 
 Centralizes the permission check + query + model_dump duplicated in
 routes/testcase.py and routes/pipeline.py. Returns [] when the user lacks
-mcp:manage permission.
+mcp:manage permission. Data is shared across users — no per-user filtering.
 """
 import logging
 
@@ -17,7 +17,7 @@ _EXCLUDE_FIELDS = {"id", "created_at", "updated_at", "user_id"}
 
 
 def load_user_mcp_configs(session, user) -> list[dict]:
-    """Return the current user's enabled MCP server configs as dicts.
+    """Return all enabled MCP server configs as dicts (shared across users).
 
     Only server-persisted configs are read (client-supplied configs are
     ignored elsewhere to preserve /api/mcp permission control). Returns an
@@ -29,7 +29,6 @@ def load_user_mcp_configs(session, user) -> list[dict]:
 
     servers = session.exec(
         select(McpServer).where(
-            McpServer.user_id == user.user_id,
             McpServer.enabled == True,  # noqa: E712 (SQLModel needs ==)
         )
     ).all()

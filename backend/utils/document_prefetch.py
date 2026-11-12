@@ -20,6 +20,7 @@ Feishu doc extraction covers four layers:
 import asyncio
 import base64
 import io
+import json
 import logging
 import re
 
@@ -39,6 +40,9 @@ FEISHU_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 裸图片引用行（rawContent 中图片位置的占位，如 image.png）
+_IMAGE_LINE_RE = re.compile(r'^(image\d*\.(png|jpe?g|gif|bmp|webp)|图片\d*\.png)$', re.IGNORECASE)
+
 # 飞书 token 前缀：电子表格(sheet) 与 多维表格(bitable) 各自的专属前缀。
 # 嵌入块 token 形如 `spreadsheetToken_sheetId`（下划线前是表格、后是子表）。
 _FEISHU_TOKEN_PREFIXES = (
@@ -55,6 +59,7 @@ _FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 
 # 飞书画板在 docx blocks 中的 block_type
 _BOARD_BLOCK_TYPE = 43
+_ADD_ONS_BLOCK_TYPE = 40
 
 # ---------------------------------------------------------------------------
 # 文档内嵌图片（docx image block）
@@ -322,15 +327,12 @@ async def fetch_feishu_board(board_token: str, mcp_configs) -> "str | None":
 async def _collect_board_markdown(
     boards: list[dict], mcp_configs,
 ) -> str:
-    """读取多个画板并拼成 Markdown。"""
+    """读取多个画板并拼成 Markdown（不带画板编号标题，内容直接拼接）。"""
     blocks: list[str] = []
-    for i, board in enumerate(boards):
+    for board in boards:
         md = await fetch_feishu_board(board["token"], mcp_configs)
         if md:
-            label = f"画板 {i + 1}"
-            if board.get("width") and board.get("height"):
-                label += f" ({board['width']}x{board['height']})"
-            blocks.append(f"### {label}\n\n{md}")
+            blocks.append(md)
     return "\n\n".join(blocks)
 
 
@@ -781,6 +783,81 @@ async def _collect_image_markdown_impl(
     return markdown
 
 
+async def _collect_image_records(
+    document_id: str,
+    app_id: str,
+    app_secret: str,
+    vision_config: "dict | None" = None,
+) -> list:
+    """读取文档内嵌图片并返回结构化描述记录（按正文出现顺序）。
+
+    与 _collect_image_markdown 相同链路，但返回 records 列表
+    （含 index/context/description），供按位置内嵌到正文。失败返回空列表。
+    """
+    markdown = await _collect_image_markdown(
+        document_id, app_id, app_secret, vision_config)
+    if not markdown:
+        return []
+    # _collect_image_markdown 内部完成了解析；records 无法直接透传，
+    # 这里从 markdown 反解出 {index, description}（width/height/title 不需要）。
+    records: list = []
+    current: dict | None = None
+    for line in markdown.replace("\r\n", "\n").split("\n"):
+        s = line.strip()
+        m = re.match(r'^###\s*图片\s*(\d+)', s)
+        if m:
+            current = {"index": int(m.group(1)), "description": ""}
+            records.append(current)
+            continue
+        if current is not None:
+            if s.startswith("###") or s.startswith("##"):
+                current = None
+                continue
+            if s.startswith("> 图片前的正文"):
+                continue
+            if s:
+                current["description"] = (current["description"] + "\n" + s).strip()
+    return records
+
+
+def _inline_image_descriptions(content: str, records: list) -> str:
+    """把图片描述按出现顺序内嵌到正文对应的 image 引用行位置。
+
+    rawContent 中图片位置是裸 image.png 行；按 records 顺序逐个替换该类行，
+    插入【图片 N：描述】。描述缺失的图片保留占位。任何情况下不改变非图片行。
+    """
+    if not records:
+        return content
+    lines = content.replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    ri = 0  # 下一个待插入的图片记录下标
+    for line in lines:
+        s = line.strip()
+        if _IMAGE_LINE_RE.match(s):
+            if ri < len(records):
+                record = records[ri]
+                ri += 1
+                idx = record.get("index", ri)
+                desc = (record.get("description") or "").strip()
+                if desc:
+                    out.append(f"【图片 {idx}】{desc}")
+                else:
+                    out.append(f"【图片 {idx}】（未识别内容）")
+            else:
+                # 超出识别上限/未识别的图片：保留占位提示，避免裸 image.png 困惑
+                out.append("【图片】（未识别内容：超出单次识别上限或视觉模型未识别）")
+        else:
+            out.append(line)
+    # 正文 image 行少于记录时（引用行被裁剪），剩余描述按顺序追加
+    if ri < len(records):
+        for record in records[ri:]:
+            idx = record.get("index", ri + 1)
+            desc = (record.get("description") or "").strip()
+            if desc:
+                out.append(f"【图片 {idx}】{desc}")
+    return "\n".join(out)
+
+
 class DocumentSectionNotFoundError(ValueError):
     pass
 
@@ -896,9 +973,37 @@ async def fetch_feishu_document(
 
             logger.info("已预取飞书文档正文: server=%s document_id=%s size=%s", server_name, document_id, len(content))
 
-            # 读取画板内容并追加到正文之后。
+            # blocks API 重建带标题级别的正文（rawContent 纯文本丢失了标题级别）；
+            # 成功则替换 content，失败保留纯文本并走启发式解析。
+            if app_id and app_secret:
+                try:
+                    blocks_md = await _build_markdown_from_blocks(document_id, app_id, app_secret)
+                    if blocks_md:
+                        content = blocks_md
+                except Exception as e:
+                    logger.warning("blocks 重建正文失败（保留 rawContent）doc=%s: %s", document_id, e)
+
+            # 读取画板内容：按 blocks 出现顺序内嵌到正文占位行位置（替代尾部附录）。
             board_tokens = await _discover_board_tokens(document_id, app_id, app_secret)
-            if board_tokens:
+            if board_tokens and "<BOARD_TOKEN=" in content:
+                boards_md = await _collect_board_markdown(board_tokens, enabled_configs) or ""
+                # 按空行切分为每板一段（顺序与 board_tokens 一致），直接内嵌不加分组标题
+                parts = [p.strip() for p in boards_md.split("\n\n") if p.strip()]
+                lines = content.split("\n")
+                bi = 0
+                for li, line in enumerate(lines):
+                    if "<BOARD_TOKEN=" in line:
+                        if bi < len(parts):
+                            lines[li] = parts[bi]
+                        else:
+                            lines[li] = "【画板】（画板内容获取失败，请重新同步）"
+                        bi += 1
+                content = "\n".join(lines)
+                # 未被占位行消耗的剩余画板段落追加到尾部
+                if bi < len(parts):
+                    content = content + "\n\n" + "\n\n".join(parts[bi:])
+            elif board_tokens and "<BOARD_TOKEN=" not in content:
+                # rawContent 降级路径:保留原尾部追加行为
                 boards_md = await _collect_board_markdown(board_tokens, enabled_configs)
                 if boards_md:
                     content = content + "\n\n## 画板内容\n\n" + boards_md
@@ -916,15 +1021,16 @@ async def fetch_feishu_document(
                 content = content + "\n\n" + sheets_md
 
             # 解析内嵌图片：按需求补充多模态描述（未配置视觉模型/无权限时静默跳过）。
-            # 指定 section 的读取无法判断图片归属，故不追加图片，避免混入其他章节。
+            # 图片描述按出现顺序内嵌到正文对应 image 引用行的位置，替代原附录追加。
+            # 指定 section 的读取无法判断图片归属，故不内嵌图片，避免混入其他章节。
             if not section:
                 try:
-                    images_md = await _collect_image_markdown(
+                    image_records = await _collect_image_records(
                         document_id, app_id, app_secret, vision_config)
-                    if images_md:
-                        content = content + "\n\n" + images_md
+                    if image_records:
+                        content = _inline_image_descriptions(content, image_records)
                 except Exception as e:
-                    logger.warning("飞书文档图片追加失败 doc=%s: %s", document_id, e)
+                    logger.warning("飞书文档图片内嵌失败 doc=%s: %s", document_id, e)
 
             if section:
                 content = extract_document_section(content, section)
@@ -1003,6 +1109,216 @@ async def _discover_embedded_sheet_tokens(
     except Exception as e:
         logger.warning("飞书 blocks 读取异常 doc=%s: %s", document_id, e)
         return []
+
+
+# 飞书 docx 标题块类型：heading1..heading9 → block_type 3..11
+# 文本所在字段名与 block_type 同族：heading1..heading9 / text / ordered（bullet）
+_HEADING_BLOCK_TYPES = {3: 1, 4: 2, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7, 10: 8, 11: 9}
+_TEXT_BLOCK_TYPE = 2
+_BULLET_BLOCK_TYPE = 13
+_ORDERED_BLOCK_TYPE = 12
+_IMAGE_BLOCK_TYPE = 27
+_QUOTE_BLOCK_TYPE = 15
+_TODO_BLOCK_TYPE = 17
+_DIVIDER_BLOCK_TYPE = 22
+_TABLE_BLOCK_TYPE = 31
+_TABLE_CELL_BLOCK_TYPE = 32
+_CONTAINER_BLOCK_TYPES = {24, 25, 33}  # grid / grid_column / view：仅递归 children
+
+
+def _block_text(block: dict) -> str:
+    """提取块的纯文本（按 block_type 从对应字段取 elements[].text_run.content）。"""
+    bt = block.get("block_type")
+    if bt in _HEADING_BLOCK_TYPES:
+        payload = block.get(f"heading{_HEADING_BLOCK_TYPES[bt]}") or {}
+    elif bt == _BULLET_BLOCK_TYPE:
+        payload = block.get("bullet") or block.get("ordered") or {}
+    elif bt == _ORDERED_BLOCK_TYPE:
+        payload = block.get("ordered") or block.get("bullet") or {}
+    elif bt == _QUOTE_BLOCK_TYPE:
+        payload = block.get("quote") or block.get("quote_container") or {}
+    elif bt == _TODO_BLOCK_TYPE:
+        payload = block.get("todo") or {}
+    else:
+        payload = block.get("text") or {}
+    elements = payload.get("elements") or []
+    parts = []
+    for el in elements:
+        tr = el.get("text_run") or {}
+        c = tr.get("content")
+        if isinstance(c, str):
+            parts.append(c)
+    return "".join(parts)
+
+
+async def _build_markdown_from_blocks(
+    document_id: str,
+    app_id: str,
+    app_secret: str,
+) -> "str | None":
+    """用 docx blocks API 重建带标题级别的 Markdown 正文。
+
+    rawContent 是纯文本，丢失了标题级别；blocks API 的 block_type 明确
+    标注 heading1..9。按块树顺序生成：标题块加 # 前缀，bullet 块加 - ，
+    文本块原样，图片块留 image.png 占位行（供图片描述内嵌），
+    容器块（grid/view）递归 children。失败返回 None。
+    """
+    tenant_token = await _get_feishu_tenant_token(app_id, app_secret)
+    if not tenant_token:
+        return None
+    try:
+        items: list = []
+        page_token = ""
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+            while True:
+                params = {"page_size": 500}
+                if page_token:
+                    params["page_token"] = page_token
+                resp = await client.get(
+                    f"{_FEISHU_API_BASE}/docx/v1/documents/{document_id}/blocks",
+                    headers={"Authorization": f"Bearer {tenant_token}"},
+                    params=params,
+                )
+                data = resp.json()
+                if data.get("code") != 0:
+                    logger.warning("飞书 blocks 读取失败 doc=%s: %s", document_id, data)
+                    return None
+                d = data.get("data", {}) or {}
+                items.extend(d.get("items", []) or [])
+                if d.get("has_more") and d.get("page_token"):
+                    page_token = d["page_token"]
+                else:
+                    break
+
+        blocks_by_id = {b.get("block_id"): b for b in items}
+        root_id = document_id
+        # 文档根的直接子块顺序（没有 parent 顺序信息时按 API 返回顺序兜底）
+        roots = [b for b in items if b.get("parent_id") == root_id]
+        if not roots:
+            roots = items
+
+        out: list[str] = []
+
+        def emit_table(block: dict) -> None:
+            """31 table → 按 table.cells(扁平顺序)+ column_size 切行，重建 Markdown 表格。"""
+            tp = block.get("table") or {}
+            cell_ids = tp.get("cells") or []
+            col_size = int((tp.get("property") or {}).get("column_size") or 0)
+            if not cell_ids or col_size <= 0:
+                return
+            md_rows: list[list[str]] = []
+            current: list[str] = []
+            for cid in cell_ids:
+                cell = blocks_by_id.get(cid)
+                texts: list[str] = []
+                for tcv in (cell or {}).get("children") or []:
+                    tchild = blocks_by_id.get(tcv)
+                    if tchild:
+                        t = _block_text(tchild).strip()
+                        if t:
+                            texts.append(t)
+                current.append(" ".join(texts).replace("\n", " ").replace("|", "\\|"))
+                if len(current) == col_size:
+                    md_rows.append(current)
+                    current = []
+            if current:
+                current += [""] * (col_size - len(current))
+                md_rows.append(current)
+            if not md_rows:
+                return
+            for i, r in enumerate(md_rows):
+                out.append("| " + " | ".join(r) + " |")
+                if i == 0:
+                    out.append("|" + "---|" * col_size)
+
+        def emit(block: dict) -> None:
+            bt = block.get("block_type")
+            if bt in _HEADING_BLOCK_TYPES:
+                text = _block_text(block).strip()
+                if text:
+                    level = _HEADING_BLOCK_TYPES[bt]
+                    out.append("#" * min(level, 6) + " " + text)
+                # heading 的 children（其下的正文块）也要输出
+                for cid in block.get("children") or []:
+                    child = blocks_by_id.get(cid)
+                    if child:
+                        emit(child)
+            elif bt in (_TEXT_BLOCK_TYPE, _BULLET_BLOCK_TYPE, _ORDERED_BLOCK_TYPE):
+                text = _block_text(block).strip()
+                if text:
+                    out.append(text)
+                # bullet/ordered 的嵌套子块无条件递归（保持文档顺序）
+                for cid in block.get("children") or []:
+                    child = blocks_by_id.get(cid)
+                    if child:
+
+                        emit(child)
+            elif bt == _QUOTE_BLOCK_TYPE:
+                text = _block_text(block).strip()
+                if text:
+                    out.append("> " + text)
+                for cid in block.get("children") or []:
+                    child = blocks_by_id.get(cid)
+                    if child:
+                        emit(child)
+            elif bt == _TODO_BLOCK_TYPE:
+                text = _block_text(block).strip()
+                if text:
+                    out.append("- [ ] " + text)
+                for cid in block.get("children") or []:
+                    child = blocks_by_id.get(cid)
+                    if child:
+                        emit(child)
+            elif bt == _DIVIDER_BLOCK_TYPE:
+                out.append("---")
+            elif bt == _TABLE_BLOCK_TYPE:
+                emit_table(block)
+            elif bt == _IMAGE_BLOCK_TYPE:
+                out.append("image.png")
+            elif bt == _BOARD_BLOCK_TYPE:
+                btoken = ((block.get("board") or {}).get("token") or "").strip()
+                if btoken:
+                    out.append("<BOARD_TOKEN=" + btoken + ">")
+            elif bt == _ADD_ONS_BLOCK_TYPE:
+                # 插件块：流程图类插件的 Mermaid 源码存在 add_ons.record（JSON 字符串）.data
+                ao = block.get("add_ons") or {}
+                rec = ao.get("record")
+                diagram_text = ""
+                if isinstance(rec, str) and rec.strip():
+                    try:
+                        parsed = json.loads(rec)
+                        diagram_text = (parsed.get("data") or "").strip()
+                    except Exception:
+                        diagram_text = rec.strip()
+                if diagram_text:
+                    out.append("【流程图】")
+                    for dline in diagram_text.split("\n"):
+                        dline = dline.strip()
+                        if dline:
+                            out.append(dline)
+            elif bt in _CONTAINER_BLOCK_TYPES:
+                for cid in block.get("children") or []:
+                    child = blocks_by_id.get(cid)
+                    if child:
+                        emit(child)
+            elif block.get("children"):
+                for cid in block.get("children") or []:
+                    child = blocks_by_id.get(cid)
+                    if child:
+                        emit(child)
+
+        for b in roots:
+            emit(b)
+
+        markdown = "\n".join(out).strip()
+        if markdown:
+            logger.info("已用 blocks API 重建带标题级别正文: doc=%s lines=%s", document_id, len(out))
+            return markdown
+        return None
+    except Exception as e:
+        logger.warning("blocks API 重建正文失败 doc=%s: %s", document_id, e)
+        return None
+
 
 
 async def fetch_lanhu_document(text: str, mcp_configs) -> "str | None":

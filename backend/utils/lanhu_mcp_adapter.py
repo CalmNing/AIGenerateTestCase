@@ -964,6 +964,13 @@ async def _connect_single_server(config: dict) -> tuple[str, MCPClient | None, E
                     for e in env_list:
                         if e.get("key"):
                             env[e["key"]] = e.get("value", "")
+                # 画板/大文档解析耗内存：给 node/npx 子进程更大的堆
+                # （仅影响本 MCP 子进程；用户显式配置 NODE_OPTIONS 时尊重用户值）
+                import os as _os
+                if command in ("node", "npx", "node.exe", "npx.cmd"):
+                    env = dict(env or _os.environ)
+                    if not env.get("NODE_OPTIONS"):
+                        env["NODE_OPTIONS"] = "--max-old-space-size=4096"
                 ok = await client.connect_stdio(command, args, env)
                 if not ok:
                     await client.disconnect()

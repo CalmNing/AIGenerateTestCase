@@ -41,13 +41,14 @@ def test_thread_id_is_stable_and_normalized():
     b = agent_memory.build_thread_id(
         scope="testcase", user_id="u1", session_id=7, module_id=3)
     assert a == b, "thread_id 必须稳定，否则 checkpointer 永远读不到历史"
-    assert a == "testcase:u1:7:3"
+    # 数据不按用户隔离：thread_id 不再包含 user_id 段
+    assert a == "testcase:7:3"
 
 
 def test_thread_id_handles_none_and_unsafe_chars():
     tid = agent_memory.build_thread_id(
-        scope="testcase", user_id="abc/def ghi", session_id=None, module_id=None)
-    assert tid == "testcase:abc_def_ghi:none:none"
+        scope="testcase", session_id=None, module_id=None)
+    assert tid == "testcase:none:none"
     assert "/" not in tid and " " not in tid
 
 
@@ -55,6 +56,14 @@ def test_thread_id_differs_by_module():
     a = agent_memory.build_thread_id(scope="testcase", user_id="u1", session_id=7, module_id=3)
     b = agent_memory.build_thread_id(scope="testcase", user_id="u1", session_id=7, module_id=4)
     assert a != b
+
+
+def test_thread_id_ignores_user_id():
+    """同一会话/模块下，不同用户的记忆轨迹共享同一个 thread_id。"""
+    a = agent_memory.build_thread_id(scope="testcase", user_id="u1", session_id=7, module_id=3)
+    b = agent_memory.build_thread_id(scope="testcase", user_id="u2", session_id=7, module_id=3)
+    c = agent_memory.build_thread_id(scope="testcase", user_id=None, session_id=7, module_id=3)
+    assert a == b == c == "testcase:7:3"
 
 
 def test_agent_memory_context_yields_checkpointer_and_store():
