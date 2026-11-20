@@ -473,6 +473,7 @@ const IoTMockPlatform: React.FC = () => {
                       <code>{"{{$timestamp}}"}</code> 毫秒时间戳<br />
                       <code>{"{{$uuid}}"}</code> UUID<br />
                       <code>{"{{$randomInt(1,100)}}"}</code> 随机整数<br />
+                      <code>{"{{$randomFloat(1,100)}}"}</code> 随机浮点数<br />
                       <code>{"{{$date}}"}</code> 当前日期<br />
                       <code>{"{{$date(YYYY-MM-DD HH:mm:ss)}}"}</code> 自定义格式
                     </span>
@@ -598,8 +599,10 @@ const IoTMockPlatform: React.FC = () => {
                     <div><code>{"{{$timestamp}}"}</code> 毫秒时间戳</div>
                     <div><code>{"{{$uuid}}"}</code> UUID</div>
                     <div><code>{"{{$randomInt(1,100)}}"}</code> 随机整数</div>
+                    <div><code>{"{{$randomFloat(1,100)}}"}</code> 随机浮点数</div>
                     <div><code>{"{{$date}}"}</code> 当前日期</div>
                     <div><code>{"{{@[10,20,30][Math.floor(Math.random()*3)]}}"}</code> 随机选择</div>
+                    <div><code>{"{{@new Date(Date.now() + 3600000).toISOString()}}"}</code> 1 小时后</div>
                   </div>
                 }>
                   <QuestionCircleOutlined style={{ marginLeft: 6, color: 'var(--color-text-tertiary)', fontSize: 13 }} />

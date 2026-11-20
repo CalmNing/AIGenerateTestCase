@@ -14,6 +14,7 @@ from pydantic import SecretStr
 
 _DEFAULT_BASE_URL = "https://api.deepseek.com"
 _THINKING_DISABLED = {"thinking": {"type": "disabled"}}
+_THINKING_ENABLED = {"thinking": {"type": "enabled"}}
 
 
 def _is_deepseek_host(base_url: Optional[str]) -> bool:
@@ -44,6 +45,7 @@ def build_chat_model(
     max_retries: int = 2,
     timeout=None,
     prompt_cache: Optional[bool] = None,
+    thinking: Optional[bool] = None,
     **overrides,
 ) -> ChatOpenAI:
     """Construct a ChatOpenAI for an OpenAI-compatible API (DeepSeek default).
@@ -51,6 +53,12 @@ def build_chat_model(
     `max_tokens=None` lets the server apply its default; pass an explicit
     value (e.g. 16384) when long output must not be truncated.
     Extra keyword args are forwarded to ChatOpenAI unchanged.
+
+    `thinking` controls DeepSeek thinking mode (reasoning_content):
+      - None (default): disabled — structured-output and generation flows rely
+        on direct answers; enabling it here would break parsing.
+      - True / False: force enabled / disabled (chat streaming uses True to
+        surface the reasoning process in the UI).
 
     `prompt_cache` controls LLM prompt caching (prefix reuse):
       - None (default): auto-enable for DeepSeek-compatible hosts, off elsewhere.
@@ -72,7 +80,7 @@ def build_chat_model(
     # Prompt caching: cache the (large, static) system-prefix so repeated
     # generation requests don't re-process the same instructions every time.
     enable_cache = _is_deepseek_host(api_base_url) if prompt_cache is None else prompt_cache
-    extra_body = dict(_THINKING_DISABLED)
+    extra_body = dict(_THINKING_DISABLED if not thinking else _THINKING_ENABLED)
     if enable_cache:
         extra_body["enable_prompt_cache"] = True
 

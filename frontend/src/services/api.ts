@@ -905,13 +905,201 @@ export const chatApi = {
     messages: Array<{ role: string; content: string }>,
     selectedSkills?: string[],
     /** 会话标识：传入后后端可复用同一条 LangGraph thread（服务端记忆） */
-    clientSessionId?: string
+    clientSessionId?: string,
+    /** 业务扩展：对话模式与业务上下文（需求澄清 / 用例优化） */
+    options?: { context?: string; mode?: string }
   ): Promise<ApiResponse<{ reply: string }>> =>
     api.post('/chat', {
       messages,
       selected_skills: selectedSkills,
       client_session_id: clientSessionId,
+      context: options?.context,
+      mode: options?.mode,
     }),
+};
+
+// 流式对话事件
+export interface ChatStreamHandlers {
+  /** DeepSeek thinking 增量（思考过程） */
+  onReasoning?: (delta: string) => void;
+  /** 正文增量 */
+  onContent?: (delta: string) => void;
+  /** Agent 工具调用开始（工具名） */
+  onTool?: (toolName: string) => void;
+  /** 服务端错误（之后流结束） */
+  onError?: (message: string) => void;
+  /** 正常结束 */
+  onDone?: () => void;
+}
+
+export interface ChatStreamControl {
+  abort: () => void;
+  readonly aborted: boolean;
+}
+
+/**
+ * 流式 AI 对话（SSE over fetch）：/api/chat/stream。
+ * - 返回 abort 控制：调用 abort() 中断请求（生成"停止"按钮能力）
+ * - 中断不算错误，onDone 收尾
+ * - 401 时自动刷新 Keycloak Token 并重试一次，与 axios 拦截器行为对齐
+ */
+export const chatApiStream = (
+  payload: {
+    messages: Array<{ role: string; content: string }>;
+    selected_skills?: string[];
+    client_session_id?: string;
+    context?: string;
+    mode?: string;
+    show_thinking?: boolean;
+  },
+  handlers: ChatStreamHandlers,
+): ChatStreamControl => {
+  const controller = new AbortController();
+  const state = { aborted: false };
+
+  const run = async () => {
+    let retried401 = false;
+    let settled = false;
+
+    while (!settled) {
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (keycloak.authenticated && keycloak.token) {
+          headers.Authorization = 'Bearer ' + keycloak.token;
+        }
+        const res = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        if (res.status === 401 && !retried401) {
+          retried401 = true;
+          try {
+            const refreshed = await keycloak.updateToken(30);
+            if (refreshed) continue;
+          } catch {
+            keycloak.login();
+            return;
+          }
+        }
+        if (!res.ok || !res.body) {
+          let detail = 'HTTP ' + res.status;
+          try {
+            const data = await res.json();
+            if (data && data.detail) detail = String(data.detail);
+          } catch {
+            // 非 JSON 错误体，保留 HTTP 状态码描述
+          }
+          settled = true;
+          handlers.onError && handlers.onError(detail);
+          handlers.onDone && handlers.onDone();
+          return;
+        }
+
+        // 解析 SSE：按空行分帧；event 取 event: 行，data 为多行 data: 行拼接
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let currentEvent = '';
+        let dataLines: string[] = [];
+
+        const dispatch = () => {
+          const text = dataLines.join('\n');
+          dataLines = [];
+          const event = currentEvent;
+          currentEvent = '';
+          if (event === 'reasoning') handlers.onReasoning && handlers.onReasoning(text);
+          else if (event === 'content') handlers.onContent && handlers.onContent(text);
+          else if (event === 'tool') handlers.onTool && handlers.onTool(text);
+          else if (event === 'error') {
+            handlers.onError && handlers.onError(text || '生成失败');
+          } else if (event === 'done') {
+            handlers.onDone && handlers.onDone();
+          }
+        };
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, idx).replace(/\r$/, '');
+            buffer = buffer.slice(idx + 1);
+            if (line === '') {
+              dispatch();
+            } else if (line.indexOf('event:') === 0) {
+              currentEvent = line.slice(6).trim();
+            } else if (line.indexOf('data:') === 0) {
+              const rest = line.slice(5);
+              dataLines.push(rest.charAt(0) === ' ' ? rest.slice(1) : rest);
+            }
+          }
+        }
+        dispatch();
+        handlers.onDone && handlers.onDone();
+        return;
+      } catch (err: any) {
+        settled = true;
+        if (controller.signal.aborted || state.aborted) {
+          // 用户主动停止：不算错误
+          handlers.onDone && handlers.onDone();
+          return;
+        }
+        handlers.onError && handlers.onError((err && err.message) || '网络错误');
+        handlers.onDone && handlers.onDone();
+        return;
+      }
+    }
+  };
+
+  run();
+
+  return {
+    abort: () => {
+      state.aborted = true;
+      controller.abort();
+    },
+    get aborted() {
+      return state.aborted;
+    },
+  };
+};
+
+
+// AI 对话会话持久化 API
+export interface ChatConversationSummary {
+  id: number;
+  title: string;
+  mode: string;
+  scope_key: string;
+  thread_id: string;
+  last_message_preview: string;
+  message_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChatConversationDetail extends ChatConversationSummary {
+  messages: Array<{ role: string; content: string; reasoning?: string; toolEvents?: string[]; timestamp?: number }>;
+}
+
+export const chatHistoryApi = {
+  list: (params?: { mode?: string; scope_key?: string; limit?: number }): Promise<ApiResponse<ChatConversationSummary[]>> =>
+    api.get('/chat-history', { params }),
+  save: (data: {
+    title?: string;
+    mode?: string;
+    scope_key?: string;
+    thread_id?: string;
+    messages: Array<{ role: string; content: string; reasoning?: string; toolEvents?: string[] }>;
+  }): Promise<ApiResponse<ChatConversationSummary>> => api.post('/chat-history', data),
+  update: (id: number, data: { title?: string; messages?: Array<{ role: string; content: string; reasoning?: string; toolEvents?: string[] }>; thread_id?: string }): Promise<ApiResponse<ChatConversationSummary>> =>
+    api.put('/chat-history/' + id, data),
+  get: (id: number): Promise<ApiResponse<ChatConversationDetail>> => api.get('/chat-history/' + id),
+  remove: (id: number): Promise<ApiResponse<{ deleted: number }>> => api.delete('/chat-history/' + id),
 };
 
 // 系统配置 API
@@ -1102,7 +1290,7 @@ export const requirementDocApi = {
   create: (data: { url: string; title?: string; session_id?: number | null; module_id?: number | null }): Promise<ApiResponse<RequirementDoc>> =>
     api.post('/requirement-docs', data),
 
-  // 手动录入文本需求（manual）
+  // 手动录入文本需求（manual）  // 手动录入文本需求（manual）
   createText: (data: { title?: string; content: string; session_id?: number | null; module_id?: number | null }): Promise<ApiResponse<RequirementDoc>> =>
     api.post('/requirement-docs/text', data),
 

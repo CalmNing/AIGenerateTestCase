@@ -26,6 +26,7 @@ from app.routes.pipeline import router as pipeline_router
 from app.routes.document import router as document_router
 from app.routes.requirement_doc import router as requirement_doc_router
 from app.routes.chat import router as chat_router
+from app.routes.chat_history import router as chat_history_router
 from app.routes.ui_execution import router as ui_execution_router
 from app.routes.ui_automation import router as ui_automation_router
 from app.routes.websocket import router as ws_router
@@ -261,3 +262,6 @@ api_router.include_router(
 
 # Chat route: general-purpose AI conversation
 api_router.include_router(chat_router)
+
+# Chat 会话持久化：存储/续聊 AI 对话
+api_router.include_router(chat_history_router)

@@ -64,3 +64,28 @@ def test_normalize_priority_mapping():
     assert normalize_priority("") == "medium"
     assert normalize_priority(None) == "medium"
     assert normalize_priority("unknown") == "medium"
+
+
+def test_build_chat_model_thinking_default_disabled():
+    model = build_chat_model("sk-test", api_model="m")
+    extra = getattr(model, "extra_body", None) or {}
+    assert extra.get("thinking") == {"type": "disabled"}
+
+
+def test_build_chat_model_thinking_enabled():
+    model = build_chat_model("sk-test", api_model="m", thinking=True)
+    extra = getattr(model, "extra_body", None) or {}
+    assert extra.get("thinking") == {"type": "enabled"}
+
+
+def test_build_chat_model_thinking_explicit_disabled():
+    model = build_chat_model("sk-test", api_model="m", thinking=False)
+    extra = getattr(model, "extra_body", None) or {}
+    assert extra.get("thinking") == {"type": "disabled"}
+
+
+def test_build_chat_model_thinking_enabled_keeps_prompt_cache():
+    model = build_chat_model("sk-test", api_model="m", thinking=True)
+    extra = getattr(model, "extra_body", None) or {}
+    assert extra.get("thinking") == {"type": "enabled"}
+    assert extra.get("enable_prompt_cache") is True

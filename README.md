@@ -210,8 +210,10 @@ HTTP / MQTT / WebSocket 三协议请求调试与推送平台。
 
 | 类型 | 示例 |
 |---|---|
-| 内置函数 | `{{$timestamp}}`、`{{$uuid}}`、`{{$randomInt}}`、`{{$date}}` |
-| JS 表达式 | `{{@Date.now()}}`、`{{@Math.random().toFixed(4)}}` |
+| 内置函数 | `{{$timestamp}}`、`{{$uuid}}`、`{{$randomInt}}`、`{{$randomFloat}}`、`{{$date}}` |
+| JS 表达式 | `{{@Date.now()}}`、`{{@Math.random().toFixed(4)}}`、`{{@crypto.randomUUID()}}` |
+| 时间偏移 | `{{@Date.now() + 3600000}}`（1 小时后）、`{{@new Date(Date.now() - 86400000).toISOString()}}`（1 天前） |
+| 列表随机 | `{{@['苹果','香蕉','橘子'][Math.floor(Math.random()*3)]}}` |
 | 环境变量 | `{{环境变量名}}` |
 
 #### 全局参数管理
@@ -229,8 +231,10 @@ HTTP / MQTT / WebSocket 三协议请求调试与推送平台。
 - Mock 配置 CRUD（名称、HTTP 方法、URL 路径）
 - 自定义状态码、响应头、响应体
 - 参数化响应
-  - 内置函数：`{{$timestamp}}`、`{{$uuid}}`、`{{$randomInt}}`
+  - 内置函数：`{{$timestamp}}`、`{{$uuid}}`、`{{$randomInt}}`、`{{$randomFloat}}`
   - JS 表达式：`{{@表达式}}`
+  - 时间偏移：`{{@Date.now() + 3600000}}`（1 小时后）、`{{@new Date(Date.now() - 86400000).toISOString()}}`（1 天前）
+  - 列表随机：`{{@['苹果','香蕉','橘子'][Math.floor(Math.random()*3)]}}`
   - 路径参数提取
 - **分页模拟**：`response_count > 1` 时自动生成多条数据
 - 启用/禁用开关

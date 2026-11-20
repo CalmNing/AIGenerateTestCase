@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Button, Input, Select, message, Switch, Modal, Radio, Input as TextInput } from 'antd';
-import { DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Button, Input, Select, message, Switch, Modal, Radio, Tooltip, Input as TextInput } from 'antd';
+import { CommentOutlined, DownloadOutlined, FileTextOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from '../../types';
 import { configApi, testcaseApi } from '../../services/api';
 import TestCaseTable from './TestCaseTable';
+import ChatAssistant from '../chat/ChatAssistant';
+import { ParsedSuggestedCase } from '../../utils/suggestedCases';
 import * as XLSX from 'xlsx';
 import { formatStep } from '../../utils/stepUtils';
 import { formatTestCaseLevel } from '../../utils/testCaseLevel';
@@ -85,6 +87,14 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   const [rejectTarget, setRejectTarget] = useState<TestCase | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('duplicate');
   const [rejectDetail, setRejectDetail] = useState<string>('');
+
+  // AI 用例对话：以当前会话/模块/筛选下的用例清单为上下文
+  const [chatOpen, setChatOpen] = useState(false);
+  // 引入 AI 补充用例：预览确认后再批量创建
+  const [importOpen, setImportOpen] = useState(false);
+  const [importCases, setImportCases] = useState<ParsedSuggestedCase[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importExcluded, setImportExcluded] = useState<Set<number>>(new Set());
 
   const openReject = (testcase: TestCase) => {
     setRejectTarget(testcase);
@@ -185,6 +195,51 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
     }
   };
 
+  // 引入 AI 建议用例：预览 → 可勾选排除 → 批量创建 → 刷新列表
+  const handleImportCases = (cases: ParsedSuggestedCase[]) => {
+    if (cases.length === 0) return;
+    setImportCases(cases);
+    setImportExcluded(new Set());
+    setImportOpen(true);
+  };
+
+  const handleImportConfirm = async () => {
+    if (!selectedSession) return;
+    const toCreate = importCases.filter((_, idx) => !importExcluded.has(idx));
+    if (toCreate.length === 0) {
+      message.warning('请至少选择一条要引入的用例');
+      return;
+    }
+    setImporting(true);
+    let ok = 0;
+    const failures: string[] = [];
+    for (const tc of toCreate) {
+      try {
+        const res = await testcaseApi.createTestcase(selectedSession.id, {
+          case_name: tc.case_name,
+          case_level: tc.case_level,
+          preset_conditions: tc.preset_conditions,
+          steps: tc.steps,
+          expected_results: tc.expected_results,
+          module_id: selectedModule === 0 ? undefined : Number(selectedModule),
+          session_id: selectedSession.id,
+        } as any);
+        if (res.code === 200) ok += 1;
+        else failures.push(tc.case_name);
+      } catch {
+        failures.push(tc.case_name);
+      }
+    }
+    setImporting(false);
+    if (ok > 0) {
+      message.success('已引入 ' + ok + ' 条用例' + (failures.length > 0 ? '，' + failures.length + ' 条失败' : ''));
+      setImportOpen(false);
+      onLoadTestcases(selectedSession.id, filters);
+    } else {
+      message.error('引入失败：' + (failures[0] || '未知错误'));
+    }
+  };
+
   const setFilter = (status: TestCaseStatus | undefined, existBug: boolean) => {
     onFiltersChange({
       case_name: '',
@@ -194,6 +249,63 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       module_id: selectedModule === 0 ? undefined : Number(selectedModule),
     });
   };
+
+  // ===== AI 用例对话上下文 =====
+
+  // 状态中文映射（避免引入循环依赖，就地映射）
+  const statusLabel = (tc: TestCase) =>
+    tc.status === TestCaseStatus.PASSED ? '已通过'
+      : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行';
+
+  // 选中用例的完整详情（多行文本，供 AI 引用步骤/预期）
+  const selectedTestcase = useMemo(
+    () => (selectedTestcaseId ? testcases.find((tc) => tc.id === selectedTestcaseId) ?? null : null),
+    [selectedTestcaseId, testcases],
+  );
+
+  const testcaseDetailText = (tc: TestCase) => {
+    const lines = [
+      '【当前选中用例】',
+      '用例名称：' + tc.case_name,
+      '用例级别：' + formatTestCaseLevel(tc.case_level),
+      '状态：' + statusLabel(tc) + (tc.bug_id ? ' · Bug ID: ' + tc.bug_id : ''),
+      '前置条件：',
+      ...tc.preset_conditions.map((item: any, idx: number) => '  ' + (idx + 1) + '. ' + (typeof item === 'string' ? item : formatStep(item))),
+      '测试步骤：',
+      ...tc.steps.map((item: any, idx: number) => '  ' + (idx + 1) + '. ' + (typeof item === 'string' ? item : formatStep(item))),
+      '预期结果：',
+      ...tc.expected_results.map((item: any, idx: number) => '  ' + (idx + 1) + '. ' + (typeof item === 'string' ? item : formatStep(item))),
+    ];
+    return lines.join('\n');
+  };
+
+  const chatContext = useMemo(() => {
+    if (!selectedSession) return '';
+    const moduleName = selectedModule !== 0
+      ? (modules.find((m) => m.id === Number(selectedModule))?.module_name || ('模块 ' + selectedModule))
+      : '全部模块';
+    const lines: string[] = [
+      '【测试会话】' + (selectedSession.name || ('会话 ' + selectedSession.id)),
+      '【模块范围】' + moduleName,
+      '【用例总数】' + testcases.length + ' 条（当前筛选结果）',
+      '',
+      '【用例清单' + (testcases.length > 60 ? '（仅前 60 条）' : '') + '】',
+    ];
+    if (testcases.length === 0) {
+      lines.push('（当前筛选下没有测试用例）');
+    } else {
+      testcases.slice(0, 60).forEach((tc, idx) => {
+        lines.push(
+          (idx + 1) + '. [' + formatTestCaseLevel(tc.case_level) + '] ' + tc.case_name
+          + ' — ' + statusLabel(tc) + (tc.bug_id ? ' — Bug ' + tc.bug_id : ''),
+        );
+      });
+    }
+    if (selectedTestcase) {
+      lines.push('', testcaseDetailText(selectedTestcase));
+    }
+    return lines.join('\n');
+  }, [selectedSession, selectedModule, modules, testcases, selectedTestcase]);
 
   return (
     <div className="tcm-container">
@@ -224,6 +336,9 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
             <div className="tcm-stats-actions">
               <Button size="small" type="primary" icon={<PlusOutlined />} onClick={onAdd}>新增</Button>
               <Button size="small" icon={<DownloadOutlined />} onClick={handleExportExcel}>导出</Button>
+              <Tooltip title="基于当前用例清单的多轮 AI 对话：分析覆盖缺口、给出补充用例建议">
+                <Button size="small" icon={<CommentOutlined />} onClick={() => setChatOpen(true)}>AI 对话</Button>
+              </Tooltip>
             </div>
           </div>
 
@@ -338,6 +453,84 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
           </Modal>
         </>
       )}
+
+      {/* 引入 AI 建议用例：预览确认 */}
+      <Modal
+        title={'引入 AI 补充用例（' + (importCases.length - importExcluded.size) + '/' + importCases.length + ' 条）'}
+        open={importOpen}
+        onCancel={() => setImportOpen(false)}
+        onOk={() => void handleImportConfirm()}
+        confirmLoading={importing}
+        okText={'引入所选 ' + (importCases.length - importExcluded.size) + ' 条'}
+        cancelText="取消"
+        width={860}
+      >
+        <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+          取消勾选的用例不会被引入；引入后用例出现在当前会话的用例列表中（模块取当前筛选）。
+        </div>
+        <div style={{ maxHeight: 480, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {importCases.map((tc, idx) => {
+            const checked = !importExcluded.has(idx);
+            return (
+              <div
+                key={idx}
+                style={{
+                  border: '1px solid ' + (checked ? '#d9d9d9' : '#f0f0f0'),
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  opacity: checked ? 1 : 0.5,
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      setImportExcluded((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(idx)) next.delete(idx);
+                        else next.add(idx);
+                        return next;
+                      });
+                    }}
+                  />
+                  <strong>{tc.case_name}</strong>
+                  <span style={{ fontSize: 12, color: '#888' }}>
+                    级别 {tc.case_level} · 步骤 {tc.steps.length} · 预期 {tc.expected_results.length}
+                  </span>
+                </label>
+                {tc.note && <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>关联说明：{tc.note}</div>}
+                <div style={{ fontSize: 12, marginTop: 6, color: '#555' }}>
+                  {tc.preset_conditions.length > 0 && <div>前置：{tc.preset_conditions.join('；')}</div>}
+                  {tc.steps.slice(0, 3).map((s, i) => <div key={i}>{i + 1}. {s}</div>)}
+                  {tc.steps.length > 3 && <div>… 共 {tc.steps.length} 步</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Modal>
+
+      {/* AI 用例对话：以当前会话/模块/筛选下的用例清单为上下文 */}
+      <ChatAssistant
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        title="AI 用例对话"
+        mode="testcase_optimize"
+        context={chatContext}
+        scopeKey={selectedSession ? 'case-opt-' + selectedSession.id : undefined}
+        welcomeHint={
+          selectedSession
+            ? '我会基于当前会话「' + (selectedSession.name || '') + '」的用例清单与你讨论：分析覆盖缺口（功能/边界/异常/场景）、评审步骤与预期可执行性、给出补充用例建议。'
+            : '请先从左侧选择一个会话。'
+        }
+        quickActions={[
+          { label: '分析覆盖缺口', prompt: '请分析当前用例清单的覆盖缺口（功能/边界/异常/场景四类），按优先级列出，并引用用例名称定位问题。' },
+          { label: '给出补充用例建议（可引入）', prompt: '请针对刚才指出的覆盖缺口给出补充用例建议，每条建议严格按“### 建议：用例名称”小节格式输出（含用例级别、前置条件、测试步骤、预期结果、关联说明），我会在回复下方一键引入这些用例。' },
+        ]}
+        onImportCases={handleImportCases}
+        width="66vw"
+      />
     </div>
   );
 };

@@ -193,3 +193,17 @@
   background-color: var(--color-primary-hover);
   transform: scale(1.05);
 }
+
+/* Grouped expression list */
+.variable-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.variable-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+}

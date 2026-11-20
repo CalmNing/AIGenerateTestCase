@@ -3,7 +3,6 @@ import copy
 import json
 import logging
 import re
-import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -13,7 +12,8 @@ from sqlmodel import Session, select
 from db.db import engine
 from db.models import ApiEndpoint, ApiProject, MockConfig, GlobalParameter, MockLog
 from app.services.mock_matcher import match_address, match_config_path, match_host
-from utils.js_expression import eval_js_expression
+from utils.js_expression import substitute_js_expressions
+from utils.template_builtins import substitute_builtins
 
 logger = logging.getLogger(__name__)
 
@@ -189,67 +189,11 @@ def _smart_parse_json(text: str):
 
 
 def _substitute_builtins(text: str) -> str:
-    """替换 {{$function}} 内置函数"""
-    def _replace(match):
-        expr = match.group(1).strip()
+    """替换 {{$function}} 内置函数
 
-        # $timestamp - 毫秒时间戳
-        if expr == "$timestamp":
-            return str(int(datetime.now().timestamp() * 1000))
-
-        # $now - 秒级时间戳
-        if expr == "$now":
-            return str(int(datetime.now().timestamp()))
-
-        # $uuid - 生成UUID
-        if expr == "$uuid":
-            return str(uuid.uuid4())
-
-        # $randomInt(min,max) - 指定范围随机整数
-        rand_match = re.match(r"^\$randomInt\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$", expr)
-        if rand_match:
-            import random
-            lo, hi = int(rand_match.group(1)), int(rand_match.group(2))
-            if lo > hi:
-                lo, hi = hi, lo
-            return str(random.randint(lo, hi))
-
-        # $randomInt - 0~100随机整数
-        if expr == "$randomInt":
-            import random
-            return str(random.randint(0, 100))
-
-        # $date(format) - 格式化日期
-        date_match = re.match(r"^\$date\((.+)\)$", expr)
-        if date_match:
-            fmt = date_match.group(1).strip().strip("'\"")
-            now = datetime.now()
-            fmt_map = {
-                "YYYY": str(now.year),
-                "MM": f"{now.month:02d}",
-                "DD": f"{now.day:02d}",
-                "HH": f"{now.hour:02d}",
-                "mm": f"{now.minute:02d}",
-                "ss": f"{now.second:02d}",
-                "SSS": f"{now.microsecond // 1000:03d}",
-            }
-            result = fmt
-            for key, val in fmt_map.items():
-                result = result.replace(key, val)
-            return result
-
-        # $date - 默认 YYYY-MM-DD
-        if expr == "$date":
-            return datetime.now().strftime("%Y-%m-%d")
-
-        return match.group(0)
-
-    return re.sub(r"\{\{(\$[^}]+)\}\}", _replace, text)
-
-
-def _eval_js(expression: str) -> str | None:
-    """通过 Node.js。执行 JS 表达式，返回字符串结果；失败返回 None"""
-    return eval_js_expression(expression)
+    实现收敛在 utils.template_builtins，代理转发共用同一份逻辑。
+    """
+    return substitute_builtins(text)
 
 
 def _substitute_variables(text: str, env_id: Optional[int], path_params: dict = None) -> str:
@@ -284,12 +228,7 @@ def _substitute_variables(text: str, env_id: Optional[int], path_params: dict = 
         param_map = {**param_map, **path_params}
     
     # 1. {{@expression}} — 通过 Node.js 执行 JS 表达式
-    def _replace_js(match):
-        expr = match.group(1).strip()
-        result = _eval_js(expr)
-        return result if result is not None else match.group(0)
-    
-    result = re.sub(r"\{\{@([^}]+)\}\}", _replace_js, text)
+    result = substitute_js_expressions(text)
     
     # 2. {{$function}} 内置函数
     result = _substitute_builtins(result)

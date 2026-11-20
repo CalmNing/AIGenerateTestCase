@@ -571,3 +571,38 @@ class RequirementTestcaseLink(BaseModel, table=True):
     testcase_id: int = Field(default=0, index=True, description="关联的测试用例ID")
     session_id: Optional[int] = Field(default=None, index=True, description="测试用例所在会话ID")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+class ChatConversation(BaseModel, table=True):
+    """AI 对话会话（需求澄清 / 用例优化 / 通用助手共用）。
+
+    存储对话元信息与消息列表（JSON 快照），用于"存储会话、选择上次对话继续"。
+    messages 是 [{role, content, reasoning?, toolEvents?}] 的 JSON 数组文本；
+    LangGraph thread 记忆（有工具路径）仍由 client_session_id 承载，与本表独立。
+    """
+    __tablename__ = "chat_conversation"
+    title: str = Field(default="", max_length=128, description="会话标题")
+    # 业务域：requirement_clarify / testcase_optimize / general
+    mode: str = Field(default="general", max_length=32, index=True, description="对话模式")
+    # 业务上下文标识（如 req-clarify-12 / case-opt-3），用于按页面过滤会话
+    scope_key: str = Field(default="", max_length=64, index=True, description="业务上下文标识")
+    # 服务端记忆 thread 标识（前端 client_session_id），续聊时原样回传
+    thread_id: str = Field(default="", max_length=128, description="LangGraph thread id")
+    # 显示在会话列表里的最后一条消息摘要（截断）
+    last_message_preview: str = Field(default="", max_length=200, description="最后一条消息摘要")
+    messages_json: str = Field(default="[]", description="消息列表 JSON 文本")
+    user_id: Optional[str] = Field(default=None, index=True, description="创建用户ID（Keycloak sub）")
+
+
+class ChatMessageRecord(BaseModel, table=True):
+    """AI 对话消息明细（每轮一条 user/assistant 对的明细行，便于后续审计/检索）。
+
+    当前前端续聊只读 conversation.messages_json；本表为可选明细留存，
+    写入失败不影响主流程。
+    """
+    __tablename__ = "chat_message_record"
+    conversation_id: int = Field(default=0, foreign_key="chat_conversation.id", index=True, description="所属会话ID")
+    role: str = Field(default="user", max_length=16, description="user / assistant")
+    content: str = Field(default="", description="消息内容")
+    reasoning: str = Field(default="", description="思考过程文本（assistant）")
+    user_id: Optional[str] = Field(default=None, index=True, description="创建用户ID")
+

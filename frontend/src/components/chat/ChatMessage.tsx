@@ -1,14 +1,20 @@
 import React from 'react';
 import { Typography } from 'antd';
-import { UserOutlined, RobotOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import './ChatAssistant.css';
 
 const { Text } = Typography;
 
-interface Message {
+export interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: number;
+  /** 思考过程（DeepSeek reasoning），可折叠展示 */
+  reasoning?: string;
+  /** 正在流式接收中 */
+  streaming?: boolean;
+  /** 工具调用轨迹（仅 Agent 模式） */
+  toolEvents?: string[];
 }
 
 interface ChatMessageProps {
@@ -81,10 +87,29 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
       </div>
       <div className="chat-message-content">
         <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
+          {!isUser && (message.reasoning || (message.toolEvents && message.toolEvents.length > 0)) && (
+            <details className="chat-reasoning">
+              <summary>
+                <ThunderboltOutlined /> 思考过程
+                {message.streaming && !message.content && <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>思考中…</Text>}
+              </summary>
+              {message.toolEvents && message.toolEvents.length > 0 && (
+                <div className="chat-tool-trace">
+                  {message.toolEvents.map((tool, i) => (
+                    <div key={i} className="chat-tool-trace-item">🔧 调用工具：{tool}</div>
+                  ))}
+                </div>
+              )}
+              {message.reasoning && <div className="chat-reasoning-text">{message.reasoning}</div>}
+            </details>
+          )}
           {isUser ? (
             <Text style={{ color: '#fff', whiteSpace: 'pre-wrap' }}>{message.content}</Text>
           ) : (
             <div className="chat-markdown">{renderContent(message.content)}</div>
+          )}
+          {message.streaming && !isUser && message.content && (
+            <span className="chat-cursor">▍</span>
           )}
         </div>
         {message.timestamp && (

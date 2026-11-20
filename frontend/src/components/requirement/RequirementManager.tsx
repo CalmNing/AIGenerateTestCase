@@ -5,13 +5,15 @@ import {
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, FileAddOutlined, FileTextOutlined,
-  HistoryOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SyncOutlined,
+  HistoryOutlined, LinkOutlined, MessageOutlined, PlusOutlined,
+  ReloadOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import {
   RequirementDoc, RequirementDiffEntry, RequirementRevision,
 } from '../../types';
 import { requirementDocApi } from '../../services/api';
 import MarkdownView from './MarkdownView';
+import ChatAssistant from '../chat/ChatAssistant';
 import './RequirementManager.css';
 
 const { Text } = Typography;
@@ -115,6 +117,13 @@ const RequirementManager: React.FC<RequirementManagerProps> = ({ selectedSession
   const [titleDraft, setTitleDraft] = useState('');
 
   const [revisionsOpen, setRevisionsOpen] = useState(false);
+
+  // 需求澄清对话：以选中文档为上下文的多轮 AI 对话
+  const [chatOpen, setChatOpen] = useState(false);
+  const [saveDocOpen, setSaveDocOpen] = useState(false);
+  const [saveDocTitle, setSaveDocTitle] = useState('');
+  const [saveDocContent, setSaveDocContent] = useState('');
+  const [savingDoc, setSavingDoc] = useState(false);
 
   // ===== 数据加载 =====
 
@@ -317,6 +326,63 @@ const RequirementManager: React.FC<RequirementManagerProps> = ({ selectedSession
     }
   };
 
+  // ===== 需求澄清对话 =====
+
+  // 对话上下文：源需求名称/来源/版本 + 正文全文（组件内由后端截断保护）
+  const chatContext = useMemo(() => {
+    if (!selectedDoc) return '';
+    const lines = [
+      '【源需求名称】' + (selectedDoc.title || '未命名需求'),
+      '【来源】' + ((SOURCE_META[selectedDoc.source_type] || SOURCE_META.feishu).label) + ' · v' + selectedDoc.version,
+      '',
+      '【需求正文】',
+      selectedDoc.content_snapshot || '（无正文）',
+    ];
+    return lines.join('\n');
+  }, [selectedDoc]);
+
+  // 打开保存预览：携带最后一条 AI 回复（整理出的需求清单）
+  const handleOpenSaveDoc = (content: string) => {
+    if (!content.trim()) {
+      message.warning('没有可保存的内容');
+      return;
+    }
+    setSaveDocTitle((selectedDoc?.title || '需求') + '（澄清清单）');
+    setSaveDocContent(content);
+    setSaveDocOpen(true);
+  };
+
+  // 保存为新需求文档（manual）；源文档不动
+  const handleSaveDocConfirm = async () => {
+    const content = saveDocContent.trim();
+    if (!content) {
+      message.warning('清单内容不能为空');
+      return;
+    }
+    setSavingDoc(true);
+    try {
+      const res = await requirementDocApi.createText({
+        title: saveDocTitle.trim() || '需求澄清清单',
+        content,
+        session_id: selectedDoc?.session_id ?? currentSession?.id ?? null,
+        module_id: selectedDoc?.module_id ?? (currentModule && currentModule !== 0 && Number.isFinite(Number(currentModule)) ? Number(currentModule) : null),
+      });
+      if (res.code === 200 && res.data) {
+        message.success('已保存为新需求文档，可在「生成测试用例」中引用');
+        setSaveDocOpen(false);
+        await loadDocs();
+        await openDoc(res.data.id);
+      } else {
+        message.error(res.message || '保存失败');
+      }
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      message.error(err.response?.data?.detail || '保存失败');
+    } finally {
+      setSavingDoc(false);
+    }
+  };
+
   // ===== 派生数据 =====
 
   const outline = useMemo(
@@ -465,6 +531,9 @@ const RequirementManager: React.FC<RequirementManagerProps> = ({ selectedSession
                 <Button icon={<HistoryOutlined />} onClick={() => setRevisionsOpen(true)}>
                   变更历史
                 </Button>
+                <Button type="primary" ghost icon={<MessageOutlined />} onClick={() => setChatOpen(true)}>
+                  需求澄清对话
+                </Button>
                 <div style={{ flex: 1 }} />
                 <Popconfirm title="确认删除该需求文档？" onConfirm={() => handleDelete(selectedDoc)}>
                   <Button danger icon={<DeleteOutlined />}>删除</Button>
@@ -550,6 +619,57 @@ const RequirementManager: React.FC<RequirementManagerProps> = ({ selectedSession
           rows={22}
           value={editContent}
           onChange={(e) => setEditContent(e.target.value)}
+          style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+        />
+      </Modal>
+
+      {/* 需求澄清对话：以选中文档为上下文 */}
+      <ChatAssistant
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        title="需求澄清对话"
+        mode="requirement_clarify"
+        context={chatContext}
+        scopeKey={selectedDoc ? 'req-clarify-' + selectedDoc.id : undefined}
+        welcomeHint={
+          selectedDoc
+            ? '我会基于当前选中的需求「' + (selectedDoc.title || '未命名需求') + '」与你多轮澄清需求细节；确认清楚后点击「整理需求清单」，我会按模板输出完整需求清单，可保存为新需求文档（源需求不会改动）。'
+            : '请先在左侧选择一个需求文档，再开始澄清对话。'
+        }
+        quickActions={[
+          { label: '开始澄清提问', prompt: '请基于这份源需求，从输入字段和业务规则开始，逐组提出需要澄清的问题。' },
+          { label: '整理需求清单', prompt: '请基于以上讨论和源需求，按需求清单模板整理一份完整的需求清单；未澄清到的信息如实写入「不确定事项」，不要自行补充。' },
+        ]}
+        onSaveLast={handleOpenSaveDoc}
+        saveLabel="保存为新需求文档"
+        width="66vw"
+      />
+
+      {/* 保存澄清清单为新需求文档 */}
+      <Modal
+        title="保存为新需求文档"
+        open={saveDocOpen}
+        onCancel={() => setSaveDocOpen(false)}
+        onOk={handleSaveDocConfirm}
+        confirmLoading={savingDoc}
+        okText="保存"
+        cancelText="取消"
+        width={860}
+      >
+        <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+          将保存为手动录入需求文档（不影响源需求）；保存后可在「生成测试用例」页签引用。
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <Input
+            value={saveDocTitle}
+            onChange={(e) => setSaveDocTitle(e.target.value)}
+            placeholder="需求名称"
+          />
+        </div>
+        <Input.TextArea
+          rows={22}
+          value={saveDocContent}
+          onChange={(e) => setSaveDocContent(e.target.value)}
           style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
         />
       </Modal>

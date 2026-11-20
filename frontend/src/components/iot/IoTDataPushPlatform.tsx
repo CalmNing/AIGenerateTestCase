@@ -626,6 +626,24 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [activeTabId, tabs.length]);
 
+  // Ctrl+S / Cmd+S 快捷保存当前标签页请求配置
+  const saveHandlerRef = useRef<() => void>(() => {});
+  saveHandlerRef.current = () => {
+    if (activeTabId && !saveLoading) {
+      void handleSaveRequest();
+    }
+  };
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveHandlerRef.current();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   const getCurrentEnvironment = (): Environment => {
     return environments.find(env => env.id === currentEnvironmentId) || environments[0];
   };
@@ -1175,6 +1193,11 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     };
     setTabs(prevTabs => [...prevTabs, markTabClean(newTab)]);
     setActiveTabId(newTab.id);
+    // 打开已保存请求时默认定位到“请求体”页签（HTTP）/“Payload”（MQTT）；WS 无请求体，保持连接配置
+    setConfigTabs(prev => ({
+      ...prev,
+      [newTab.id]: protocol === 'websocket' ? 'ws' : 'body',
+    }));
     setSaveRequestName(request.name);
   };
 

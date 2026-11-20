@@ -2213,7 +2213,7 @@ const App: React.FC = () => {
         tooltip="AI 助手"
         onClick={() => setChatOpen(true)}
       />
-      <ChatAssistant open={chatOpen} onClose={() => setChatOpen(false)} />
+      <ChatAssistant open={chatOpen} onClose={() => setChatOpen(false)} width="66vw" />
 
       {/* Mock 代理助手 - 全局渲染（仅 Mock 管理权限可见） */}
       {canAccessMock && <MockProxyAssistant />}
