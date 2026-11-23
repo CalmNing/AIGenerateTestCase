@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { proxyApi } from '../services/api';
 import { copyTextToClipboard } from '../utils/clipboard';
+import { FLOAT_BUTTON_Z_INDEX } from '../utils/floatButton';
 import './VariableAssistant.css';
 
 interface VariableAssistantProps {
@@ -314,7 +315,7 @@ const VariableAssistant: React.FC<VariableAssistantProps> = ({
         className="variable-assistant-float-btn"
         icon={<FunctionOutlined />}
         type="primary"
-        style={{ right: 24, bottom: 80 }}
+        style={{ right: 24, bottom: 80, zIndex: FLOAT_BUTTON_Z_INDEX }}
         tooltip="变量助手"
       />
     </Popover>

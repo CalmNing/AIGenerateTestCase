@@ -36,6 +36,10 @@ class ProxyRequest(BaseModel):
     data: Optional[dict | List | str] = None
     params: Optional[dict] = None
     environment_id: Optional[int] = None  # 全局参数环境ID
+    # 前置步骤：先执行（发请求取变量 / 直接设置变量），再发主请求
+    pre_steps: Optional[List[dict]] = None
+    # 前置参数列表：列定义变量名，每行一组值
+    batch_params: Optional[dict] = None
 
 
 def is_valid_url(url: str) -> bool:
@@ -148,8 +152,12 @@ def build_param_map(db: Session, environment_id: Optional[int], local_parameters
                 param_map[p["key"]] = p["value"]
 
     for p in (local_parameters or []):
-        if isinstance(p, dict) and p.get("key") and p.get("value"):
-            param_map[p["key"]] = p["value"]
+        if not isinstance(p, dict) or not p.get("key") or not p.get("value"):
+            continue
+        # file 类型参数的 value 是 fileId（文件上传语义），不作为变量注入
+        if p.get("type") == "file":
+            continue
+        param_map[p["key"]] = p["value"]
 
     return param_map
 
@@ -255,6 +263,70 @@ def _body_to_text(data) -> Optional[str]:
         return str(data)
 
 
+
+_PUSHLOG_PRE_STEPS_READY = False
+
+
+def _ensure_pushlog_pre_steps_column(db: Session) -> None:
+    """惰性补列：pushlog.pre_steps 列不存在时实时补上。
+
+    模型新增列依赖启动时的 _migrate_missing_columns；对未重启的长驻进程，
+    第一次写推送日志前在这里补列，避免前置步骤记录静默丢失。
+    """
+    global _PUSHLOG_PRE_STEPS_READY
+    if _PUSHLOG_PRE_STEPS_READY:
+        return
+    try:
+        from sqlalchemy import inspect, text
+
+        insp = inspect(db.get_bind())
+        columns = {col["name"].lower() for col in insp.get_columns("pushlog")}
+        if "pre_steps" not in columns:
+            db.exec(text('ALTER TABLE pushlog ADD COLUMN pre_steps JSON DEFAULT "[]"'))
+            db.commit()
+            logger.info("自动补列: pushlog.pre_steps (JSON)")
+        _PUSHLOG_PRE_STEPS_READY = True
+    except Exception as exc:  # noqa: BLE001 - 补列失败不阻断推送
+        logger.warning("pushlog.pre_steps 补列失败（前置步骤记录可能缺失）: %s", exc)
+
+
+def _trim_pre_step_results(results: list) -> list:
+    """把前置步骤执行结果裁剪成适合落库展示的形态。
+
+    保留每个步骤的请求方法/地址/状态码/提取变量/错误，以及响应体摘要
+    （超长截断），方便在推送记录里回看前置请求的响应内容。
+    """
+    trimmed: list = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        entry = {
+            "index": item.get("index"),
+            "type": item.get("type"),
+            "name": item.get("name"),
+            "method": item.get("method"),
+            "url": item.get("url"),
+            "status_code": item.get("status_code"),
+            "extracted": item.get("extracted") or {},
+            "ok": item.get("ok"),
+            "error": item.get("error"),
+        }
+        if item.get("type") == "params":
+            entry["params"] = item.get("params") or {}
+        elif item.get("type") == "set_variable":
+            entry["key"] = item.get("key")
+            value = item.get("value")
+            entry["value"] = value if (value is None or len(str(value)) <= 500) else str(value)[:500] + "…(截断)"
+        response_data = item.get("response_data")
+        if response_data is not None:
+            entry["response_body"] = _body_to_text(response_data)
+            text_body = entry.get("response_body") or ""
+            if len(text_body) > 2000:
+                entry["response_body"] = text_body[:2000] + "…(截断)"
+        trimmed.append(entry)
+    return trimmed
+
+
 def _save_push_log(
     db: Session,
     *,
@@ -271,8 +343,11 @@ def _save_push_log(
     response_body=None,
     mocked: bool = False,
     error: Optional[str] = None,
+    pre_step_results: Optional[list] = None,
 ):
     """持久化一条推送请求记录（原始 + 解析后），失败只告警不阻断转发"""
+    # pushlog.pre_steps 列不存在时惰性补上（兼容未重启的旧进程）
+    _ensure_pushlog_pre_steps_column(db)
     try:
         log = PushLog(
             request_method=(request.method or "GET").upper(),
@@ -292,6 +367,7 @@ def _save_push_log(
             duration_ms=duration_ms,
             environment_id=environment_id,
             user_id=getattr(user, "user_id", None),
+            pre_steps=_trim_pre_step_results(pre_step_results or []),
         )
         db.add(log)
         db.commit()
@@ -300,21 +376,15 @@ def _save_push_log(
         logger.warning("保存推送请求记录失败: %s", exc)
 
 
-@router.post("/forward")
-async def forward_request(
+async def _forward_once(
     request: ProxyRequest,
     user: CurrentUser,
-    db: Session = Depends(get_db),
-):
-    """转发请求到目标URL，支持参数变量替换"""
-    start_time = time.perf_counter()
-    # 构建参数映射表
-    environment_id = request.environment_id
-    if environment_id and Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user):
-        environment_id = None
-    param_map = build_param_map(db, environment_id, [])
-    logger.info("param_map: %s", param_map)
-
+    db: Session,
+    environment_id: Optional[int],
+    param_map: dict,
+    pre_step_results: list,
+    start_time: float,
+) -> dict:
     # 收集未解析的用户变量
     unresolved: set[str] = set()
 
@@ -335,6 +405,7 @@ async def forward_request(
             final_url=final_url, final_headers=final_headers, final_params=final_params,
             final_data=final_data, duration_ms=_elapsed_ms(),
             error=f"以下变量未在环境参数中定义: {unresolved_list}",
+            pre_step_results=pre_step_results,
         )
         raise HTTPException(
             status_code=400,
@@ -348,6 +419,7 @@ async def forward_request(
             db, user=user, request=request, environment_id=environment_id,
             final_url=final_url, final_headers=final_headers, final_params=final_params,
             final_data=final_data, duration_ms=_elapsed_ms(), error="Invalid URL",
+            pre_step_results=pre_step_results,
         )
         raise HTTPException(status_code=400, detail="Invalid URL")
 
@@ -362,7 +434,10 @@ async def forward_request(
             response_headers=mock_result.get("headers") or {},
             response_body=mock_result.get("data"),
             mocked=True,
+            pre_step_results=pre_step_results,
         )
+        if pre_step_results:
+            mock_result["pre_steps"] = pre_step_results
         return mock_result
 
     async with httpx.AsyncClient() as client:
@@ -391,21 +466,79 @@ async def forward_request(
                 response_status=response.status_code,
                 response_headers=dict(response.headers),
                 response_body=response_data,
+                pre_step_results=pre_step_results,
             )
-            return {
+            result = {
                 "status_code": response.status_code,
                 "headers": dict(response.headers),
                 "data": response_data
             }
+            if pre_step_results:
+                result["pre_steps"] = pre_step_results
+            return result
         except Exception as e:
             _save_push_log(
                 db, user=user, request=request, environment_id=environment_id,
                 final_url=final_url, final_headers=final_headers, final_params=final_params,
                 final_data=final_data, duration_ms=_elapsed_ms(),
                 error=f"Proxy error: {str(e)}",
+                pre_step_results=pre_step_results,
             )
             raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
 
+
+
+
+@router.post("/forward")
+async def forward_request(
+    request: ProxyRequest,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """转发请求到目标URL，支持参数变量替换"""
+    start_time = time.perf_counter()
+    # 构建参数映射表
+    environment_id = request.environment_id
+    if environment_id and Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user):
+        environment_id = None
+    param_map = build_param_map(db, environment_id, [])
+    logger.info("param_map: %s", param_map)
+
+    # 前置步骤：先执行一次，产出的变量并入 param_map（仅本次链路生效，不写环境）
+    pre_step_results: list[dict] = []
+    if request.pre_steps:
+        from app.services.pre_steps import run_pre_steps
+
+        try:
+            param_map, pre_step_results = await run_pre_steps(
+                request.pre_steps, dict(param_map), db=db, user_id=user.user_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("pre_steps error: %s", exc)
+            pre_step_results = [{"type": "error", "ok": False, "error": str(exc)}]
+
+    # ---- 批量模式：按前置参数列表逐行循环 ----
+    from app.services.batch_params import has_batch, run_batch
+
+    if has_batch(request.batch_params):
+        async def _forward_one(row_param_map: dict) -> dict:
+            return await _forward_once(
+                request, user, db, environment_id, row_param_map, pre_step_results, start_time,
+            )
+
+        batch = await run_batch(request.batch_params, param_map, _forward_one)
+        logger.info("batch done: total=%s passed=%s failed=%s", batch["total"], batch["passed"], batch["failed"])
+        return {
+            "status_code": 200 if not batch["failed"] else 207,
+            "headers": {},
+            "data": None,
+            "batch": batch,
+        }
+
+    # ---- normal single forward ----
+    return await _forward_once(
+        request, user, db, environment_id, param_map, pre_step_results, start_time,
+    )
 
 @router.post("/test-variable")
 async def test_variable(

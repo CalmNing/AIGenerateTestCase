@@ -5,6 +5,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { mockConfigApi, globalParameterApi } from '../../services/api';
 import type { MockConfig, GlobalParameter } from '../../types';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import './IoTMockPlatform.css';
 
 /**
@@ -291,7 +292,13 @@ const IoTMockPlatform: React.FC = () => {
           <span className="mock-url-path">{t}</span>
           <button
             className="mock-url-copy"
-            onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`/api/mock${t}`); message.success('已复制'); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              copyTextToClipboard(`/api/mock${t}`).then((ok) => {
+                if (ok) message.success('已复制');
+                else message.error('复制失败，请手动选择文本复制');
+              });
+            }}
             title="复制路径"
           >
             <CopyOutlined style={{ fontSize: 11 }} />

@@ -18,12 +18,14 @@ from app.routes.push_log import router as push_log_router
 from app.routes.saved_request import router as saved_request_router
 from app.routes.saved_request_folder import router as saved_request_folder_router
 from app.routes.scheduled_task import router as scheduled_task_router
+from app.routes.task_group import router as task_group_router
 from app.routes.session import router as session_router
 from app.routes.skills import router as skills_router
 from app.routes.rag import router as rag_router
 from app.routes.testcase import router as testcase_router
 from app.routes.pipeline import router as pipeline_router
 from app.routes.document import router as document_router
+from app.routes.file_upload import router as file_upload_router
 from app.routes.requirement_doc import router as requirement_doc_router
 from app.routes.chat import router as chat_router
 from app.routes.chat_history import router as chat_history_router
@@ -87,6 +89,18 @@ api_router.include_router(
     ],
 )
 api_router.include_router(proxy_router, dependencies=[Depends(require_permissions(Permission.IOT_EXECUTE))])
+# 文件上传代理:浏览器不再直连对象存储(避免跨域),上传由后端转发。
+# 供 IoT 数据推送(iot:execute)与定时任务(scheduled_task:manage)使用,两者满足其一即可。
+api_router.include_router(
+    file_upload_router,
+    dependencies=[
+        Depends(
+            require_http_method_permissions(
+                post=[Permission.IOT_EXECUTE, Permission.SCHEDULED_TASK_MANAGE],
+            )
+        )
+    ],
+)
 # WebSocket 订阅：连接/测试连接属于 iot:execute，读日志/删除沿用 iot:read / iot:delete。
 api_router.include_router(
     ws_router,
@@ -211,6 +225,11 @@ api_router.include_router(
 )
 api_router.include_router(
     scheduled_task_router,
+    dependencies=[Depends(require_permissions(Permission.SCHEDULED_TASK_MANAGE))],
+)
+# 定时任务分组：与定时任务同权限
+api_router.include_router(
+    task_group_router,
     dependencies=[Depends(require_permissions(Permission.SCHEDULED_TASK_MANAGE))],
 )
 api_router.include_router(mock_config_router, dependencies=[Depends(require_permissions(Permission.MOCK_MANAGE))])

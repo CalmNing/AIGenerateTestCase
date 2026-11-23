@@ -4,9 +4,12 @@ import { SendOutlined, PlusOutlined, MinusOutlined, CopyOutlined, SaveOutlined, 
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { savedRequestApi, savedRequestFolderApi, globalParameterApi, proxyApi, mqttApi, wsApi } from '../../services/api';
-import { SavedRequest as SavedRequestType, SavedRequestFolder, SavedRequestLayoutGroup, MqttConfig, MqttPublishResult, WsConfig, WsConnectResult } from '../../types';
+import { SavedRequest as SavedRequestType, SavedRequestFolder, SavedRequestLayoutGroup, MqttConfig, MqttPublishResult, WsConfig, WsConnectResult, PreStep, PreStepKv, BatchParams } from '../../types';
 import FileUpload, { UploadedFileResult } from '../FileUpload';
 import PushLogDrawer from './PushLogDrawer';
+import PreStepsEditor from './PreStepsEditor';
+import BatchParamsEditor from './BatchParamsEditor';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import IoTRequestSidebar from './IoTRequestSidebar';
 import './IoTDataPushPlatform.css';
 
@@ -167,41 +170,67 @@ function parseJsonWithComments(str: string): any {
   return JSON.parse(stripJsonComments(str));
 }
 
-// --- JSON Syntax Highlighter (pure CSS, no CodeMirror dependency for response) ---
+// --- JSON Syntax Highlighter (pure CSS, nested collapsible tree for response) ---
 
-function highlightJson(value: any, indent: number = 2): string {
+const LARGE_RESPONSE_LIMIT = 100 * 1024;
+
+function escapeJsonText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function highlightJsonScalar(value: any): string {
   if (value === null) return '<span class="iot-json-null">null</span>';
   if (typeof value === 'boolean') return `<span class="iot-json-boolean">${value}</span>`;
   if (typeof value === 'number') return `<span class="iot-json-number">${value}</span>`;
-  if (typeof value === 'string') {
-    const escaped = value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-    return `<span class="iot-json-string">"${escaped}"</span>`;
-  }
+  if (typeof value === 'string') return `<span class="iot-json-string">"${escapeJsonText(value)}"</span>`;
+  return escapeJsonText(String(value));
+}
 
-  const pad = (level: number) => ' '.repeat(level * indent);
-  const padInner = (level: number) => ' '.repeat((level + 1) * indent);
+function renderJsonNode(value: any, indent: number, depth: number): string {
+  if (value === null || typeof value !== 'object') return highlightJsonScalar(value);
 
+  const pad = ' '.repeat(depth * indent);
+  const padInner = ' '.repeat((depth + 1) * indent);
+  const isArray = Array.isArray(value);
+  const openBracket = isArray ? '[' : '{';
+  const closeBracket = isArray ? ']' : '}';
+
+  const entries = isArray
+    ? value.map((item: any) => `${padInner}${renderJsonNode(item, indent, depth + 1)}`)
+    : Object.keys(value).map(key =>
+        `${padInner}<span class="iot-json-key">"${escapeJsonText(key)}"</span><span class="iot-json-colon">: </span>${renderJsonNode(value[key], indent, depth + 1)}`
+      );
+  if (entries.length === 0) return `<span class="iot-json-bracket">${openBracket}${closeBracket}</span>`;
+
+  const countLabel = isArray ? `${entries.length} 项` : `${entries.length} 个字段`;
+  return (
+    `<span class="iot-json-node is-open">` +
+    `<span class="iot-json-toggle" title="点击折叠/展开">▾</span>` +
+    `<span class="iot-json-bracket">${openBracket}</span>` +
+    `<span class="iot-json-children">\n${entries.join(',\n')}\n${pad}<span class="iot-json-bracket">${closeBracket}</span></span>` +
+    `<span class="iot-json-preview"><span class="iot-json-ellipsis">…</span><span class="iot-json-bracket">${closeBracket}</span><span class="iot-json-count">${countLabel}</span></span>` +
+    `</span>`
+  );
+}
+
+function highlightJson(value: any, indent: number = 2): string {
+  return renderJsonNode(value, indent, 0);
+}
+
+function measureJsonDepth(value: any, depth: number = 0): number {
+  if (value === null || typeof value !== 'object') return depth;
   if (Array.isArray(value)) {
-    if (value.length === 0) return '<span class="iot-json-bracket">[]</span>';
-    const items = value.map(v => `${padInner(1)}${highlightJson(v, indent)}`);
-    return `<span class="iot-json-bracket">[</span>\n${items.join(',\n')}\n${pad(1)}<span class="iot-json-bracket">]</span>`;
+    let max = depth + 1;
+    for (const item of value) max = Math.max(max, measureJsonDepth(item, depth + 1));
+    return max;
   }
-
-  if (typeof value === 'object') {
-    const keys = Object.keys(value);
-    if (keys.length === 0) return '<span class="iot-json-bracket">{}</span>';
-    const entries = keys.map(k => {
-      const escapedKey = k.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-      return `${padInner(1)}<span class="iot-json-key">"${escapedKey}"</span><span class="iot-json-colon">: </span>${highlightJson(value[k], indent)}`;
-    });
-    return `<span class="iot-json-bracket">{</span>\n${entries.join(',\n')}\n${pad(1)}<span class="iot-json-bracket">}</span>`;
-  }
-
-  return String(value);
+  let max = depth + 1;
+  for (const child of Object.values(value)) max = Math.max(max, measureJsonDepth(child, depth + 1));
+  return max;
 }
 
 // --- Method Badge Component ---
@@ -347,8 +376,8 @@ const composeBrokerAddress = (config: MqttConfig): string => {
 
 // --- Tab Interface ---
 
-type ConfigTabKey = 'params' | 'headers' | 'body' | 'extract' | 'mqtt' | 'ws';
-type ResponseTabKey = 'body' | 'headers' | 'messages' | 'result';
+type ConfigTabKey = 'params' | 'headers' | 'body' | 'pre' | 'batch' | 'extract' | 'mqtt' | 'ws';
+type ResponseTabKey = 'body' | 'headers' | 'pre' | 'messages' | 'result';
 
 interface Tab {
   id: string;
@@ -360,6 +389,10 @@ interface Tab {
   headers: HeaderItem[];
   parameters: ParameterItem[];
   postExtractions?: ExtractionRule[];
+  /** 前置步骤：发请求取变量 / 直接设置变量 */
+  preSteps?: PreStep[];
+  /** 前置参数列表：按行循环发送主请求 */
+  batchParams?: BatchParams;
   body?: string;
   /** MQTT 配置，仅 protocol === 'mqtt' 时有效 */
   mqtt?: MqttConfig;
@@ -384,8 +417,43 @@ interface Tab {
   responseTime?: number;
 }
 
+/** 请求级前置参数：后端旧数据行的 batch_params 存的是 []（数组）而不是对象，
+ * 直接当对象用会强访 batchParams.columns 而报错，这里统一归一化。 */
+const normalizeBatchParams = (raw: any): BatchParams => {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return {
+      columns: Array.isArray(raw.columns) ? raw.columns : [],
+      rows: Array.isArray(raw.rows) ? raw.rows : [],
+      on_error: raw.on_error === 'stop' ? 'stop' : 'continue',
+    };
+  }
+  return { columns: [], rows: [], on_error: 'continue' };
+};
+
+/**
+ * 归一化前置步骤数据：后端旧数据的 request 步骤 headers/params 存的是
+ * {k:v} 字典（Record<string,string>），新版编辑器用 PreStepKv[] 数组；
+ * 这里统一转成数组形态，保证旧数据在新编辑器里可正常展示与编辑。
+ */
+const normalizePreSteps = (raw: any): PreStep[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((step: any): PreStep => {
+    if (!step || typeof step !== 'object') return step;
+    const toKvList = (v: any): PreStepKv[] | undefined => {
+      if (Array.isArray(v)) return v;
+      if (v && typeof v === 'object') {
+        return Object.entries(v).map(([key, value]) => ({ key, value: String(value), enabled: true }));
+      }
+      return undefined;
+    };
+    const headers = toKvList(step.headers);
+    const params = toKvList(step.params);
+    return { ...step, ...(headers ? { headers } : {}), ...(params ? { params } : {}) };
+  });
+};
+
 const tabContentKey = (
-  tab: Pick<Tab, 'name' | 'protocol' | 'method' | 'url' | 'body' | 'headers' | 'parameters' | 'postExtractions' | 'mqtt' | 'ws'>
+  tab: Pick<Tab, 'name' | 'protocol' | 'method' | 'url' | 'body' | 'headers' | 'parameters' | 'postExtractions' | 'preSteps' | 'batchParams' | 'mqtt' | 'ws'>
 ): string =>
   JSON.stringify([
     tab.name,
@@ -396,6 +464,8 @@ const tabContentKey = (
     tab.headers || [],
     tab.parameters || [],
     tab.postExtractions || [],
+    tab.preSteps || [],
+    tab.batchParams || null,
     tab.protocol === 'mqtt' ? (tab.mqtt || null) : null,
     tab.protocol === 'websocket' ? (tab.ws || null) : null,
   ]);
@@ -415,6 +485,12 @@ const applyTabChange = (tab: Tab, updates: Partial<Tab>): Tab => {
 interface IoTDataPushPlatformProps {
   currentEnvironmentId?: string;
   canManageGlobalParams?: boolean;
+  /**
+   * 环境数据变化通知（后置提取写回变量、增删改环境等）。
+   * 本组件维护自己的 environments 副本，父级（App.tsx）也有一份；
+   * 没有这个回调时，后置提取存入的变量只在本组件刷新，父级与变量助手看不到。
+   */
+  onEnvironmentsChanged?: () => void;
 }
 
 let tabCounter = 0;
@@ -496,6 +572,7 @@ const buildNewTab = (protocol: PushProtocol, folderId?: number | null): Tab => (
 const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   currentEnvironmentId: propEnvironmentId,
   canManageGlobalParams = false,
+  onEnvironmentsChanged,
 }) => {
   const [form] = Form.useForm();
   const [activeTabId, setActiveTabId] = useState<string>('');
@@ -522,6 +599,10 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   const [newItemFolderParent, setNewItemFolderParent] = useState<number>(0);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [postExtractions, setPostExtractions] = useState<ExtractionRule[]>([]);
+  /** 前置步骤：发请求取变量 / 直接设置变量 */
+  const [preSteps, setPreSteps] = useState<PreStep[]>([]);
+  /** 前置参数列表（批量执行） */
+  const [batchParams, setBatchParams] = useState<BatchParams>({ columns: [], rows: [], on_error: 'continue' });
   /** 保存请求时选择归属文件夹的弹窗：visible + 当前选中值（null = 未分类） */
   const [saveFolderModalVisible, setSaveFolderModalVisible] = useState(false);
   const [saveFolderChoice, setSaveFolderChoice] = useState<number | null>(null);
@@ -666,6 +747,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     const env = environments.find(item => item.id === currentEnvironmentId);
     if (env) {
       await saveEnvironmentToBackend(env);
+      onEnvironmentsChanged?.();
     }
   };
 
@@ -677,6 +759,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
       setEnvironments(newEnvironments);
       await saveEnvironmentToBackend(newEnvironments[envIndex]);
+      onEnvironmentsChanged?.();
     }
   };
 
@@ -688,6 +771,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       newEnvironments[envIndex] = { ...newEnvironments[envIndex], parameters: newParameters };
       setEnvironments(newEnvironments);
       await saveEnvironmentToBackend(newEnvironments[envIndex]);
+      onEnvironmentsChanged?.();
     }
   };
 
@@ -717,6 +801,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       setEnvironments([...environments, updatedEnv]);
       setCurrentEnvironmentId(updatedEnv.id);
       setIsAddEnvModalVisible(false);
+      onEnvironmentsChanged?.();
     }
   };
 
@@ -741,6 +826,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           if (currentEnvironmentId === envId) {
             setCurrentEnvironmentId(newEnvironments[0].id);
           }
+          onEnvironmentsChanged?.();
         }
       },
     });
@@ -748,6 +834,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
   const [editingEnvName, setEditingEnvName] = useState('');
+  /** 正在复制的环境 id（用于复制按钮的 loading 态） */
+  const [copyingEnvId, setCopyingEnvId] = useState<string | null>(null);
 
   const handleEditEnvironmentName = (env: Environment) => {
     setEditingEnvId(env.id);
@@ -767,12 +855,44 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       setEnvironments(newEnvironments);
       await saveEnvironmentToBackend(newEnvironments[envIndex]);
       setEditingEnvId(null);
+      onEnvironmentsChanged?.();
     }
   };
 
   const handleCancelEditEnvironmentName = () => {
     setEditingEnvId(null);
     setEditingEnvName('');
+  };
+
+  // 复制环境（含全部参数）：一键创建并切换到新环境
+  const handleCopyEnvironment = async (env: Environment) => {
+    if (!canManageGlobalParams) {
+      message.warning('无权限复制环境');
+      return;
+    }
+    // 'env-1' 是尚未落库的本地占位环境，没有真实 id 可复制
+    if (!env.id || env.id === 'env-1' || !parseInt(env.id)) {
+      message.warning('该环境尚未保存到服务器，无法复制');
+      return;
+    }
+
+    setCopyingEnvId(env.id);
+    try {
+      const response = await globalParameterApi.copyEnvironment(parseInt(env.id));
+      if (response.code === 200 && response.data) {
+        // fetchGlobalParameters 刷新列表并切换当前环境；补写 localStorage 以便刷新后仍停留在新环境
+        await fetchGlobalParameters(response.data.id.toString());
+        localStorage.setItem('currentEnvironmentId', response.data.id.toString());
+        message.success(`环境已复制：${response.data.name}`);
+      } else {
+        message.error(response.message || '复制环境失败');
+      }
+    } catch (error) {
+      console.error('Failed to copy environment:', error);
+      message.error('复制环境失败');
+    } finally {
+      setCopyingEnvId(null);
+    }
   };
 
   const handleSwitchEnvironment = async (envId: string) => {
@@ -793,6 +913,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       setHeaders(tab.headers);
       setParameters(tab.parameters);
       setPostExtractions(tab.postExtractions || []);
+      setPreSteps(normalizePreSteps(tab.preSteps));
+      setBatchParams(normalizeBatchParams(tab.batchParams));
     }
   }, [activeTabId, tabs, form]);
 
@@ -832,6 +954,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         }));
         if (backendEnvironments.length > 0) {
           setEnvironments(backendEnvironments);
+          // 通知父级刷新它那份 environments 副本(后置提取写入的变量要能立刻看到)
+          onEnvironmentsChanged?.();
           if (envId) {
             setCurrentEnvironmentId(envId);
             return;
@@ -994,6 +1118,50 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     const newExtractions = postExtractions.filter((_, i) => i !== index);
     setPostExtractions(newExtractions);
     updateCurrentTab({ postExtractions: newExtractions });
+  };
+
+  // --- 前置步骤 handlers ---
+
+  const handleAddPreStep = () => {
+    // 参数统一在前置参数中设置，新步骤默认为「自己配置」的请求类型
+    const newSteps: PreStep[] = [...preSteps, { type: 'request', source: 'custom', method: 'GET', url: '', headers: [], params: [], extracts: [], enabled: true }];
+    setPreSteps(newSteps);
+    updateCurrentTab({ preSteps: newSteps });
+  };
+
+  const handleRemovePreStep = (index: number) => {
+    const newSteps = preSteps.filter((_, i) => i !== index);
+    setPreSteps(newSteps);
+    updateCurrentTab({ preSteps: newSteps });
+  };
+
+  const handlePreStepChange = (index: number, updates: Partial<PreStep>) => {
+    const newSteps = [...preSteps];
+    newSteps[index] = { ...newSteps[index], ...updates };
+    setPreSteps(newSteps);
+    updateCurrentTab({ preSteps: newSteps });
+  };
+
+  const handleAddPreStepExtract = (index: number) => {
+    const step = preSteps[index];
+    if (!step) return;
+    const extracts = [...(step.extracts || []), { key: '', jsonpath: '' }];
+    handlePreStepChange(index, { extracts });
+  };
+
+  const handleRemovePreStepExtract = (stepIndex: number, extractIndex: number) => {
+    const step = preSteps[stepIndex];
+    if (!step) return;
+    const extracts = (step.extracts || []).filter((_, i) => i !== extractIndex);
+    handlePreStepChange(stepIndex, { extracts });
+  };
+
+  const handlePreStepExtractChange = (stepIndex: number, extractIndex: number, field: 'key' | 'jsonpath', value: string) => {
+    const step = preSteps[stepIndex];
+    if (!step) return;
+    const extracts = [...(step.extracts || [])];
+    extracts[extractIndex] = { ...extracts[extractIndex], [field]: value };
+    handlePreStepChange(stepIndex, { extracts });
   };
 
   const handleExtractionChange = (index: number, field: 'variable' | 'jsonpath', value: string) => {
@@ -1187,6 +1355,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       mqttResult: null,
       wsResult: null,
       postExtractions: (request as any).post_extractions || [],
+      preSteps: normalizePreSteps((request as any).pre_steps),
+      batchParams: normalizeBatchParams((request as any).batch_params),
       savedRequestId: request.id,
       folderId: request.folder_id ?? null,
       hasUnsavedChanges: false
@@ -1406,6 +1576,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         params: processedParams,
         file_params: fileParams.length > 0 ? fileParams : undefined,
         environment_id: envId,
+        pre_steps: preSteps.length > 0 ? preSteps : undefined,
+        batch_params: batchParams.columns.length > 0 && batchParams.rows.length > 0 ? batchParams : undefined,
       });
 
       const endTime = Date.now();
@@ -1413,10 +1585,29 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         status: proxyResponse.status_code,
         statusText: '',
         headers: proxyResponse.headers,
-        data: proxyResponse.data
+        data: proxyResponse.data,
+        // 前置步骤执行记录：响应区「前置步骤」页签展示请求/响应摘要
+        pre_steps: (proxyResponse as any).pre_steps || [],
       };
 
       updateCurrentTab({ method, url, body, headers, parameters, response: axiosResponse, responseTime: endTime - startTime }, true);
+
+      // 批量模式：只弹一条汇总提示
+      const batchInfo = (proxyResponse as any).batch;
+      if (batchInfo) {
+        const stoppedText = batchInfo.stopped ? ' （已中止）' : '';
+        if (batchInfo.failed > 0) {
+          message.warning(
+            '批量执行完成：共 ' + batchInfo.total + ' 项，成功 ' + batchInfo.passed + ' 项，失败 ' + batchInfo.failed + ' 项' + stoppedText
+          );
+        } else {
+          message.success(
+            '批量执行完成：共 ' + batchInfo.total + ' 项，全部成功' + stoppedText
+          );
+        }
+        return;
+      }
+
       message.success('请求成功');
 
       if (canManageGlobalParams && postExtractions.length > 0 && axiosResponse.data && envId) {
@@ -1430,7 +1621,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
             const extracted = extractResponse.data as unknown as Record<string, string>;
             const names = Object.entries(extracted).map(([k, v]) => k + '=' + v).join(', ');
             message.success('变量已提取: ' + names);
-            fetchGlobalParameters(String(envId));
+            // 重新拉取环境列表:既刷新本组件,也通知父级刷新,保证新变量各处可见
+            await fetchGlobalParameters(String(envId));
           }
         } catch (extractError: any) {
           const detail = extractError.response?.data?.detail || extractError.message;
@@ -1533,6 +1725,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
         name: requestName,
         method, url, headers, parameters, body,
         post_extractions: postExtractions,
+        pre_steps: preSteps,
+        batch_params: batchParams,
         folder_id: folderIdForSave,
         protocol,
         // HTTP / MQTT 请求不写 ws_config，避免污染历史数据
@@ -1893,14 +2087,72 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- Response HTML ---
 
-  const responseHtml = useMemo(() => {
-    if (!response?.data) return '';
+  const responseBodyRef = useRef<HTMLDivElement>(null);
+
+  const responseText = useMemo(() => {
+    if (!response) return '';
+    if (typeof response.data === 'string') return response.data;
     try {
-      return highlightJson(response.data);
+      return JSON.stringify(response.data, null, 2);
+    } catch {
+      return String(response.data ?? '');
+    }
+  }, [response]);
+
+  const responseSize = useMemo(() => new Blob([responseText]).size, [responseText]);
+  const isLargeResponse = responseSize > LARGE_RESPONSE_LIMIT;
+
+  const parsedJsonData = useMemo(() => {
+    if (!response || response.data == null) return null;
+    const data: any = response.data;
+    if (typeof data !== 'string') return data;
+    const trimmed = data.trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }, [response]);
+
+  const responseHtml = useMemo(() => {
+    if (isLargeResponse || parsedJsonData == null) return '';
+    try {
+      return highlightJson(parsedJsonData);
     } catch {
       return '';
     }
-  }, [response?.data]);
+  }, [parsedJsonData, isLargeResponse]);
+
+  const rawToolbarNote = useMemo(() => {
+    if (isLargeResponse) return parsedJsonData != null ? '响应内容过大，已停用层级折叠视图' : '响应内容过大';
+    if (parsedJsonData == null) return '内容不是有效 JSON，以原始文本展示';
+    return '';
+  }, [isLargeResponse, parsedJsonData]);
+
+  const responseJsonDepth = useMemo(() => {
+    if (responseHtml) return measureJsonDepth(parsedJsonData);
+    return 0;
+  }, [responseHtml, parsedJsonData]);
+
+  const handleResponseTreeClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const toggle = target.closest('.iot-json-toggle');
+    const preview = target.closest('.iot-json-preview');
+    if (!toggle && !preview) return;
+    const node = (toggle || preview)?.closest('.iot-json-node');
+    if (!node) return;
+    if (toggle) node.classList.toggle('is-open');
+    else node.classList.add('is-open');
+  };
+
+  const handleJsonCollapseAll = () => {
+    responseBodyRef.current?.querySelectorAll('.iot-json-node').forEach(el => el.classList.remove('is-open'));
+  };
+
+  const handleJsonExpandAll = () => {
+    responseBodyRef.current?.querySelectorAll('.iot-json-node').forEach(el => el.classList.add('is-open'));
+  };
 
   // --- Postman 风格展示态（仅影响渲染，不改动既有数据流） ---
 
@@ -1926,18 +2178,6 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     setResponseTabs(prev => ({ ...prev, [activeTabId]: key }));
   };
 
-  const responseText = useMemo(() => {
-    if (!response) return '';
-    if (typeof response.data === 'string') return response.data;
-    try {
-      return JSON.stringify(response.data, null, 2);
-    } catch {
-      return String(response.data ?? '');
-    }
-  }, [response]);
-
-  const responseSize = useMemo(() => new Blob([responseText]).size, [responseText]);
-
   const responseHeaders = useMemo<Record<string, string>>(() => {
     const raw = (response as { headers?: unknown } | null)?.headers;
     if (!raw || typeof raw !== 'object') return {};
@@ -1956,10 +2196,109 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
   };
 
   const handleCopyResponse = () => {
-    const payload = isMqtt ? activeTab?.mqttResult : isWs ? activeTab?.wsResult : response;
-    if (payload == null) return;
-    navigator.clipboard.writeText(typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2));
-    message.success('已复制到剪贴板');
+    if (isMqtt) {
+      const payload = activeTab?.mqttResult;
+      if (payload == null) return;
+      copyTextToClipboard(JSON.stringify(payload, null, 2)).then((ok) => {
+        if (ok) message.success('已复制到剪贴板');
+        else message.error('复制失败，请手动选择文本复制');
+      });
+      return;
+    }
+    if (isWs) {
+      const payload = activeTab?.wsResult;
+      if (payload == null) return;
+      copyTextToClipboard(JSON.stringify(payload, null, 2)).then((ok) => {
+        if (ok) message.success('已复制到剪贴板');
+        else message.error('复制失败，请手动选择文本复制');
+      });
+      return;
+    }
+    if (!response) return;
+    copyTextToClipboard(responseText).then((ok) => {
+      if (ok) message.success('已复制响应体内容');
+      else message.error('复制失败，请手动选择文本复制');
+    });
+  };
+
+  /** 前置步骤执行结果：每个步骤的请求摘要 + 响应体 + 提取变量（响应区「前置步骤」页签） */
+  const renderPreStepResults = (steps: Array<Record<string, any>>) => {
+    if (!steps || steps.length === 0) {
+      return (
+        <div className="iot-response-empty">
+          <span className="iot-response-empty-text">本次推送未执行前置步骤</span>
+        </div>
+      );
+    }
+    return (
+      <div className="iot-prestep-results">
+        {steps.map((step, i) => {
+          const ok = step.ok === true;
+          const isParams = step.type === 'params';
+          const isSetVar = step.type === 'set_variable';
+          const responseBody = step.response_data != null
+            ? (typeof step.response_data === 'string' ? step.response_data : JSON.stringify(step.response_data, null, 2))
+            : '';
+          const extracted: Record<string, string> = step.extracted || {};
+          return (
+            <div
+              key={i}
+              style={{
+                border: '1px solid var(--color-border-light)',
+                borderRadius: 8,
+                padding: 10,
+                marginBottom: 10,
+                background: 'var(--color-bg-container, #fff)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                <Tag color={ok ? 'green' : 'red'}>{ok ? '成功' : '失败'}</Tag>
+                <span style={{ fontWeight: 600, fontSize: 12 }}>步骤 {typeof step.index === 'number' ? step.index + 1 : i + 1}</span>
+                {isParams ? (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>参数注入</span>
+                ) : isSetVar ? (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>设置变量</span>
+                ) : (
+                  <span style={{ fontSize: 12, fontFamily: 'monospace' }}>{step.method || 'GET'} {step.url || ''}</span>
+                )}
+                {typeof step.status_code === 'number' && step.status_code > 0 && (
+                  <Tag color={step.status_code >= 200 && step.status_code < 300 ? 'green' : 'orange'}>{step.status_code}</Tag>
+                )}
+              </div>
+              {isSetVar && (
+                <pre className="iot-response-pre" style={{ maxHeight: 80 }}>
+                  {(step.key || '(未命名)') + ': ' + String(step.value ?? '')}
+                </pre>
+              )}
+              {isParams && (
+                <pre className="iot-response-pre" style={{ maxHeight: 120 }}>
+                  {Object.entries(step.params || {}).map(([k, v]) => k + ': ' + String(v)).join('\n') || '(空)'}
+                </pre>
+              )}
+              {!isParams && !isSetVar && step.error && (
+                <pre className="iot-response-pre" style={{ maxHeight: 120, color: 'var(--color-error, #ff4d4f)' }}>
+                  {step.error}
+                </pre>
+              )}
+              {!isParams && !isSetVar && responseBody && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>响应体</div>
+                  <pre className="iot-response-pre" style={{ maxHeight: 180 }}>{responseBody}</pre>
+                </div>
+              )}
+              {Object.keys(extracted).length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>提取变量</div>
+                  <pre className="iot-response-pre" style={{ maxHeight: 120 }}>
+                    {Object.entries(extracted).map(([k, v]) => k + ' = ' + String(v)).join('\n')}
+                  </pre>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
   };
 
   const renderResponseHeaders = () => {
@@ -1997,6 +2336,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       ];
     }
     const items: Array<{ key: ConfigTabKey; label: string }> = [
+      { key: 'pre', label: '前置步骤' + (preSteps.length ? ' (' + preSteps.length + ')' : '') },
+      { key: 'batch', label: '前置参数' + ((batchParams.columns.length && batchParams.rows.length) ? ' (' + batchParams.rows.length + ')' : '') },
       { key: 'params', label: '参数' + (parameters.length ? ' (' + parameters.length + ')' : '') },
       { key: 'headers', label: '请求头' + (headers.length ? ' (' + headers.length + ')' : '') },
       { key: 'body', label: '请求体' },
@@ -2529,8 +2870,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                                   newParams[index] = { ...newParams[index], file: result, value: result.fileId };
                                   setParameters(newParams);
                                 }}
-                                baseUrl={getCurrentEnvironment().parameters.find(p => p.key === 'baseUrl')?.value}
-                                accessToken={getCurrentEnvironment().parameters.find(p => p.key === 'access-token')?.value}
+                                environmentId={parseInt(currentEnvironmentId) || null}
                               />
                             );
                           },
@@ -2600,6 +2940,21 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                         />
                       </div>
                     </div>
+                    )}
+                    {currentConfigTab === 'batch' && (
+                      <BatchParamsEditor value={batchParams} onChange={setBatchParams} />
+                    )}
+                    {currentConfigTab === 'pre' && (
+                      <PreStepsEditor
+                        steps={preSteps}
+                        savedRequests={savedRequests.filter(r => (r.protocol || 'http') === 'http')}
+                        onChange={handlePreStepChange}
+                        onRemove={handleRemovePreStep}
+                        onAdd={handleAddPreStep}
+                        onAddExtract={handleAddPreStepExtract}
+                        onRemoveExtract={handleRemovePreStepExtract}
+                        onExtractChange={handlePreStepExtractChange}
+                      />
                     )}
                     {currentConfigTab === 'extract' && canManageGlobalParams && (
                       <div className="iot-config-section">
@@ -2706,6 +3061,14 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                     >
                       响应头
                     </button>
+                    {(response as any)?.pre_steps?.length > 0 && (
+                      <button
+                        className={'iot-response-tab' + (currentResponseTab === 'pre' ? ' is-active' : '')}
+                        onClick={() => setCurrentResponseTab('pre')}
+                      >
+                        前置步骤 ({(response as any).pre_steps.length})
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -2883,22 +3246,46 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                       </div>
                     )
                   ) : response ? (
-                    <>
-                        <div className="iot-response-body">
-                        {currentResponseTab === 'headers' ? (
-                          renderResponseHeaders()
-                        ) : responseHtml ? (
-                          <pre
-                            className="iot-response-pre"
+                    <div className="iot-response-body">
+                      {currentResponseTab === 'pre' ? (
+                        renderPreStepResults((response as any).pre_steps)
+                      ) : currentResponseTab === 'headers' ? (
+                        renderResponseHeaders()
+                      ) : responseHtml ? (
+                        <>
+                          <div className="iot-response-toolbar">
+                            <span className="iot-response-toolbar-note">{rawToolbarNote}</span>
+                            {responseJsonDepth > 2 && (
+                              <span className="iot-response-toolbar-meta">{responseJsonDepth} 层</span>
+                            )}
+                            <Button
+                              type="text"
+                              size="small"
+                              className="iot-json-collapse-btn"
+                              onClick={handleJsonCollapseAll}
+                            >
+                              折叠
+                            </Button>
+                            <Button
+                              type="text"
+                              size="small"
+                              className="iot-json-collapse-btn"
+                              onClick={handleJsonExpandAll}
+                            >
+                              展开
+                            </Button>
+                          </div>
+                          <div
+                            ref={responseBodyRef}
+                            className="iot-response-pre iot-response-tree"
+                            onClick={handleResponseTreeClick}
                             dangerouslySetInnerHTML={{ __html: responseHtml }}
                           />
-                        ) : (
-                          <pre className="iot-response-pre">
-                            {typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2)}
-                          </pre>
-                        )}
-                      </div>
-                    </>
+                        </>
+                      ) : (
+                        <pre className="iot-response-pre">{responseText}</pre>
+                      )}
+                    </div>
                   ) : (
                     <div className="iot-response-empty">
                       <SendOutlined className="iot-response-empty-icon" />
@@ -3070,6 +3457,9 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                   ) : (
                     <Space size="small" style={{ alignItems: 'center' }}>
                       <span>{env.name}</span>
+                      <Tooltip title="复制该环境">
+                        <Button type="text" size="small" icon={<CopyOutlined />} loading={copyingEnvId === env.id} style={{ color: 'inherit', padding: 0, width: 20, height: 20 }} onClick={(e) => { e.stopPropagation(); handleCopyEnvironment(env); }} />
+                      </Tooltip>
                       <Button type="text" size="small" icon={<EditOutlined />} style={{ color: 'inherit', padding: 0, width: 20, height: 20 }} onClick={(e) => { e.stopPropagation(); handleEditEnvironmentName(env); }} />
                       {environments.length > 1 && (
                         <Button type="text" size="small" style={{ color: 'inherit', padding: 0, width: 20, height: 20 }} onClick={(e) => { e.stopPropagation(); handleRemoveEnvironment(env.id); }}>

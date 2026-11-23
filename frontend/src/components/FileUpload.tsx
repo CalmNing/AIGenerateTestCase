@@ -11,8 +11,8 @@ import {
   FileOutlined,
 } from '@ant-design/icons';
 
-import axios from 'axios';
 import SparkMD5 from 'spark-md5';
+import { fileUploadApi } from '../services/api';
 
 export interface UploadedFileResult {
   fileName: string;
@@ -33,14 +33,10 @@ interface FileUploadProps {
   value?: Array<UploadedFileResult>;
   /** 文件列表变更回调 */
   onChange?: (files: Array<UploadedFileResult>) => void;
-  /** 自定义上传接口路径 */
-  uploadUrlApi?: string;
   /** 是否禁用 */
   disabled?: boolean;
-  /** 文件上传基地址（从环境参数中获取的 baseUrl） */
-  baseUrl?: string;
-  /** 认证 token（从环境参数中获取的 access-token） */
-  accessToken?: string;
+  /** 执行环境 id（后端据此取 baseUrl / access-token 完成上传） */
+  environmentId?: number | null;
 }
 
 /**
@@ -78,10 +74,10 @@ function calculateMd5(file: File): Promise<string> {
 
 /**
  * 文件上传组件
- * - 先调用 /builder-base/file/upload-url 获取预签名 URL
- * - 若 fastUploadFinish=true（秒传）直接返回 fileId
- * - 若 fastUploadFinish=false，PUT 上传到预签名 URL 后返回 fileId
- * - 支持 MD5 秒传、拖拽上传、进度显示
+ * - 文件交给后端代理上传：POST /api/file/upload
+ * - 后端负责计算 MD5、申请预签名地址、PUT 到对象存储，返回 fileId
+ * - 浏览器只与本平台后端通信，不直连对象存储（避免跨域）
+ * - 支持拖拽上传、进度显示
  */
 const FileUpload: React.FC<FileUploadProps> = ({
   onUploadSuccess,
@@ -90,10 +86,8 @@ const FileUpload: React.FC<FileUploadProps> = ({
   multiple = false,
   value = [],
   onChange,
-  uploadUrlApi = '/builder-base/file/upload-url',
   disabled = false,
-  baseUrl,
-  accessToken,
+  environmentId,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -119,64 +113,22 @@ const FileUpload: React.FC<FileUploadProps> = ({
   }, [value, onChange]);
 
   /**
-   * 核心上传流程：获取上传URL -> 秒传或实际上传
+   * 核心上传流程：把文件交给后端代理上传
+   *
+   * 后端负责：计算 MD5 -> 申请预签名地址 -> PUT 到对象存储 -> 返回 fileId。
+   * 前端不再直连预签名地址，因此不会触发跨域。
    */
   const doUpload = async (file: File): Promise<UploadedFileResult> => {
-    // 校验 baseUrl
-    if (!baseUrl) {
-      throw new Error('当前环境未定义 baseUrl，请在全局参数管理中配置');
+    const response = await fileUploadApi.upload(file, environmentId);
+
+    if (response.code !== 200 || !response.data?.fileId) {
+      throw new Error(response.message || '上传失败');
     }
-
-    // 校验 accessToken
-    if (!accessToken) {
-      throw new Error('全局参数中未定义 access-token');
-    }
-
-    const base = baseUrl.replace(/\/+$/, '');
-
-    // 1. 计算文件 MD5
-    let md5: string;
-    try {
-      md5 = await calculateMd5(file);
-    } catch {
-      throw new Error('计算文件 MD5 失败');
-    }
-
-    // 2. 调用接口获取上传 URL
-    const response = await axios.post(base + uploadUrlApi, [{
-      fileName: file.name,
-      fileMd5: md5,
-      fileSize: file.size,
-      isPublicVisit: false,
-    }], {
-      headers: { 'access-token': accessToken },
-    });
-
-    if (response.data?.code !== 200 || !response.data?.data?.[0]) {
-      throw new Error(response.data?.msg || '获取上传地址失败');
-    }
-
-    const uploadInfo = response.data.data[0];
-
-    // 3. 判断是否秒传
-    if (uploadInfo.fastUploadFinish) {
-      // 秒传成功，直接返回 fileId
-      return {
-        fileName: uploadInfo.fileName || file.name,
-        fileId: uploadInfo.fileId,
-        fileSize: file.size,
-      };
-    }
-
-    // 4. 需要实际上传到预签名 URL
-    await axios.put(uploadInfo.uploadUrl, file, {
-      headers: { 'Content-Type': file.type },
-    });
 
     return {
-      fileName: uploadInfo.fileName || file.name,
-      fileId: uploadInfo.fileId,
-      fileSize: file.size,
+      fileName: response.data.fileName || file.name,
+      fileId: response.data.fileId,
+      fileSize: response.data.fileSize ?? file.size,
     };
   };
 
@@ -205,7 +157,9 @@ const FileUpload: React.FC<FileUploadProps> = ({
         message.success(`${file.name} 上传成功`);
       } catch (error: any) {
         console.error('Upload failed:', error);
-        message.error(`${file.name} 上传失败: ${error?.message || '未知错误'}`);
+        // 后端 HTTPException 的描述在 detail 字段；网络异常时退回 message
+        const detail = error?.response?.data?.detail || error?.response?.data?.message || error?.message;
+        message.error(`${file.name} 上传失败: ${detail || '未知错误'}`);
       } finally {
         setUploadingFileName('');
       }

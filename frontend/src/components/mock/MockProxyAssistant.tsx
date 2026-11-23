@@ -10,6 +10,7 @@ import {
   CheckCircleFilled, QuestionCircleOutlined, AimOutlined,
 } from '@ant-design/icons';
 import { mockProxyApi, MOCK_PROXY_CA_CERT_URL } from '../../services/api';
+import { FLOAT_BUTTON_Z_INDEX } from '../../utils/floatButton';
 import type {
   MockProxyRule, MockProxyStatus, MockLogItem,
   PlatformMockCoverage, PlatformMockItem, MockPreviewResult,
@@ -606,7 +607,7 @@ const MockProxyAssistant: React.FC = () => {
         className="mock-proxy-float-btn"
         icon={<ApiOutlined />}
         type="primary"
-        style={{ right: 24, bottom: 20 }}
+        style={{ right: 24, bottom: 20, zIndex: FLOAT_BUTTON_Z_INDEX }}
         tooltip="Mock 流量代理"
         badge={running ? { dot: true, color: '#52c41a' } : undefined}
         onClick={() => setOpen(true)}

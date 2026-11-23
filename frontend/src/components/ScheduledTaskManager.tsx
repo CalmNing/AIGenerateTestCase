@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Table,
   Button,
@@ -14,10 +14,11 @@ import {
   Radio,
   Space
 } from 'antd';
-import { PlusOutlined, DeleteOutlined, CaretRightOutlined, PlayCircleOutlined, PauseCircleOutlined, CopyOutlined } from '@ant-design/icons';
-import { scheduledTaskApi, savedRequestApi, globalParameterApi } from '../services/api';
-import type { ScheduledTask } from '../types';
+import { PlusOutlined, DeleteOutlined, CaretRightOutlined, PlayCircleOutlined, PauseCircleOutlined, CopyOutlined, PictureOutlined } from '@ant-design/icons';
+import { scheduledTaskApi, savedRequestApi, globalParameterApi, imageBase64Api, taskGroupApi } from '../services/api';
+import type { ScheduledTask, TaskGroup } from '../types';
 import FileUpload, { UploadedFileResult } from './FileUpload';
+import TaskGroupSidebar from './TaskGroupSidebar';
 import './ScheduledTaskManager.css';
 
 
@@ -34,19 +35,65 @@ const ScheduledTaskManager: React.FC = () => {
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null);
   const [savedRequests, setSavedRequests] = useState<any[]>([]);
   const [environments, setEnvironments] = useState<any[]>([]);
+  const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([]);
+  /** 左侧选中的分组；null = 全部任务 */
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [selectedRequestToAdd, setSelectedRequestToAdd] = useState<number | undefined>(undefined);
   const [requestIds, setRequestIds] = useState<number[]>([]);
-  const [taskParameters, setTaskParameters] = useState<Array<{ key: string; value: string; type?: 'text' | 'file'; file?: UploadedFileResult }>>([]);
+  const [taskParameters, setTaskParameters] = useState<Array<{ key: string; value: string; type?: 'text' | 'file' | 'image_base64'; file?: UploadedFileResult }>>([]);
+
+  // 选图转 base64 的隐藏 file input（待转换的参数下标存在 ref 里）
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const pendingImageParamRef = useRef<number>(-1);
+  const [convertingImageParam, setConvertingImageParam] = useState<number>(-1);
 
   // 切换参数类型
-  const handleTaskParamTypeChange = (index: number, type: 'text' | 'file') => {
+  const handleTaskParamTypeChange = (index: number, type: 'text' | 'file' | 'image_base64') => {
     const newParams = [...taskParameters];
     newParams[index] = { ...newParams[index], type };
     if (type === 'text') {
       delete newParams[index].file;
       newParams[index].value = '';
+    } else if (type === 'image_base64') {
+      // 图片 base64 是变量式参数：清掉文件上传信息，value 存 base64
+      delete newParams[index].file;
+      newParams[index].value = '';
+    } else {
+      delete newParams[index].file;
     }
     setTaskParameters(newParams);
+  };
+
+  // 选择本地图片 -> 后端转 base64 -> 写入参数值
+  const handlePickTaskImage = (index: number) => {
+    pendingImageParamRef.current = index;
+    imageInputRef.current?.click();
+  };
+
+  const handleTaskImageSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const index = pendingImageParamRef.current;
+    e.target.value = '';
+    pendingImageParamRef.current = -1;
+    if (!file || index < 0) return;
+
+    setConvertingImageParam(index);
+    try {
+      const res = await imageBase64Api.toBase64(file, { compress: true, format: 'raw' });
+      if (res.code === 200 && res.data?.base64) {
+        const newParams = [...taskParameters];
+        newParams[index] = { ...newParams[index], type: 'image_base64', value: res.data.base64 };
+        setTaskParameters(newParams);
+        message.success(`图片已转为 base64（${res.data.mime}，${Math.round(res.data.fileSize / 1024)}KB）`);
+      } else {
+        message.error(res.message || '图片转 base64 失败');
+      }
+    } catch (err: any) {
+      console.error('Image to base64 failed:', err);
+      message.error(err?.response?.data?.detail || '图片转 base64 失败');
+    } finally {
+      setConvertingImageParam(-1);
+    }
   };
 
   // 文件上传/删除回调
@@ -63,11 +110,8 @@ const ScheduledTaskManager: React.FC = () => {
 
   const [form] = Form.useForm();
 
-  // 获取当前选中环境的参数（用于 FileUpload 的 baseUrl 和 accessToken）
+  // 当前选中的执行环境（后端据此取 baseUrl / access-token 完成上传代理）
   const currentEnvironmentId = Form.useWatch('environment_id', form);
-  const currentEnv = environments.find((e: any) => e.id === currentEnvironmentId);
-  const envBaseUrl = currentEnv?.parameters?.find((p: any) => p.key === 'baseUrl')?.value;
-  const envAccessToken = currentEnv?.parameters?.find((p: any) => p.key === 'access-token')?.value;
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -107,10 +151,22 @@ const ScheduledTaskManager: React.FC = () => {
     }
   };
 
+  const fetchTaskGroups = async () => {
+    try {
+      const response = await taskGroupApi.getGroups();
+      if (response.code === 200 && response.data) {
+        setTaskGroups(response.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch task groups:', error);
+    }
+  };
+
   useEffect(() => {
     fetchTasks();
     fetchSavedRequests();
     fetchEnvironments();
+    fetchTaskGroups();
   }, []);
 
   const handleRunTask = async (taskId: number) => {
@@ -294,6 +350,7 @@ const ScheduledTaskManager: React.FC = () => {
       cron_expression: task.cron_expression,
       request_ids: task.request_ids,
       environment_id: task.environment_id,
+      group_id: task.group_id ?? undefined,
     });
     setRequestIds(task.request_ids || []);
     setTaskParameters(task.parameters || []);
@@ -464,10 +521,62 @@ const ScheduledTaskManager: React.FC = () => {
     }
   ];
 
+  // 选中分组（含其子分组）下的任务 + 名称搜索
+  const groupOptions = useMemo(() => {
+    const opts: Array<{ label: string; value: number }> = [];
+    const walk = (nodes: TaskGroup[], depth: number) => {
+      (nodes || []).forEach((g) => {
+        opts.push({ label: '  '.repeat(depth) + g.name, value: g.id });
+        walk(g.children, depth + 1);
+      });
+    };
+    walk(taskGroups, 0);
+    return opts;
+  }, [taskGroups]);
+
+  const visibleTasks = useMemo(() => {
+    let scoped = tasks;
+    if (selectedGroupId !== null) {
+      // 收集选中分组及其所有子孙分组 id
+      const groupIds = new Set<number>();
+      const collect = (nodes: TaskGroup[]) => {
+        (nodes || []).forEach((g) => {
+          if (g.id === selectedGroupId) {
+            groupIds.add(g.id);
+            (g.children || []).forEach((child) => {
+              const push = (list: TaskGroup[]) => {
+                (list || []).forEach((n) => {
+                  groupIds.add(n.id);
+                  push(n.children);
+                });
+              };
+              push([child]);
+            });
+          } else {
+            collect(g.children);
+          }
+        });
+      };
+      collect(taskGroups);
+      scoped = tasks.filter((t) => t.group_id != null && groupIds.has(t.group_id));
+    }
+    const keyword = (searchTask || '').toLowerCase();
+    return scoped.filter((t) => !keyword || t.name.toLowerCase().includes(keyword));
+  }, [tasks, taskGroups, selectedGroupId, searchTask]);
+
   return (
     <div className="stm-container">
       <Card title="定时任务管理" bordered={false} className="stm-card"
         bodyStyle={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px', overflow: 'hidden' }}>
+        <div className="stm-body">
+          <TaskGroupSidebar
+            groups={taskGroups}
+            environments={environments}
+            selectedGroupId={selectedGroupId}
+            onSelectGroup={setSelectedGroupId}
+            onGroupsChanged={fetchTaskGroups}
+          />
+          <div className="stm-main">
         <div className="stm-filter-bar">
           <label>任务名称</label>
           <Input.Search
@@ -543,7 +652,7 @@ const ScheduledTaskManager: React.FC = () => {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }} className="stm-table">
           <Table
             columns={columns}
-            dataSource={tasks.filter(t => !searchTask || t.name.toLowerCase().includes(searchTask.toLowerCase()))}
+            dataSource={visibleTasks}
             rowKey="id"
             loading={loading}
             size="small"
@@ -561,6 +670,9 @@ const ScheduledTaskManager: React.FC = () => {
             scroll={{ y: 'calc(100vh - 320px)' }}
           />
         </div>
+          </div>
+        </div>
+      </Card>
 
       <Modal
         title={
@@ -833,6 +945,14 @@ const ScheduledTaskManager: React.FC = () => {
             </div>
           </Form.Item>
 
+          <Form.Item name="group_id" label="所属分组"
+            extra="归入分组后，共享该分组的环境与分组变量"
+            style={{ marginBottom: 12 }}
+          >
+            <Select placeholder="不选则归入「未分组」" allowClear style={{ width: '100%' }}
+              options={groupOptions}
+            />
+          </Form.Item>
           <Form.Item name="environment_id" label="执行环境"
             extra="执行时使用的环境参数，用于变量替换和后置提取"
             style={{ marginBottom: 12 }}
@@ -858,8 +978,9 @@ const ScheduledTaskManager: React.FC = () => {
                     options={[
                       { label: '文本', value: 'text' },
                       { label: '文件', value: 'file' },
+                      { label: '图片base64', value: 'image_base64' },
                     ]}
-                    onChange={(e) => handleTaskParamTypeChange(index, e.target.value as 'text' | 'file')}
+                    onChange={(e) => handleTaskParamTypeChange(index, e.target.value as 'text' | 'file' | 'image_base64')}
                   />
                   <Input
                     placeholder="参数名"
@@ -882,9 +1003,41 @@ const ScheduledTaskManager: React.FC = () => {
                           newParams[index] = { ...newParams[index], file: result, value: result.fileId };
                           setTaskParameters(newParams);
                         }}
-                        baseUrl={envBaseUrl}
-                        accessToken={envAccessToken}
+                        environmentId={currentEnvironmentId}
                       />
+                    </div>
+                  ) : param.type === 'image_base64' ? (
+                    <div style={{ flex: 1, minWidth: 240, display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <Input
+                        placeholder="base64 图片值"
+                        value={
+                          param.value && param.value.length > 40
+                            ? param.value.slice(0, 40) + '... (' + param.value.length + ' 字符)'
+                            : param.value
+                        }
+                        readOnly
+                        style={{ flex: 1 }}
+                      />
+                      <Button
+                        icon={<PictureOutlined />}
+                        loading={convertingImageParam === index}
+                        onClick={() => handlePickTaskImage(index)}
+                      >
+                        选择图片
+                      </Button>
+                      {param.value && (
+                        <Button
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => {
+                            const newParams = [...taskParameters];
+                            newParams[index] = { ...newParams[index], value: '' };
+                            setTaskParameters(newParams);
+                          }}
+                        >
+                          清除
+                        </Button>
+                      )}
                     </div>
                   ) : (
                     <Input
@@ -917,8 +1070,15 @@ const ScheduledTaskManager: React.FC = () => {
             </div>
           </Form.Item>
         </Form>
+        {/* 选图转 base64 的隐藏 file input */}
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={handleTaskImageSelected}
+        />
       </Modal>
-    </Card>
     </div>
   );
 };

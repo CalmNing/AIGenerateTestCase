@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { Layout, Form, Tabs, Modal, Input, Button, Select, Popconfirm, Tooltip, message, FloatButton } from 'antd';
-import { PlusOutlined, MinusOutlined, EditOutlined, GlobalOutlined, InfoCircleOutlined, KeyOutlined, AppstoreOutlined, MessageOutlined } from '@ant-design/icons';
+import { PlusOutlined, MinusOutlined, EditOutlined, CopyOutlined, GlobalOutlined, InfoCircleOutlined, KeyOutlined, AppstoreOutlined, MessageOutlined } from '@ant-design/icons';
 import SubPlatformHeader from './components/SubPlatformHeader';
 import { ApiResponse, Session, TestCase, TestCaseResponse, TestCaseStatus, Module, TestCaseFilters } from './types';
 import { sessionApi, testcaseApi, moduleApi, configApi } from './services/api';
@@ -38,6 +38,7 @@ import UIExecutionModal from './components/modals/UIExecutionModal';
 import ModuleSidebar from './components/ModuleSidebar';
 import { Permission, hasPermission } from './services/permissions';
 import { sortTestcasesByCreatedAtDesc } from './utils/testCaseOrder';
+import { FLOAT_BUTTON_Z_INDEX } from './utils/floatButton';
 import { useRef } from 'react';
 
 const { Content } = Layout;
@@ -138,6 +139,9 @@ const App: React.FC = () => {
     handleRemoveEnvironment,
     handleOpenEditEnvironment,
     handleConfirmEditEnvironment,
+    handleCopyEnvironment,
+    copyingEnvironmentId,
+    fetchGlobalParameters,
   } = useEnvironments(canManageGlobalParams);
   const [selectedTestcase, setSelectedTestcase] = useState<TestCase | null>(null);
   const [isViewModalVisible, setIsViewModalVisible] = useState(false);
@@ -1241,6 +1245,7 @@ const App: React.FC = () => {
           <IoTDataPushPlatform
             currentEnvironmentId={currentEnvironmentId}
             canManageGlobalParams={canManageGlobalParams}
+            onEnvironmentsChanged={() => fetchGlobalParameters()}
           />
         </div>
       ) : currentPlatform === 'api-test' ? (
@@ -1681,21 +1686,21 @@ const App: React.FC = () => {
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{
-              width: 34,
-              height: 34,
-              borderRadius: 10,
+              width: 40,
+              height: 40,
+              borderRadius: 11,
               background: 'linear-gradient(135deg, #4f46e5, #818cf8)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 16,
+              fontSize: 19,
               boxShadow: '0 2px 8px rgba(79,70,229,0.2)',
             }}>
               <GlobalOutlined style={{ color: '#fff' }} />
             </div>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.3, color: '#0f172a' }}>全局参数管理</div>
-              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, lineHeight: 1.3 }}>
+              <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.3, color: '#0f172a' }}>全局参数管理</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 400, lineHeight: 1.3 }}>
                 管理环境变量与全局参数，支持多环境隔离
               </div>
             </div>
@@ -1707,7 +1712,7 @@ const App: React.FC = () => {
           setIsGlobalParamsModalVisible(false);
         }}
         onCancel={() => setIsGlobalParamsModalVisible(false)}
-        width={680}
+        width={960}
         footer={
           <div style={{
             display: 'flex',
@@ -1766,24 +1771,23 @@ const App: React.FC = () => {
             marginBottom: 12,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <AppstoreOutlined style={{ fontSize: 13, color: '#64748b', opacity: 0.7 }} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>环境管理</span>
+              <AppstoreOutlined style={{ fontSize: 15, color: '#64748b', opacity: 0.7 }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>环境管理</span>
             </div>
             <Button
               type="primary"
-              size="small"
               onClick={handleAddEnvironment}
               style={{
-                height: 28,
+                height: 34,
                 borderRadius: 6,
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: 500,
                 background: 'linear-gradient(135deg, #4f46e5, #6366f1)',
                 border: 'none',
-                padding: '0 12px',
+                padding: '0 14px',
               }}
             >
-              <PlusOutlined style={{ fontSize: 11 }} /> 添加环境
+              <PlusOutlined style={{ fontSize: 12 }} /> 添加环境
             </Button>
           </div>
           <div style={{
@@ -1807,13 +1811,13 @@ const App: React.FC = () => {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  padding: '5px 12px',
+                  padding: '7px 14px',
                   borderRadius: 6,
                   background: currentEnvironmentId === env.id ? '#4f46e5' : '#ffffff',
                   color: currentEnvironmentId === env.id ? '#fff' : '#1e293b',
                   border: currentEnvironmentId === env.id ? '1px solid #4f46e5' : '1px solid #e2e8f0',
                   cursor: 'pointer',
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: currentEnvironmentId === env.id ? 600 : 500,
                   transition: 'all 0.15s ease',
                   boxShadow: currentEnvironmentId === env.id ? '0 1px 4px rgba(79,70,229,0.3)' : 'none',
@@ -1824,6 +1828,26 @@ const App: React.FC = () => {
                 {env.is_default && (
                   <span style={{ fontSize: 10, opacity: 0.75, marginLeft: 2 }}>默认</span>
                 )}
+                <Tooltip title="复制该环境">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    loading={copyingEnvironmentId === env.id}
+                    style={{
+                      color: currentEnvironmentId === env.id ? 'rgba(255,255,255,0.8)' : '#94a3b8',
+                      padding: 0,
+                      fontSize: 11,
+                      width: 18,
+                      height: 18,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginLeft: 2,
+                    }}
+                    onClick={(e) => { e.stopPropagation(); handleCopyEnvironment(env); }}
+                  />
+                </Tooltip>
                 <Button
                   type="text"
                   size="small"
@@ -1877,7 +1901,7 @@ const App: React.FC = () => {
         {/* 提示条 */}
         <div style={{
           margin: '0 24px 16px',
-          padding: '10px 14px',
+          padding: '12px 16px',
           background: '#eef2ff',
           border: '1px solid #c7d2fe',
           borderRadius: 6,
@@ -1885,8 +1909,8 @@ const App: React.FC = () => {
           alignItems: 'flex-start',
           gap: 8,
         }}>
-          <InfoCircleOutlined style={{ color: '#4f46e5', fontSize: 13, marginTop: 1, flexShrink: 0 }} />
-          <span style={{ fontSize: 12, color: '#4338ca', lineHeight: 1.5 }}>
+          <InfoCircleOutlined style={{ color: '#4f46e5', fontSize: 15, marginTop: 2, flexShrink: 0 }} />
+          <span style={{ fontSize: 13, color: '#4338ca', lineHeight: 1.5 }}>
             全局参数将应用于所有请求，可在URL、请求头和请求体中使用 <code style={{ background: 'rgba(79,70,229,0.1)', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>{'{{variable}}'}</code> 或 <code style={{ background: 'rgba(79,70,229,0.1)', padding: '1px 4px', borderRadius: 3, fontSize: 11 }}>{'${variable}'}</code> 语法引用
           </span>
         </div>
@@ -1899,17 +1923,17 @@ const App: React.FC = () => {
           alignItems: 'center',
           gap: 6,
         }}>
-          <KeyOutlined style={{ fontSize: 13, color: '#64748b', opacity: 0.7 }} />
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>
+          <KeyOutlined style={{ fontSize: 15, color: '#64748b', opacity: 0.7 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#64748b', letterSpacing: 0.2, textTransform: 'uppercase' }}>
             参数列表
           </span>
-          <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 4 }}>
+          <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 4 }}>
             {getCurrentEnvironment().parameters.length} 项
           </span>
         </div>
 
         {/* 参数列表 */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', maxHeight: '35vh' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', maxHeight: '52vh' }}>
           {getCurrentEnvironment().parameters.length === 0 ? (
             <div style={{
               textAlign: 'center',
@@ -1947,10 +1971,10 @@ const App: React.FC = () => {
                 borderBottom: '1px solid #e2e8f0',
                 gap: 8,
               }}>
-                <span style={{ width: 180, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数名</span>
-                <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数值</span>
-                <span style={{ width: 200, fontSize: 11, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数描述</span>
-                <span style={{ width: 32, fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'center' }}>操作</span>
+                <span style={{ width: 220, fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数名</span>
+                <span style={{ flex: 1, minWidth: 260, fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数值</span>
+                <span style={{ width: 220, fontSize: 12, fontWeight: 600, color: '#64748b', letterSpacing: 0.3, textTransform: 'uppercase' }}>参数描述</span>
+                <span style={{ width: 32, fontSize: 12, fontWeight: 600, color: '#64748b', textAlign: 'center' }}>操作</span>
               </div>
               {getCurrentEnvironment().parameters.map((param, index) => (
                 <div
@@ -1959,7 +1983,7 @@ const App: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     gap: 8,
-                    padding: '6px 12px',
+                    padding: '8px 14px',
                     borderBottom: index < getCurrentEnvironment().parameters.length - 1 ? '1px solid #f1f5f9' : 'none',
                     transition: 'background 0.12s',
                   }}
@@ -1972,22 +1996,24 @@ const App: React.FC = () => {
                     onChange={(e) => handleEnvironmentParameterChange(index, 'key', e.target.value)}
                     variant="borderless"
                     style={{
-                      width: 180,
-                      height: 36,
-                      fontSize: 13,
+                      width: 220,
+                      height: 40,
+                      fontSize: 14,
                       fontWeight: 500,
                     }}
-                    prefix={<KeyOutlined style={{ color: '#94a3b8', fontSize: 12 }} />}
+                    prefix={<KeyOutlined style={{ color: '#94a3b8', fontSize: 13 }} />}
                   />
                   <Input
                     placeholder="参数值"
                     value={param.value}
                     onChange={(e) => handleEnvironmentParameterChange(index, 'value', e.target.value)}
                     variant="borderless"
+                    title={param.value}
                     style={{
                       flex: 1,
-                      height: 36,
-                      fontSize: 13,
+                      minWidth: 260,
+                      height: 40,
+                      fontSize: 14,
                     }}
                   />
                   <Input
@@ -1996,9 +2022,9 @@ const App: React.FC = () => {
                     onChange={(e) => handleEnvironmentParameterChange(index, 'description', e.target.value)}
                     variant="borderless"
                     style={{
-                      width: 200,
-                      height: 36,
-                      fontSize: 13,
+                      width: 220,
+                      height: 40,
+                      fontSize: 14,
                       color: '#64748b',
                     }}
                   />
@@ -2035,12 +2061,12 @@ const App: React.FC = () => {
             onClick={handleAddEnvironmentParameter}
             style={{
               width: '100%',
-              height: 42,
+              height: 48,
               color: '#4f46e5',
               borderColor: '#c7d2fe',
               background: '#eef2ff',
               borderStyle: 'dashed',
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: 500,
               borderRadius: 6,
             }}
@@ -2209,7 +2235,7 @@ const App: React.FC = () => {
       <FloatButton
         icon={<MessageOutlined />}
         type="primary"
-        style={{ right: 24, bottom: 140 }}
+        style={{ right: 24, bottom: 140, zIndex: FLOAT_BUTTON_Z_INDEX }}
         tooltip="AI 助手"
         onClick={() => setChatOpen(true)}
       />

@@ -48,6 +48,7 @@ import {
 import CodeMirror from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 import { apiTestApi, globalParameterApi } from '../../services/api';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import { ApiEndpoint, ApiProject, ApiScenario, ApiScenarioResult, ApiScenarioStep, GlobalParameter } from '../../types';
 
 const { TextArea } = Input;
@@ -1162,12 +1163,9 @@ const ApiScenarioTestTool: React.FC = () => {
 
   const handleCopyScenarioResult = async () => {
     if (!result) return;
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
-      message.success('执行结果已复制');
-    } catch {
-      message.error('复制执行结果失败');
-    }
+    const ok = await copyTextToClipboard(JSON.stringify(result, null, 2));
+    if (ok) message.success('执行结果已复制');
+    else message.error('复制执行结果失败');
   };
 
   const handleSaveScenario = async () => {
@@ -2528,8 +2526,10 @@ const ApiScenarioTestTool: React.FC = () => {
                         <Button
                           size="small"
                           onClick={() => {
-                            navigator.clipboard.writeText(JSON.stringify(selectedEndpoint.request_schema || {}, null, 2));
-                            message.success('Request Schema 已复制');
+                            copyTextToClipboard(JSON.stringify(selectedEndpoint.request_schema || {}, null, 2)).then((ok) => {
+                              if (ok) message.success('Request Schema 已复制');
+                              else message.error('复制失败，请手动选择文本复制');
+                            });
                           }}
                         >
                           复制
@@ -2541,8 +2541,10 @@ const ApiScenarioTestTool: React.FC = () => {
                         <Button
                           size="small"
                           onClick={() => {
-                            navigator.clipboard.writeText(JSON.stringify(selectedEndpoint.response_schema || {}, null, 2));
-                            message.success('Response Schema 已复制');
+                            copyTextToClipboard(JSON.stringify(selectedEndpoint.response_schema || {}, null, 2)).then((ok) => {
+                              if (ok) message.success('Response Schema 已复制');
+                              else message.error('复制失败，请手动选择文本复制');
+                            });
                           }}
                         >
                           复制

@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import Optional
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,6 +21,65 @@ from app.routes.proxy import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 任务参数类型
+TASK_PARAM_TYPE_TEXT = "text"
+TASK_PARAM_TYPE_FILE = "file"
+TASK_PARAM_TYPE_IMAGE_BASE64 = "image_base64"
+
+
+def _task_param_entries(parameters: list) -> list:
+    """挑出可以当普通变量注入的任务参数。
+
+    - file 类型：值是 fileId，属于文件上传语义，不作为变量注入；
+    - image_base64 类型：值已是 base64 字符串，正常注入；
+    - 其余（text）：正常注入。
+    """
+    entries = []
+    for p in (parameters or []):
+        if not isinstance(p, dict):
+            continue
+        if not p.get("key") or not p.get("value"):
+            continue
+        if p.get("type") == TASK_PARAM_TYPE_FILE:
+            continue
+        entries.append(p)
+    return entries
+
+
+def _group_context(db, task) -> tuple[Optional[int], list]:
+    """取任务所属分组的上下文。
+
+    返回 (环境ID, 分组变量列表)。任务本身没归组时返回 (None, [])。
+    """
+    group_id = getattr(task, "group_id", None)
+    if not group_id:
+        return None, []
+    from db.models import TaskGroup
+
+    group = db.get(TaskGroup, group_id)
+    if not group:
+        return None, []
+    return group.environment_id, list(group.variables or [])
+
+
+def _decode_task_image_base64(param: dict) -> str:
+    """把 image_base64 类型的任务参数值规范化成 base64 字符串。
+
+    前端存的是纯 base64（不含 data: 前缀），这里做一次兜底解析：
+    去掉 data:image/...;base64, 前缀，并确认它是合法图片 base64；
+    非法时回退为原始值，避免整个任务因一个参数而失败。
+    """
+    from app.services.image_base64 import decode_base64_image
+
+    raw = str(param.get("value") or "")
+    decoded, _mime = decode_base64_image(raw)
+    if decoded is None:
+        logger.warning(
+            "任务参数 %s 的 image_base64 值不是合法图片 base64，按原值注入", param.get("key")
+        )
+        return raw
+    return raw
 
 scheduler = AsyncIOScheduler()
 
@@ -78,8 +138,24 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
         logger.info("Executing scheduled task [%s] (id=%d)", task.name, task_id)
         results = []
 
-        # 构建参数映射：先加载环境参数，再用定时任务自身参数覆盖（任务参数优先级更高）
-        param_map = build_param_map(db, task.environment_id, task.parameters or [])
+        # 变量优先级（后者覆盖前者）：
+        #   分组变量 < 环境变量 < 任务参数
+        # 分组绑定的环境（若任务自身没选环境）作为该任务的环境。
+        group_env_id, group_vars = _group_context(db, task)
+        env_id = task.environment_id if task.environment_id is not None else group_env_id
+
+        # 分组变量先入表（优先级最低）
+        param_map = {}
+        for p in group_vars:
+            if isinstance(p, dict) and p.get("key") and p.get("value") is not None:
+                param_map[p["key"]] = p["value"]
+
+        # 环境变量覆盖分组变量
+        env_map = build_param_map(db, env_id, [])
+        param_map.update(env_map)
+
+        # 任务参数优先级最高
+        param_map.update(build_param_map(db, None, _task_param_entries(task.parameters or [])))
         logger.info("Task [%s] param_map (env=%s, task_params=%s): %s",
                      task.name, task.environment_id, task.parameters, param_map)
         unresolved: set[str] = set()
@@ -96,6 +172,18 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                 continue
 
             try:
+                # 前置步骤：先执行（关联请求按 id 现取最新配置 / 自定义请求），
+                # 产出的变量并入 param_map（仅本次请求生效，不写环境）
+                if saved_req.pre_steps:
+                    from app.services.pre_steps import run_pre_steps
+
+                    try:
+                        param_map, _pre_step_results = await run_pre_steps(
+                            saved_req.pre_steps, dict(param_map), db=db,
+                        )
+                    except Exception as pre_exc:  # noqa: BLE001 - 前置失败不阻断主请求
+                        logger.warning("Task [%s] request %s pre_steps error: %s", task.name, req_id, pre_exc)
+
                 # 变量替换
                 final_url = substitute_variables(saved_req.url, param_map, unresolved)
                 headers_dict = {h["key"]: h["value"] for h in saved_req.headers if h.get("key") and h.get("value")}
@@ -187,7 +275,7 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                                     "params": final_params,
                                     "data": final_data,
                                     "file_params": file_params,
-                                    "environment_id": task.environment_id,
+                                    "environment_id": env_id,
                                 },
                                 timeout=60.0,
                             )
@@ -216,8 +304,8 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                             }
 
                             # 后置提取（与下方逻辑一致）
-                            if saved_req.post_extractions and task.environment_id and isinstance(response_data, (dict, list)):
-                                env = db.get(GlobalParameter, task.environment_id)
+                            if saved_req.post_extractions and env_id and isinstance(response_data, (dict, list)):
+                                env = db.get(GlobalParameter, env_id)
                                 if env:
                                     params = list(env.parameters)
                                     param_index = {p.get("key"): i for i, p in enumerate(params) if isinstance(p, dict) and p.get("key")}
@@ -302,8 +390,8 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                     }
 
                     # 后置提取：从响应中提取变量并保存到环境参数
-                    if saved_req.post_extractions and task.environment_id and isinstance(response_data, (dict, list)):
-                        env = db.get(GlobalParameter, task.environment_id)
+                    if saved_req.post_extractions and env_id and isinstance(response_data, (dict, list)):
+                        env = db.get(GlobalParameter, env_id)
                         if env:
                             params = list(env.parameters)
                             param_index = {p.get("key"): i for i, p in enumerate(params) if isinstance(p, dict) and p.get("key")}

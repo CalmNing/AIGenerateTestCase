@@ -47,6 +47,7 @@ def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
     # 自动补齐已存在表中缺失的字段（SQLite 兼容）
     _migrate_missing_columns(engine)
+    _clean_dict_json_columns(engine)
     # 一次性迁移：把旧 requirementpoint.module 文本按模块名回填到 module_id
     _backfill_requirement_point_module_id(engine)
     # 一次性迁移：按规则路径模式回填服务前缀，让存量规则立即按真实流量匹配
@@ -392,6 +393,29 @@ def _backfill_requirement_point_module_id(engine):
         _try_drop_column(conn, "requirementpoint", "module")
 
 
+# JSON 列按声明的类型给默认值：
+# - list 列（如 parameters / pre_steps）用 '[]'
+# - dict 列（如 batch_params / ui_binding）用 '{}'
+# 早期版本一律用 '[]'，导致 dict 列拿到 list，反序列化后前端强访 .columns 之类会崩。
+_JSON_LIST_COLUMNS = {
+    'parameters', 'pre_steps', 'headers', 'post_extractions', 'request_ids',
+    'siblings', 'children', 'variables', 'mcp_servers', 'steps', 'results',
+}
+_JSON_DICT_COLUMNS = {
+    'batch_params', 'ui_binding', 'request_schema', 'response_schema',
+    'binding', 'extra', 'meta',
+}
+
+
+def _json_default_for(col_name: str) -> str:
+    """给 JSON 列挑一个类型正确的默认值，返回 JSON 文本（{} / []，不含 SQL 引号）。"""
+    if col_name in _JSON_DICT_COLUMNS:
+        return "{}"
+    if col_name in _JSON_LIST_COLUMNS:
+        return "[]"
+    # 未知列：保持旧行为（数组），避免误改存量结构
+    return "[]"
+
 def _migrate_missing_columns(engine):
     """检查所有 SQLModel 表定义，为已存在的表自动添加缺失的列（仅 SQLite）。"""
     import sqlalchemy
@@ -418,7 +442,7 @@ def _migrate_missing_columns(engine):
                     # 列已存在，检查 JSON 列中是否有非法空字符串值并修复
                     from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
                     if isinstance(column.type, SQLiteJSON):
-                        json_default = "{}" if col_name in {"request_schema", "response_schema"} else "[]"
+                        json_default = _json_default_for(col_name)
                         try:
                             result = conn.execute(
                                 text(f"SELECT id FROM {table_cls.name} WHERE {col_name} = '' OR {col_name} IS NULL LIMIT 1")
@@ -436,7 +460,7 @@ def _migrate_missing_columns(engine):
                 # 构建 SQLite 的列定义
                 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
                 is_json_col = isinstance(column.type, SQLiteJSON)
-                json_default = "'{}'" if col_name in {"request_schema", "response_schema"} else "'[]'"
+                json_default = chr(39) + _json_default_for(col_name) + chr(39)
                 col_type = column.type.compile(dialect=engine.dialect)
                 ddl = f"{col_name} {col_type}"
                 if not column.nullable:
@@ -452,6 +476,42 @@ def _migrate_missing_columns(engine):
                     logger.info(f"自动迁移: 为表 {table_cls.name} 添加列 {col_name} ({col_type})")
                 except Exception as e:
                     logger.warning(f"自动迁移失败: 表 {table_cls.name} 添加列 {col_name} 失败: {e}")
+
+def _clean_dict_json_columns(engine):
+    """一次性清洗：dict 类型的 JSON 列里存成了 '[]'（数组）的历史脏数据。
+
+    早期自动迁移给所有 JSON 列统一用 '[]' 作默认值，导致 dict 列（如 savedrequest.batch_params）
+    反序列化出数组，前端拿到后按对象访问会直接崩。幂等：已是 '{}' 的行不受影响。
+    """
+    import json
+    from sqlalchemy import inspect, text
+
+    try:
+        insp = inspect(engine)
+        table_names = set(insp.get_table_names())
+        targets = []
+        for table in table_names:
+            for col in insp.get_columns(table):
+                name = col["name"].lower()
+                if name in _JSON_DICT_COLUMNS:
+                    targets.append((table, name))
+        if not targets:
+            return
+        with engine.begin() as conn:
+            for table, name in targets:
+                try:
+                    result = conn.execute(
+                        text(f"SELECT id FROM {table} WHERE {name} = '[]' LIMIT 1")
+                    )
+                    if not result.fetchone():
+                        continue
+                    conn.execute(text(f"UPDATE {table} SET {name} = '{{}}' WHERE {name} = '[]'"))
+                    logger.info(f"自动修复: 表 {table} 列 {name} 中的 '[]' 已修正为 '{{}}'")
+                except Exception as e:
+                    logger.warning(f"清洗表 {table} 列 {name} 失败: {e}")
+    except Exception as e:
+        logger.warning(f"清洗 dict 类型 JSON 列失败: {e}")
+
 
 def _backfill_mock_proxy_service_prefix(engine):
     """一次性迁移：为存量转发规则按 path_pattern 回填 service_prefix。

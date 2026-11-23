@@ -281,6 +281,8 @@ class SavedRequest(BaseModel, table=True):
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON)
     body: Optional[str] = Field(default=None)
     post_extractions: List[dict] = Field(default_factory=list, sa_type=JSON)  # 后置提取规则
+    pre_steps: List[dict] = Field(default_factory=list, sa_type=JSON)  # 前置步骤（发请求取变量 / 直接设置变量）
+    batch_params: Optional[dict] = Field(default=None, sa_type=JSON, description="前置参数列表（按行循环发送主请求）")
     folder_id: Optional[int] = Field(default=None, foreign_key="savedrequestfolder.id", index=True, description="所属文件夹ID")
     sort_order: Optional[int] = Field(default=None, description="所属文件夹内的排序序号（拖拽排序，越小越靠前）")
     user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")  # 激活用户关联
@@ -310,6 +312,21 @@ class HistoryPrompt(BaseModel, table=True):
     session: Optional["Session"] = Relationship(sa_relationship_kwargs={"foreign_keys": "[HistoryPrompt.session_id]"})
 
 
+class TaskGroup(BaseModel, table=True):
+    """定时任务分组
+
+    - 支持多级嵌套（parent_id 自引用）
+    - 分组可绑定一个执行环境（environment_id），组内任务默认继承
+    - 分组可配置自己的变量（variables），组内任务共享
+    """
+    name: str = Field(default="", description="分组名称")
+    parent_id: Optional[int] = Field(default=None, foreign_key="taskgroup.id", index=True, description="父分组ID")
+    environment_id: Optional[int] = Field(default=None, index=True, description="分组绑定的执行环境ID")
+    variables: List[dict] = Field(default_factory=list, sa_type=JSON, description="分组级环境变量 [{key,value}]")
+    sort_order: Optional[int] = Field(default=None, description="同级内的排序序号")
+    user_id: Optional[str] = Field(default=None, index=True, description="所属用户ID（Keycloak sub）")
+
+
 class ScheduledTask(BaseModel, table=True):
     """定时任务数据模型"""
     name: str = Field(default="", description="任务名称")
@@ -319,6 +336,7 @@ class ScheduledTask(BaseModel, table=True):
     request_ids: List[int] = Field(default_factory=list, sa_type=JSON, description="关联的保存请求ID列表")
     environment_id: Optional[int] = Field(default=None, description="执行时使用的环境ID")
     parameters: List[dict] = Field(default_factory=list, sa_type=JSON, description="任务级参数（优先级高于环境参数）")
+    group_id: Optional[int] = Field(default=None, foreign_key="taskgroup.id", index=True, description="所属分组ID")
     enabled: bool = Field(default=True, description="是否启用")
     last_run_at: Optional[datetime] = Field(default=None, description="上次执行时间")
     last_run_result: Optional[str] = Field(default=None, description="上次执行结果（JSON字符串）")
@@ -459,6 +477,8 @@ class PushLog(BaseModel, table=True):
     duration_ms: int = Field(default=0, description="请求耗时（毫秒）")
     environment_id: Optional[int] = Field(default=None, description="使用的环境参数ID")
     user_id: Optional[str] = Field(default=None, index=True, description="触发请求的用户ID（Keycloak sub）")
+    # 前置步骤执行记录：每个步骤的请求/响应摘要（不发前置步骤时为空数组）
+    pre_steps: list = Field(default_factory=list, sa_type=JSON, description="前置步骤执行记录 [{index,type,name,method,url,status_code,extracted,ok,error,request_headers,response_body?}]")
     # MQTT 发布专用字段（protocol=mqtt 时填充）
     protocol: str = Field(default="http", index=True, description="推送协议: http | mqtt")
     mqtt_broker: Optional[str] = Field(default=None, description="MQTT Broker 地址（变量替换后）")

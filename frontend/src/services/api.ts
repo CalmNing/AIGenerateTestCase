@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { message } from 'antd';
 import keycloak from './keycloak';
-import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PlatformMockCoverage, MockPreviewRequest, MockPreviewResult, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult, RequirementDoc, RequirementItem, RequirementDiffEntry, RequirementRevision } from '../types';
+import { Session, TestCase, ApiResponse, TestCaseResponse, Module, UpdateSessionRequest, HistoryPrompt, SavedRequest, SavedRequestFolder, SavedRequestLayoutGroup, GlobalParameter, ProxyRequest, ExtractVariablesRequest, ProxyResponse, MockConfig, McpServer, Skill, ApiProject, ApiEndpoint, ApiEndpointRunPayload, ApiScenario, ApiScenarioResult, ApiScenarioBatchRunRequest, ApiScenarioBatchRunResult, ApiImportResult, ApiSyncResult, ScheduledTask, ScheduledTaskInput, McpToolInfo, NavCategory, NavLink, NavTreeNode, MockProxyRule, MockProxyStatus, MockLogItem, PlatformMockCoverage, MockPreviewRequest, MockPreviewResult, PushLogItem, UIExecutionRecord, UIExecutionTaskStatus, PageObject, UIAutomationRun, UIAutomationTaskStatus, UIAutomationLoginConfig, PageObjectSession, UICompileResult, MqttPublishRequest, MqttPublishResult, MqttTestConnectionResult, WsConnectResult, WsTestConnectionResult, RequirementDoc, RequirementItem, RequirementDiffEntry, RequirementRevision, UploadedFileInfo, TaskGroup } from '../types';
 
 // 创建axios实例
 // RAG 类型定义（B6 观测页用）
@@ -507,6 +507,9 @@ export const globalParameterApi = {
   // 创建环境
   createEnvironment: (environment: Omit<GlobalParameter, 'id' | 'created_at' | 'updated_at'>): Promise<ApiResponse<GlobalParameter>> => api.post('/global-parameters', environment),
 
+  // 复制环境（含全部参数）
+  copyEnvironment: (environmentId: number): Promise<ApiResponse<GlobalParameter>> => api.post(`/global-parameters/${environmentId}/copy`),
+
   // 更新环境
   updateEnvironment: (environmentId: number, environment: Partial<GlobalParameter>): Promise<ApiResponse<GlobalParameter>> => api.put(`/global-parameters/${environmentId}`, environment),
 
@@ -515,6 +518,28 @@ export const globalParameterApi = {
 
   // 提取并保存变量
   extractAndSaveVariables: (data: ExtractVariablesRequest): Promise<ApiResponse<Record<string, string>>> => api.post('/global-parameters/extract-and-save', data)
+};
+
+// 图片转 base64 API（供前置步骤把本地图片变成变量值）
+export const imageBase64Api = {
+  // 把本地图片转成 base64 字符串（图片不落业务系统，只在链路里当变量用）
+  toBase64: (
+    file: File,
+    options?: { compress?: boolean; format?: 'raw' | 'data_url' }
+  ): Promise<ApiResponse<{
+    fileName: string;
+    mime: string;
+    base64: string;
+    fileSize: number;
+    compressed: boolean;
+    format: string;
+  }>> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('compress', String(options?.compress ?? true));
+    formData.append('format', options?.format ?? 'raw');
+    return api.post('/file/image-base64', formData);
+  }
 };
 
 // UI 自动化执行 API
@@ -741,6 +766,19 @@ export const proxyApi = {
   testVariable: (request: TestVariableRequest): Promise<ApiResponse<TestVariableResponse>> => api.post('/proxy/test-variable', request)
 };
 
+// 文件上传 API（后端代理，避免浏览器直连对象存储跨域）
+export const fileUploadApi = {
+  // 上传文件：multipart 提交给后端，由后端申请预签名地址并转发文件
+  upload: (file: File, environmentId?: number | null): Promise<ApiResponse<UploadedFileInfo>> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (environmentId != null && !Number.isNaN(environmentId)) {
+      formData.append('environment_id', String(environmentId));
+    }
+    return api.post('/file/upload', formData);
+  }
+};
+
 // IoT 推送请求记录 API
 export const pushLogApi = {
   // 获取推送记录列表（分页 + 过滤）
@@ -820,6 +858,31 @@ export const scheduledTaskApi = {
 
   // 手动触发定时任务
   runTask: (taskId: number): Promise<ApiResponse> => api.post(`/scheduled-tasks/${taskId}/run`)
+};
+
+// 定时任务分组 API
+export const taskGroupApi = {
+  // 获取分组树
+  getGroups: (): Promise<ApiResponse<TaskGroup[]>> => api.get('/task-groups'),
+  // 创建分组
+  createGroup: (group: {
+    name: string;
+    parent_id?: number | null;
+    environment_id?: number | null;
+    variables?: Array<{ key: string; value: string }>;
+  }): Promise<ApiResponse<TaskGroup>> => api.post('/task-groups', group),
+  // 更新分组
+  updateGroup: (
+    groupId: number,
+    group: Partial<{
+      name: string;
+      parent_id: number | null;
+      environment_id: number | null;
+      variables: Array<{ key: string; value: string }>;
+    }>
+  ): Promise<ApiResponse<TaskGroup>> => api.put(`/task-groups/${groupId}`, group),
+  // 删除分组（子分组一并删除，组内任务移出分组）
+  deleteGroup: (groupId: number): Promise<ApiResponse> => api.delete(`/task-groups/${groupId}`)
 };
 
 // MCP 工具 API

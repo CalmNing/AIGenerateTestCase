@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Button, Collapse, Descriptions, Empty, Modal, Select, Table, Tag } from 'antd';
+import { Alert, Button, Collapse, Descriptions, Empty, Modal, Select, Table, Tag, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { TestCase, TestCaseExecutionLog } from '../../types';
+import { copyTextToClipboard } from '../../utils/clipboard';
 
 const assertionTypeLabels: Record<string, string> = {
   status_code_range: '状态码范围',
@@ -141,7 +142,9 @@ const TestCaseExecutionLogModal: React.FC<TestCaseExecutionLogModalProps> = ({
 
   const handleCopy = async () => {
     if (!selectedLog) return;
-    await navigator.clipboard.writeText(JSON.stringify(selectedLog.result, null, 2));
+    const ok = await copyTextToClipboard(JSON.stringify(selectedLog.result, null, 2));
+    if (ok) message.success('已复制到剪贴板');
+    else message.error('复制失败，请手动选择文本复制');
   };
 
   return (

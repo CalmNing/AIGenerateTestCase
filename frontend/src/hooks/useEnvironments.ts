@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { message } from 'antd';
 import { globalParameterApi } from '../services/api';
 
 // 环境类型定义
@@ -15,7 +16,7 @@ export interface Environment {
  * 行为保持：从 App.tsx 原样迁移，状态、处理函数与 localStorage key
  * ('currentEnvironmentId') 完全一致；以同名返回，便于 App.tsx 直接解构使用。
  */
-export function useEnvironments(_canManageGlobalParams: boolean) {
+export function useEnvironments(canManageGlobalParams: boolean) {
   const [environments, setEnvironments] = useState<Environment[]>([
     { id: 'env-1', name: '默认环境', parameters: [] },
   ]);
@@ -28,6 +29,8 @@ export function useEnvironments(_canManageGlobalParams: boolean) {
   const [isEditEnvModalVisible, setIsEditEnvModalVisible] = useState(false);
   const [editingEnvironment, setEditingEnvironment] = useState<Environment | null>(null);
   const [editEnvironmentName, setEditEnvironmentName] = useState('');
+  /** 正在复制的环境 id（用于复制按钮的 loading 态） */
+  const [copyingEnvironmentId, setCopyingEnvironmentId] = useState<string | null>(null);
 
   const fetchGlobalParameters = useCallback(async (envId?: string | null) => {
     try {
@@ -215,6 +218,36 @@ export function useEnvironments(_canManageGlobalParams: boolean) {
     }
   }, [editingEnvironment, editEnvironmentName, fetchGlobalParameters]);
 
+  // 复制环境（含全部参数）：一键创建并自动切换到新环境
+  const handleCopyEnvironment = useCallback(async (env: Environment) => {
+    if (!canManageGlobalParams) {
+      message.warning('无权限复制环境');
+      return;
+    }
+    // 'env-1' 是尚未落库的本地占位环境，没有真实 id 可复制
+    if (!env.id || env.id === 'env-1' || !Number(env.id)) {
+      message.warning('该环境尚未保存到服务器，无法复制');
+      return;
+    }
+
+    setCopyingEnvironmentId(env.id);
+    try {
+      const response = await globalParameterApi.copyEnvironment(Number(env.id));
+      if (response.code === 200 && response.data) {
+        // fetchGlobalParameters 会刷新列表、切换当前环境并写回 localStorage
+        await fetchGlobalParameters(response.data.id.toString());
+        message.success(`环境已复制：${response.data.name}`);
+      } else {
+        message.error(response.message || '复制环境失败');
+      }
+    } catch (error) {
+      console.error('Failed to copy environment:', error);
+      message.error('复制环境失败');
+    } finally {
+      setCopyingEnvironmentId(null);
+    }
+  }, [canManageGlobalParams, fetchGlobalParameters]);
+
   // 加载全局参数:GET 对所有登录用户开放(展示 {{var}} 解析),不依赖 manage 权限
   useEffect(() => {
     fetchGlobalParameters();
@@ -247,5 +280,7 @@ export function useEnvironments(_canManageGlobalParams: boolean) {
     handleRemoveEnvironment,
     handleOpenEditEnvironment,
     handleConfirmEditEnvironment,
+    handleCopyEnvironment,
+    copyingEnvironmentId,
   };
 }

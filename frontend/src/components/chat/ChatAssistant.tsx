@@ -32,6 +32,7 @@ import {
   ChatConversationSummary,
 } from '../../services/api';
 import { parseSuggestedCases, ParsedSuggestedCase } from '../../utils/suggestedCases';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import ChatMessage, { Message } from './ChatMessage';
 import './ChatAssistant.css';
 
@@ -76,27 +77,9 @@ interface ChatAssistantProps {
 const newThreadId = (scope?: string) =>
   'chat-' + (scope || 'global') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 
-const copyText = async (text: string) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // clipboard API 不可用（http 环境等）时降级 execCommand
-    try {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(textarea);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-};
+// 统一走 copyTextToClipboard：http/局域网环境下 navigator.clipboard 不可用，
+// 由它降级到 execCommand 兜底。
+const copyText = async (text: string) => copyTextToClipboard(text);
 
 const ChatAssistant: React.FC<ChatAssistantProps> = ({
   open,

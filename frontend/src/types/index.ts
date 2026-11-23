@@ -280,6 +280,106 @@ export interface WsTestConnectionResult {
 }
 
 // 保存的请求类型
+/**
+ * 前置步骤：发请求取变量（request）或直接设置变量（set_variable）。
+ * 产出的变量只在本次请求链路内生效，不写入环境参数。
+ */
+/**
+ * 前置步骤里自定义请求的请求头 / 查询参数条目。
+ */
+export type PreStepKv = {
+  key: string;
+  value: string;
+  /** 是否启用（Postman 风格勾选），false 时不参与发送 */
+  enabled?: boolean;
+  /** 备注说明，仅用于展示 */
+  description?: string;
+};
+
+export type PreStep = {
+  /**
+   * set_variable —— 旧版直接设置变量（仅保留兼容展示，新步骤不再提供）；
+   * request —— 先发请求再提取变量。参数统一在前置参数中设置，前置步骤只负责发请求。
+   */
+  type: 'set_variable' | 'request';
+  /** 是否启用（关闭则跳过该步骤） */
+  enabled?: boolean;
+  /** 步骤名称（request 类型用于展示） */
+  name?: string;
+  /** request 步骤来源：custom 自己配置（默认）；saved 关联已有请求 */
+  source?: 'custom' | 'saved';
+  /** 关联的已保存请求 ID（source 为 saved 时有效，执行时后端按 id 现取最新配置） */
+  saved_request_id?: number;
+  /** 变量名（set_variable 为要设置的 key；request 为提取结果的 key） */
+  key?: string;
+  /** 变量值（set_variable 类型） */
+  value?: string;
+  /** 请求方法（request 类型） */
+  method?: string;
+  /** 请求地址（request 类型） */
+  url?: string;
+  /** 请求头（request 类型，自己配置） */
+  headers?: PreStepKv[];
+  /** 查询参数（request 类型，自己配置） */
+  params?: PreStepKv[];
+  /** 请求体（request 类型，自己配置） */
+  body?: any;
+  /** 提取规则（request 类型）：从响应里按 JSONPath 取值 */
+  extracts?: PreStepExtract[];
+};
+
+/**
+ * 前置步骤的提取规则。
+ *
+ * - type=json：按 JSONPath 取普通值
+ * - type=image_base64：取到的值当作图片（base64 串或 data:image URL），
+ *   转成 base64 变量；compress 控制是否压缩转 JPEG，
+ *   format 控制输出纯 base64 还是完整 data:image URL
+ */
+export type PreStepExtract = {
+  key: string;
+  jsonpath: string;
+  type?: 'json' | 'image_base64';
+  /** 图片 base64 是否压缩（仅 image_base64 有效，默认 true） */
+  compress?: boolean;
+  /** 输出格式：raw=纯 base64，data_url=完整 data:image URL（仅 image_base64 有效） */
+  format?: 'raw' | 'data_url';
+};
+
+/**
+ * 前置参数列表（批量执行）。
+ *
+ * - columns：列定义，每列一个变量名（先定义列，再逐行填值）
+ * - rows：数据行，每行是与列一一对应的值列表
+ * - on_error：失败策略，continue（继续，默认）/ stop（遇错即停）
+ *
+ * 每行跑一次主请求，行内变量只在该次循环内生效，不跨行泄漏。
+ */
+export interface BatchParamsColumn {
+  /** 列名（变量名），主请求里用 {{列名}} 引用 */
+  name: string;
+  /**
+   * 列类型：
+   * - text：普通文本值
+   * - number：数值列，校验为合法数字（非法值跳过该变量）
+   * - boolean：布尔列，true/false/1/0/yes/no 归一化（非法值跳过该变量）
+   * - json：JSON 列，校验并压缩为单行（非法值跳过该变量）
+   * - image：旧版图片列（界面已不再提供，后端仍兼容）
+   * - image_base64：该列值已是 base64 字符串，循环时按图片校验并规范化
+   */
+  type?: 'text' | 'number' | 'boolean' | 'json' | 'image' | 'image_base64';
+  /** 图片列是否压缩并转 JPEG（仅 image / image_base64 有效，默认 true） */
+  compress?: boolean;
+  /** 图片列输出格式：raw=纯 base64，data_url=完整 data:image URL（默认 raw） */
+  format?: 'raw' | 'data_url';
+}
+
+export interface BatchParams {
+  columns: Array<string | BatchParamsColumn>;
+  rows: string[][];
+  on_error?: 'continue' | 'stop';
+}
+
 export interface SavedRequest {
   id: number;
   name: string;
@@ -289,6 +389,10 @@ export interface SavedRequest {
   parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
   body?: string;
   post_extractions?: Array<{ variable: string; jsonpath: string }>;
+  /** 前置步骤：先执行再发主请求。变量只在本次链路内生效，不写环境 */
+  pre_steps?: PreStep[];
+  /** 前置参数列表：配了列+行就按行循环执行主请求 */
+  batch_params?: BatchParams;
   /** 协议：http（默认）| mqtt | websocket */
   protocol?: 'http' | 'mqtt' | 'websocket';
   /** MQTT 配置（protocol 为 mqtt 时有效） */
@@ -314,6 +418,13 @@ export interface SavedRequestFolder {
   children: SavedRequestFolder[];
   created_at: string;
   updated_at: string;
+}
+
+// 文件上传结果（后端代理上传返回）
+export interface UploadedFileInfo {
+  fileName: string;
+  fileId: string;
+  fileSize: number;
 }
 
 // 全局参数（环境）类型
@@ -511,6 +622,10 @@ export interface ProxyRequest {
   params: Record<string, string>;
   file_params?: Array<{ key: string; fileId: string; fileName: string }>; // 文件参数列表
   environment_id: number | null;
+  /** 前置步骤：先执行再发主请求，产出的变量仅本次链路生效 */
+  pre_steps?: PreStep[];
+  /** 前置参数列表：按行循环执行主请求 */
+  batch_params?: BatchParams;
 }
 
 // 代理响应类型
@@ -518,6 +633,24 @@ export interface ProxyResponse<T = ApiResponse>{
   status_code: number;
   headers: Record<string, string>;
   data?: T;
+  /** 批量执行结果（配了前置参数列表时返回） */
+  batch?: {
+    total: number;
+    executed: number;
+    passed: number;
+    failed: number;
+    stopped: boolean;
+    results: Array<{
+      index: number;
+      variables: Record<string, string>;
+      status_code: number;
+      ok: boolean;
+      data?: any;
+      error?: string;
+    }>;
+  };
+  /** 前置步骤执行结果 */
+  pre_steps?: Array<Record<string, any>>;
 }
 
 // 提取变量请求类型
@@ -536,7 +669,10 @@ export interface ScheduledTask {
   cron_expression: string | null;
   request_ids: number[];
   environment_id: number | null;
-  parameters: Array<{ key: string; value: string; type?: 'text' | 'file'; fileId?: string; fileName?: string }>;
+  /** 任务参数：text=文本变量，file=文件上传(fileId)，image_base64=图片 base64 变量 */
+  parameters: Array<{ key: string; value: string; type?: 'text' | 'file' | 'image_base64'; fileId?: string; fileName?: string }>;
+  /** 所属分组ID（null = 未分组） */
+  group_id?: number | null;
   enabled: boolean;
   last_run_at: string | null;
   last_run_result: string | null;
@@ -544,6 +680,22 @@ export interface ScheduledTask {
   created_at: string;
   updated_at: string;
   request_names?: Array<{ id: number; name: string }>;
+}
+
+// 定时任务分组
+export interface TaskGroup {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  /** 分组绑定的执行环境（组内任务默认继承） */
+  environment_id: number | null;
+  /** 分组级环境变量，组内任务共享 */
+  variables: Array<{ key: string; value: string }>;
+  /** 该分组下的直属任务数 */
+  task_count?: number;
+  children: TaskGroup[];
+  created_at: string;
+  updated_at: string;
 }
 
 // 定时任务创建/更新载荷（不含服务端生成字段）
@@ -711,6 +863,8 @@ export interface PushLogItem {
   response_body?: string | null;
   mocked: boolean;
   error?: string | null;
+  /** 前置步骤执行记录（每个步骤的请求/响应摘要） */
+  pre_steps?: Array<Record<string, any>>;
   duration_ms: number;
   environment_id?: number | null;
   /** 推送协议：http（历史记录缺省按 http 处理）| mqtt | websocket */

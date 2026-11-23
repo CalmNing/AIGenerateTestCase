@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { pushLogApi } from '../../services/api';
 import { PushLogItem } from '../../types';
+import { copyTextToClipboard } from '../../utils/clipboard';
 import './IoTDataPushPlatform.css';
 
 const LOG_PAGE_SIZE = 20;
@@ -179,10 +180,12 @@ export function buildPushCommand(log: PushLogItem, useParsed = true): string {
 }
 
 async function copyText(text: string, tip: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
+  // 统一走 copyTextToClipboard：http/局域网环境下 navigator.clipboard 不可用，
+  // 由它降级到 execCommand 兜底，否则点击会直接报"复制失败"。
+  const ok = await copyTextToClipboard(text);
+  if (ok) {
     message.success(tip);
-  } catch {
+  } else {
     message.error('复制失败，请手动选择文本复制');
   }
 }
@@ -300,6 +303,58 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
       </pre>
     </div>
   );
+
+  /** 前置步骤执行记录：每个步骤的请求摘要 + 响应体摘要 + 提取变量 */
+  const renderPreSteps = (steps?: Array<Record<string, any>>) => {
+    if (!steps || steps.length === 0) {
+      return <pre className="iot-log-pre iot-log-pre--empty">(本次推送未执行前置步骤)</pre>;
+    }
+    return (
+      <div>
+        {steps.map((step, i) => {
+          const ok = step.ok === true;
+          const isParams = step.type === 'params';
+          const isSetVar = step.type === 'set_variable';
+          return (
+            <div key={i} style={{ border: '1px solid var(--color-border-light, #f0f0f0)', borderRadius: 6, padding: 10, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                <Tag color={ok ? 'green' : 'red'}>{ok ? '成功' : '失败'}</Tag>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>
+                  步骤 {typeof step.index === 'number' ? step.index + 1 : i + 1}
+                </span>
+                {isParams ? (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary, #999)' }}>参数注入</span>
+                ) : isSetVar ? (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary, #999)' }}>设置变量</span>
+                ) : (
+                  <span style={{ fontSize: 12, fontFamily: 'monospace' }}>
+                    {step.method || 'GET'} {step.url || '(空)'}
+                  </span>
+                )}
+                {typeof step.status_code === 'number' && step.status_code > 0 && (
+                  <Tag color={step.status_code >= 200 && step.status_code < 300 ? 'green' : 'orange'}>{step.status_code}</Tag>
+                )}
+              </div>
+              {isSetVar && (
+                renderKvPre('设置变量', { [step.key || '(未命名)']: String(step.value ?? '') })
+              )}
+              {isParams && renderKvPre('注入参数', step.params || {})}
+              {!isParams && !isSetVar && step.error && (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 13 }}>错误</div>
+                  <pre className="iot-log-pre" style={{ color: 'var(--color-error, #ff4d4f)' }}>{step.error}</pre>
+                </div>
+              )}
+              {!isParams && !isSetVar && renderBodyPre('响应体', step.response_body)}
+              {step.extracted && Object.keys(step.extracted).length > 0 && (
+                renderKvPre('提取变量', step.extracted)
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   const columns = [
     {
@@ -595,6 +650,12 @@ const PushLogDrawer: React.FC<PushLogDrawerProps> = ({ open, onClose }) => {
                   label: '原始请求',
                   children: requestTab(detailLog, false),
                 },
+                // 前置步骤执行记录（仅 HTTP 推送可能存在）
+                ...(isMqttLog(detailLog) || isWsLog(detailLog) ? [] : [{
+                  key: 'pre_steps',
+                  label: '前置步骤' + ((detailLog.pre_steps?.length || 0) > 0 ? ' (' + detailLog.pre_steps!.length + ')' : ''),
+                  children: renderPreSteps(detailLog.pre_steps),
+                }]),
                 // MQTT / WebSocket 没有 HTTP 响应，隐藏响应 Tab（结果已在状态/错误中体现）
                 ...(isMqttLog(detailLog) || isWsLog(detailLog) ? [] : [{
                   key: 'response',

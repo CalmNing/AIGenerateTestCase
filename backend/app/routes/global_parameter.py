@@ -1,13 +1,36 @@
+import re
+from copy import deepcopy
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
-from typing import List, Optional
 
 from app.deps import SessionDep, CurrentUser
 from db.models import GlobalParameter
 from utils.base_response import Response
 
 router = APIRouter(prefix="/global-parameters", tags=["global-parameters"])
+
+# 复制环境时生成的名称后缀：「(复制)」/「(复制 2)」/「(复制 3)」…
+_COPY_SUFFIX_RE = re.compile(r"\s*\(复制(?:\s*\d+)?\)\s*$")
+
+
+def _strip_copy_suffix(name: str) -> str:
+    """去掉末尾的 (复制) / (复制 2) 后缀得到基名；全被剥掉时回退原名。"""
+    return _COPY_SUFFIX_RE.sub("", name).strip() or name
+
+
+def _build_unique_copy_name(source_name: str, existing_names: set[str]) -> str:
+    """基于源环境名生成唯一的副本名：原名 (复制)、原名 (复制 2)…"""
+    base = _strip_copy_suffix(source_name)
+    candidate = f"{base} (复制)"
+    if candidate not in existing_names:
+        return candidate
+    n = 2
+    while f"{base} (复制 {n})" in existing_names:
+        n += 1
+    return f"{base} (复制 {n})"
 
 
 @router.get("", response_model=Response)
@@ -41,6 +64,35 @@ def create_global_parameter(global_parameter: GlobalParameter, session: SessionD
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"创建全局参数配置失败: {str(e)}")
+
+
+@router.post("/{parameter_id}/copy", response_model=Response)
+def copy_global_parameter(parameter_id: int, session: SessionDep, user: CurrentUser):
+    """复制全局参数配置（环境）：生成新环境并完整复制其参数"""
+    try:
+        source = session.get(GlobalParameter, parameter_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="全局参数配置不存在")
+
+        all_parameters = session.exec(select(GlobalParameter)).all()
+        existing_names = {param.name for param in all_parameters}
+        copied = GlobalParameter(
+            name=_build_unique_copy_name(source.name, existing_names),
+            parameters=deepcopy(source.parameters),
+            # 副本不继承默认标记，保证全局默认环境唯一且仍属于源环境
+            is_default=False,
+            user_id=user.user_id,
+        )
+
+        session.add(copied)
+        session.commit()
+        session.refresh(copied)
+        return Response(code=200, message="Success", data=copied)
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"复制全局参数配置失败: {str(e)}")
 
 
 @router.put("/{parameter_id}", response_model=Response)
