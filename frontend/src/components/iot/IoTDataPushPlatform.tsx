@@ -906,7 +906,14 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
 
   // --- Tab ↔ Form Sync ---
 
+  // 切换标签页时，把该 tab 的内容重置进本地编辑态。
+  // 注意依赖只有 activeTabId：若把 tabs 放进依赖，编辑过程中的任意 tab 更新
+  // （如发送请求、保存动作）都会用 tab 里的值覆盖本地正在编辑的 state，
+  // 造成「前置参数保存后拿到老数据」——本地编辑态由各 handler 双写到 tab，无需反向重置。
+  const prevActiveTabIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    if (prevActiveTabIdRef.current === activeTabId) return;
+    prevActiveTabIdRef.current = activeTabId;
     const tab = tabs.find(t => t.id === activeTabId);
     if (tab) {
       form.setFieldsValue({ method: tab.method, url: tab.url, body: tab.body });
@@ -916,7 +923,8 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
       setPreSteps(normalizePreSteps(tab.preSteps));
       setBatchParams(normalizeBatchParams(tab.batchParams));
     }
-  }, [activeTabId, tabs, form]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
 
   // --- API Calls ---
 
@@ -1169,6 +1177,12 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
     newExtractions[index] = { ...newExtractions[index], [field]: value };
     setPostExtractions(newExtractions);
     updateCurrentTab({ postExtractions: newExtractions });
+  };
+
+  /** 前置参数编辑：state 与当前 tab 双写（与 headers/preSteps 同模式），保证保存时 tab 数据最新 */
+  const handleBatchParamsChange = (next: BatchParams) => {
+    setBatchParams(next);
+    updateCurrentTab({ batchParams: next });
   };
 
   // --- Protocol / MQTT / WebSocket Handlers ---
@@ -1739,7 +1753,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
           ? prev.map(r => (r.id === saved.id ? saved : r))
           : [saved, ...prev]);
         setTabs(prevTabs => prevTabs.map(tab =>
-          tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, protocol, method, url, headers, parameters, body, postExtractions, mqtt: mqttConfig, ws: wsConfigValue, savedRequestId: saved.id, folderId: folderIdForSave }) : tab
+          tab.id === activeTabId ? markTabClean({ ...tab, name: requestName, protocol, method, url, headers, parameters, body, postExtractions, preSteps, batchParams, mqtt: mqttConfig, ws: wsConfigValue, savedRequestId: saved.id, folderId: folderIdForSave }) : tab
         ));
         message.success(created ? '请求配置已保存' : '请求配置已更新');
       };
@@ -2942,7 +2956,7 @@ const IoTDataPushPlatform: React.FC<IoTDataPushPlatformProps> = ({
                     </div>
                     )}
                     {currentConfigTab === 'batch' && (
-                      <BatchParamsEditor value={batchParams} onChange={setBatchParams} />
+                      <BatchParamsEditor value={batchParams} onChange={handleBatchParamsChange} />
                     )}
                     {currentConfigTab === 'pre' && (
                       <PreStepsEditor
