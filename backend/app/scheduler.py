@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 from db.db import engine
 from db.models import ScheduledTask, SavedRequest, GlobalParameter
 from app.routes.proxy import (
+    ProxyRequest, forward_core,
     build_param_map, substitute_variables, substitute_in_headers,
     substitute_in_data, substitute_in_params, is_valid_url,
 )
@@ -279,100 +280,90 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                     })
                     continue
 
-                # 发送请求（如果有文件参数，通过本地代理转发以支持文件上传）
+                # 发送请求（如果有文件参数，走代理核心以支持文件上传）
                 if file_params:
-                    # 通过本地代理转发，支持 file_params
-                    import asyncio as _asyncio
+                    # 进程内直调代理核心（forward_core）：等价于带认证的
+                    # 代理转发接口，但不需要 Bearer token，也不依赖后端
+                    # 监听地址/端口。user=None 时环境权限按无权限降级。
                     try:
-                        async with httpx.AsyncClient() as proxy_client:
-                            proxy_resp = await proxy_client.post(
-                                "http://127.0.0.1:8000/api/proxy/forward",
-                                json={
-                                    "url": final_url,
-                                    "method": saved_req.method,
-                                    "headers": final_headers,
-                                    "params": final_params,
-                                    "data": final_data,
-                                    "file_params": file_params,
-                                    "environment_id": env_id,
-                                },
-                                timeout=60.0,
+                        proxy_result = await forward_core(
+                            ProxyRequest(
+                                url=final_url,
+                                method=saved_req.method,
+                                headers=final_headers,
+                                params=final_params,
+                                data=final_data,
+                                file_params=file_params,
+                                environment_id=env_id,
+                            ),
+                            user=None,
+                            db=db,
+                        )
+
+                        # forward_core 失败时抛 HTTPException，由外层 except
+                        # 捕获后写入 status=error 的结果；正常返回必然带
+                        # status_code，非 2xx 记 warning 便于排查。
+                        response_data = proxy_result.get("data")
+                        status_code = proxy_result.get("status_code", 500)
+                        if not (200 <= status_code < 300):
+                            logger.warning(
+                                "Task [%s] request %s 上游返回 %s: %s",
+                                task.name, req_id, status_code,
+                                json.dumps(response_data, ensure_ascii=False)[:300],
                             )
-                            proxy_result = proxy_resp.json()
 
-                            # /forward 失败时抛 HTTPException/校验错误，返回 {detail: ...}
-                            # 而非 {status_code, data} 结构；把真实信息透传出来，
-                            # 否则执行结果里 500 的响应体永远是空。
-                            if "detail" in proxy_result and "status_code" not in proxy_result:
-                                response_data = proxy_result.get("detail")
-                                status_code = proxy_resp.status_code
-                                logger.warning(
-                                    "Task [%s] request %s 代理转发返回 %s: %s",
-                                    task.name, req_id, status_code,
-                                    json.dumps(response_data, ensure_ascii=False)[:300],
-                                )
-                            else:
-                                response_data = proxy_result.get("data")
-                                status_code = proxy_result.get("status_code", proxy_resp.status_code)
-                                if not (200 <= status_code < 300):
-                                    logger.warning(
-                                        "Task [%s] request %s 上游返回 %s: %s",
-                                        task.name, req_id, status_code,
-                                        json.dumps(response_data, ensure_ascii=False)[:300],
-                                    )
-
-                            result_entry = {
-                                "request_id": req_id,
-                                "request_name": saved_req.name,
-                                "status": "success" if 200 <= status_code < 300 else "failed",
+                        result_entry = {
+                            "request_id": req_id,
+                            "request_name": saved_req.name,
+                            "status": "success" if 200 <= status_code < 300 else "failed",
+                            "status_code": status_code,
+                            "request": {
+                                "url": final_url,
+                                "method": saved_req.method,
+                                "headers": final_headers,
+                                "params": final_params,
+                                "body": final_data,
+                                "file_params": file_params,
+                            },
+                            "response": {
                                 "status_code": status_code,
-                                "request": {
-                                    "url": final_url,
-                                    "method": saved_req.method,
-                                    "headers": final_headers,
-                                    "params": final_params,
-                                    "body": final_data,
-                                    "file_params": file_params,
-                                },
-                                "response": {
-                                    "status_code": status_code,
-                                    "body": response_data,
-                                }
+                                "body": response_data,
                             }
+                        }
 
-                            # 后置提取（与下方逻辑一致）
-                            if saved_req.post_extractions and env_id and isinstance(response_data, (dict, list)):
-                                env = db.get(GlobalParameter, env_id)
-                                if env:
-                                    params = list(env.parameters)
-                                    param_index = {p.get("key"): i for i, p in enumerate(params) if isinstance(p, dict) and p.get("key")}
-                                    extracted = {}
-                                    for rule in saved_req.post_extractions:
-                                        if not rule.get("variable") or not rule.get("jsonpath"):
-                                            continue
-                                        try:
-                                            jsonpath_expr = parse(rule["jsonpath"])
-                                            matches = jsonpath_expr.find(response_data)
-                                            if matches:
-                                                value = matches[0].value
-                                                val_str = str(value) if not isinstance(value, str) else value
-                                                extracted[rule["variable"]] = val_str
-                                                if rule["variable"] in param_index:
-                                                    idx = param_index[rule["variable"]]
-                                                    params[idx] = {**params[idx], "value": val_str}
-                                                else:
-                                                    params.append({"key": rule["variable"], "value": val_str})
-                                                    param_index[rule["variable"]] = len(params) - 1
-                                        except Exception:
-                                            pass
-                                    if extracted:
-                                        env.parameters = params
-                                        db.add(env)
-                                        db.commit()
-                                        param_map.update(extracted)
-                                        result_entry["extracted"] = extracted
+                        # 后置提取（与下方逻辑一致）
+                        if saved_req.post_extractions and env_id and isinstance(response_data, (dict, list)):
+                            env = db.get(GlobalParameter, env_id)
+                            if env:
+                                params = list(env.parameters)
+                                param_index = {p.get("key"): i for i, p in enumerate(params) if isinstance(p, dict) and p.get("key")}
+                                extracted = {}
+                                for rule in saved_req.post_extractions:
+                                    if not rule.get("variable") or not rule.get("jsonpath"):
+                                        continue
+                                    try:
+                                        jsonpath_expr = parse(rule["jsonpath"])
+                                        matches = jsonpath_expr.find(response_data)
+                                        if matches:
+                                            value = matches[0].value
+                                            val_str = str(value) if not isinstance(value, str) else value
+                                            extracted[rule["variable"]] = val_str
+                                            if rule["variable"] in param_index:
+                                                idx = param_index[rule["variable"]]
+                                                params[idx] = {**params[idx], "value": val_str}
+                                            else:
+                                                params.append({"key": rule["variable"], "value": val_str})
+                                                param_index[rule["variable"]] = len(params) - 1
+                                    except Exception:
+                                        pass
+                                if extracted:
+                                    env.parameters = params
+                                    db.add(env)
+                                    db.commit()
+                                    param_map.update(extracted)
+                                    result_entry["extracted"] = extracted
 
-                            results.append(result_entry)
+                        results.append(result_entry)
                         continue
                     except Exception as e:
                         results.append({

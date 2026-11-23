@@ -11,6 +11,7 @@ import httpx
 
 from app.deps import get_db
 from db.models import GlobalParameter, MockConfig, PushLog
+from app.auth import UserInfo
 from app.deps import CurrentUser
 from app.permissions import Permission, get_user_permissions
 from utils.base_response import Response
@@ -333,7 +334,7 @@ def _trim_pre_step_results(results: list) -> list:
 def _save_push_log(
     db: Session,
     *,
-    user: CurrentUser,
+    user: Optional[UserInfo],
     request: ProxyRequest,
     environment_id: Optional[int],
     final_url: str,
@@ -381,7 +382,7 @@ def _save_push_log(
 
 async def _forward_once(
     request: ProxyRequest,
-    user: CurrentUser,
+    user: Optional[UserInfo],
     db: Session,
     environment_id: Optional[int],
     param_map: dict,
@@ -492,17 +493,23 @@ async def _forward_once(
 
 
 
-@router.post("/forward")
-async def forward_request(
+async def forward_core(
     request: ProxyRequest,
-    user: CurrentUser,
-    db: Session = Depends(get_db),
-):
-    """转发请求到目标URL，支持参数变量替换"""
+    user: Optional[UserInfo],
+    db: Session,
+) -> dict:
+    """转发核心实现，路由层与定时任务调度器共用。
+
+    user 传 None 表示内部链路（定时任务调度器直调，无 HTTP 认证上下文）；
+    权限校验按「无用户=无 GLOBAL_PARAMETER_MANAGE 权限」降级，与
+    mqtt/websocket 路由的内部执行路径一致。
+    """
     start_time = time.perf_counter()
     # 构建参数映射表
     environment_id = request.environment_id
-    if environment_id and Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user):
+    if environment_id and (
+        user is None or Permission.GLOBAL_PARAMETER_MANAGE not in get_user_permissions(user)
+    ):
         environment_id = None
     param_map = build_param_map(db, environment_id, [])
     logger.info("param_map: %s", param_map)
@@ -520,7 +527,8 @@ async def forward_request(
 
         try:
             param_map, pre_step_results = await run_pre_steps(
-                request.pre_steps, dict(param_map), db=db, user_id=user.user_id,
+                request.pre_steps, dict(param_map), db=db,
+                user_id=getattr(user, "user_id", None),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("pre_steps error: %s", exc)
@@ -548,6 +556,16 @@ async def forward_request(
     return await _forward_once(
         request, user, db, environment_id, param_map, pre_step_results, start_time,
     )
+
+
+@router.post("/forward")
+async def forward_request(
+    request: ProxyRequest,
+    user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    """转发请求到目标URL，支持参数变量替换"""
+    return await forward_core(request, user, db)
 
 @router.post("/test-variable")
 async def test_variable(
