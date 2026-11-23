@@ -468,8 +468,12 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                     "detail": str(e)
                 })
 
-        # 更新任务状态
-        task.last_run_at = datetime.now()
+        # 更新任务状态。last_run_at 必须与其他时间字段同用 Asia/Shanghai：
+        # 若进程时区是 UTC，naive datetime.now() 会存成 UTC 值，
+        # 前端按本地解析后显示错 8 小时，让用户误以为执行发生在编辑之前。
+        from db.models import cn_tz
+
+        task.last_run_at = datetime.now(tz=cn_tz)
         task.last_run_result = json.dumps(results, ensure_ascii=False, default=str)
         db.add(task)
         db.commit()

@@ -36,6 +36,9 @@ class ProxyRequest(BaseModel):
     data: Optional[dict | List | str] = None
     params: Optional[dict] = None
     environment_id: Optional[int] = None  # 全局参数环境ID
+    # 文件参数：[{key, fileId, fileName}]。fileId 会按 key 注入变量表，
+    # 请求体里的 {{key}} 占位符解析成 fileId 值（与定时任务执行链路一致）
+    file_params: Optional[List[dict]] = None
     # 前置步骤：先执行（发请求取变量 / 直接设置变量），再发主请求
     pre_steps: Optional[List[dict]] = None
     # 前置参数列表：列定义变量名，每行一组值
@@ -503,6 +506,12 @@ async def forward_request(
         environment_id = None
     param_map = build_param_map(db, environment_id, [])
     logger.info("param_map: %s", param_map)
+
+    # 文件参数：fileId 按 key 注入变量表（与定时任务执行链路一致），
+    # 请求体/请求头里的 {{key}} 占位符即可解析成 fileId 值
+    for fp in (request.file_params or []):
+        if isinstance(fp, dict) and fp.get("key") and fp.get("fileId"):
+            param_map[str(fp["key"])] = str(fp["fileId"])
 
     # 前置步骤：先执行一次，产出的变量并入 param_map（仅本次链路生效，不写环境）
     pre_step_results: list[dict] = []
