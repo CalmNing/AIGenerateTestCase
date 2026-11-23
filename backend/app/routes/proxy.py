@@ -154,9 +154,9 @@ def build_param_map(db: Session, environment_id: Optional[int], local_parameters
     for p in (local_parameters or []):
         if not isinstance(p, dict) or not p.get("key") or not p.get("value"):
             continue
-        # file 类型参数的 value 是 fileId（文件上传语义），不作为变量注入
-        if p.get("type") == "file":
-            continue
+        # file 类型参数的 value 是 fileId，同样注入变量表：
+        # 请求参数/请求体里的 {{变量名}} 解析成 fileId 后，scheduler 据此
+        # 把该参数归入 file_params 走文件上传通道；不注入会报「变量未定义」
         param_map[p["key"]] = p["value"]
 
     return param_map

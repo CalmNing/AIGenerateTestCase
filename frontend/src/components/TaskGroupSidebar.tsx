@@ -241,9 +241,10 @@ const TaskGroupSidebar: React.FC<TaskGroupSidebarProps> = ({
         okText="保存"
         cancelText="取消"
         confirmLoading={saving}
-        width={560}
+        width={520}
+        styles={{ body: { maxHeight: 'calc(100vh - 240px)', overflowY: 'auto', paddingTop: 4 } }}
       >
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
             分组名称
           </div>
@@ -254,7 +255,7 @@ const TaskGroupSidebar: React.FC<TaskGroupSidebarProps> = ({
           />
         </div>
 
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
             上级分组
           </div>
@@ -273,7 +274,7 @@ const TaskGroupSidebar: React.FC<TaskGroupSidebarProps> = ({
           />
         </div>
 
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
             绑定执行环境
           </div>
@@ -288,29 +289,30 @@ const TaskGroupSidebar: React.FC<TaskGroupSidebarProps> = ({
         </div>
 
         <div>
-          <div
-            style={{
-              marginBottom: 6,
-              fontSize: 12,
-              fontWeight: 600,
-              color: 'var(--color-text-secondary)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <span>分组环境变量</span>
-            <span style={{ fontWeight: 400, color: 'var(--color-text-tertiary)' }}>
-              组内任务共享；优先级：分组变量 &lt; 环境变量 &lt; 任务参数
-            </span>
+          <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+            分组环境变量
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
+            组内任务共享；优先级：分组变量 &lt; 环境变量 &lt; 任务参数
           </div>
           {form.variables.length === 0 && (
-            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-              暂无变量
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--color-text-tertiary)',
+                background: 'var(--color-bg-subtle, #f8fafc)',
+                border: '1px dashed var(--color-border, #e2e8f0)',
+                borderRadius: 6,
+                padding: '10px 12px',
+                marginBottom: 8,
+                textAlign: 'center',
+              }}
+            >
+              暂无变量,点击下方按钮添加
             </div>
           )}
           {form.variables.map((v, idx) => (
-            <Space.Compact key={idx} style={{ width: '100%', marginBottom: 6 }}>
+            <Space.Compact key={idx} style={{ width: '100%', marginBottom: 8 }}>
               <Input
                 placeholder="变量名"
                 value={v.key}
@@ -331,8 +333,8 @@ const TaskGroupSidebar: React.FC<TaskGroupSidebarProps> = ({
                 }}
               />
               <Button
-                danger
-                icon={<DeleteOutlined />}
+                type="text"
+                icon={<DeleteOutlined style={{ color: 'var(--color-text-tertiary)' }} />}
                 onClick={() =>
                   setForm({ ...form, variables: form.variables.filter((_, i) => i !== idx) })
                 }
@@ -342,6 +344,7 @@ const TaskGroupSidebar: React.FC<TaskGroupSidebarProps> = ({
           <Button
             type="dashed"
             size="small"
+            block
             icon={<PlusOutlined />}
             onClick={() =>
               setForm({ ...form, variables: [...form.variables, { key: '', value: '' }] })

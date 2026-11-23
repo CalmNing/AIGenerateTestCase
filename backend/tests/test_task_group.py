@@ -151,22 +151,9 @@ class TestGroupVariablePrecedence:
     """分组变量 < 环境变量 < 任务参数。"""
 
     def _param_map(self, db_session, task, group):
-        from app.scheduler import _group_context, _task_param_entries
-        from app.routes.proxy import build_param_map
+        from app.scheduler import build_task_param_map
 
-        group_env_id, group_vars = _group_context(db_session, task)
-        env_id = task.environment_id if task.environment_id is not None else group_env_id
-
-        param_map = {}
-        for p in group_vars:
-            if isinstance(p, dict) and p.get("key") and p.get("value") is not None:
-                param_map[p["key"]] = p["value"]
-
-        param_map.update(build_param_map(db_session, env_id, []))
-        param_map.update(
-            build_param_map(db_session, None, _task_param_entries(task.parameters or []))
-        )
-        return param_map
+        return build_task_param_map(db_session, task)
 
     def test_group_variable_used_when_nothing_else(self, db_session):
         group = _mk_group(

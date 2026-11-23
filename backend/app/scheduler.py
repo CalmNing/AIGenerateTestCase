@@ -31,9 +31,12 @@ TASK_PARAM_TYPE_IMAGE_BASE64 = "image_base64"
 def _task_param_entries(parameters: list) -> list:
     """挑出可以当普通变量注入的任务参数。
 
-    - file 类型：值是 fileId，属于文件上传语义，不作为变量注入；
+    - file 类型：值是 fileId，同样注入变量表 —— 请求参数里 {{变量名}}
+      解析成 fileId 后会走 file_params 文件上传通道；
     - image_base64 类型：值已是 base64 字符串，正常注入；
     - 其余（text）：正常注入。
+
+    不注入会导致请求参数里引用文件变量时报「变量未定义」。
     """
     entries = []
     for p in (parameters or []):
@@ -41,10 +44,34 @@ def _task_param_entries(parameters: list) -> list:
             continue
         if not p.get("key") or not p.get("value"):
             continue
-        if p.get("type") == TASK_PARAM_TYPE_FILE:
-            continue
         entries.append(p)
     return entries
+
+
+def build_task_param_map(db, task) -> dict:
+    """构建任务执行用的参数映射表。
+
+    变量优先级（后者覆盖前者）：分组变量 < 环境变量 < 任务参数。
+
+    环境取 task.environment_id；任务没选环境时回退到分组绑定的环境。
+    任务参数只合并自身（不走 build_param_map 的环境降级），避免无关
+    环境的变量混进来覆盖已选环境的值。
+    """
+    group_env_id, group_vars = _group_context(db, task)
+    env_id = task.environment_id if task.environment_id is not None else group_env_id
+
+    param_map: dict = {}
+    for p in group_vars:
+        if isinstance(p, dict) and p.get("key") and p.get("value") is not None:
+            param_map[p["key"]] = p["value"]
+
+    env_map = build_param_map(db, env_id, [])
+    param_map.update(env_map)
+
+    for p in _task_param_entries(task.parameters or []):
+        if isinstance(p, dict) and p.get("key") and p.get("value") is not None:
+            param_map[p["key"]] = p["value"]
+    return param_map
 
 
 def _group_context(db, task) -> tuple[Optional[int], list]:
@@ -140,22 +167,11 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
 
         # 变量优先级（后者覆盖前者）：
         #   分组变量 < 环境变量 < 任务参数
-        # 分组绑定的环境（若任务自身没选环境）作为该任务的环境。
-        group_env_id, group_vars = _group_context(db, task)
+        # 统一走 build_task_param_map：环境取任务自身绑定，任务参数只合并自身，
+        # 不触发 build_param_map 的环境降级（否则会把无关环境的变量混进来）。
+        param_map = build_task_param_map(db, task)
+        group_env_id, _group_vars = _group_context(db, task)
         env_id = task.environment_id if task.environment_id is not None else group_env_id
-
-        # 分组变量先入表（优先级最低）
-        param_map = {}
-        for p in group_vars:
-            if isinstance(p, dict) and p.get("key") and p.get("value") is not None:
-                param_map[p["key"]] = p["value"]
-
-        # 环境变量覆盖分组变量
-        env_map = build_param_map(db, env_id, [])
-        param_map.update(env_map)
-
-        # 任务参数优先级最高
-        param_map.update(build_param_map(db, None, _task_param_entries(task.parameters or [])))
         logger.info("Task [%s] param_map (env=%s, task_params=%s): %s",
                      task.name, task.environment_id, task.parameters, param_map)
         unresolved: set[str] = set()
@@ -208,7 +224,10 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                     key = p["key"]
                     raw_value = p.get("value", "")
 
-                    # 文件类型参数：提取为 file_params
+                    # 文件类型参数：提取为 file_params。值为空时回退同名任务变量
+                    # （任务参数里的 file 类型 value 即 fileId），拿到 fileId 才走文件上传
+                    if p.get("type") == "file" and not raw_value:
+                        raw_value = str(param_map.get(key) or "")
                     if p.get("type") == "file" and raw_value:
                         resolved_value = substitute_variables(str(raw_value), param_map, unresolved)
                         # 如果解析成功（不再是模板占位符），作为文件参数
@@ -281,8 +300,26 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
                             )
                             proxy_result = proxy_resp.json()
 
-                            response_data = proxy_result.get("data")
-                            status_code = proxy_result.get("status_code", 500)
+                            # /forward 失败时抛 HTTPException/校验错误，返回 {detail: ...}
+                            # 而非 {status_code, data} 结构；把真实信息透传出来，
+                            # 否则执行结果里 500 的响应体永远是空。
+                            if "detail" in proxy_result and "status_code" not in proxy_result:
+                                response_data = proxy_result.get("detail")
+                                status_code = proxy_resp.status_code
+                                logger.warning(
+                                    "Task [%s] request %s 代理转发返回 %s: %s",
+                                    task.name, req_id, status_code,
+                                    json.dumps(response_data, ensure_ascii=False)[:300],
+                                )
+                            else:
+                                response_data = proxy_result.get("data")
+                                status_code = proxy_result.get("status_code", proxy_resp.status_code)
+                                if not (200 <= status_code < 300):
+                                    logger.warning(
+                                        "Task [%s] request %s 上游返回 %s: %s",
+                                        task.name, req_id, status_code,
+                                        json.dumps(response_data, ensure_ascii=False)[:300],
+                                    )
 
                             result_entry = {
                                 "request_id": req_id,

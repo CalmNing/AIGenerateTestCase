@@ -2,7 +2,7 @@
 
 覆盖：
   1. image_base64 类型的任务参数作为普通变量注入 param_map；
-  2. file 类型参数不作为变量注入（值是 fileId，属文件上传语义）；
+  2. file 类型参数同样注入（值是 fileId，供请求参数占位符解析后走文件上传通道）；
   3. 普通文本参数照常注入；
   4. 非法 base64 不阻断任务参数构建。
 """
@@ -31,9 +31,10 @@ class TestTaskParamEntries:
         params = [{"key": "img", "value": "AAA", "type": "image_base64"}]
         assert _task_param_entries(params) == params
 
-    def test_file_param_excluded(self):
+    def test_file_param_kept_as_file_id(self):
+        # file 类型参数保留：请求参数占位符解析成 fileId 后走文件上传通道
         params = [{"key": "f", "value": "file-123", "type": "file"}]
-        assert _task_param_entries(params) == []
+        assert _task_param_entries(params) == params
 
     def test_param_without_value_excluded(self):
         assert _task_param_entries([{"key": "a", "value": "", "type": "text"}]) == []
@@ -52,13 +53,14 @@ class TestParamMapInjection:
         )
         assert param_map["imgVar"] == b64
 
-    def test_file_param_not_injected(self, db_session):
+    def test_file_param_injected_as_file_id(self, db_session):
+        # fileId 注入变量表：请求参数占位符解析成 fileId，scheduler 据此走文件上传
         param_map = build_param_map(
             db_session,
             None,
             [{"key": "fileVar", "value": "file-123", "type": "file"}],
         )
-        assert "fileVar" not in param_map
+        assert param_map["fileVar"] == "file-123"
 
     def test_text_param_injected(self, db_session):
         param_map = build_param_map(
