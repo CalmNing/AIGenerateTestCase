@@ -50,6 +50,11 @@ class ChatRequest(BaseModel):
     mode: Optional[str] = None
     # 业务上下文（需求正文、用例清单摘要等），注入 system prompt
     context: Optional[str] = None
+    # 测试用例会话 ID：仅 testcase_optimize 模式使用。携带时挂载用例查询/新增/更新/删除
+    # 工具（权限在工具内部自检）；旧客户端不传该字段，行为不变（向后兼容）。
+    testcase_session_id: Optional[int] = None
+    # 当前模块筛选：create_testcase 落库归属 + update 防移出当前筛选；全部模块视图不传。
+    testcase_module_id: Optional[int] = None
 
 
 class StreamingChatRequest(ChatRequest):
@@ -71,14 +76,83 @@ def _truncate_context(context: str) -> str:
     return context[:_CONTEXT_HEAD_KEEP] + _CONTEXT_ELLIPSIS + context[-_CONTEXT_TAIL_KEEP:]
 
 
+async def _budgeted_history(
+    req,
+    system_content: str,
+    chat_max_tokens: int,
+    api_key: str,
+    api_base_url: str,
+    api_model: str,
+) -> list["ChatMessage"]:
+    """按 token 预算裁剪对话历史（轻量 compaction + LLM checkpoint）。
+
+    三层策略：
+    1. 长消息修剪：>8K 字符保头尾（无 LLM）。
+    2. 预算裁剪：从最旧丢弃，至少保最后 2 条（无 LLM）。
+    3. checkpoint 压缩：被丢弃的内容 >= 4096 token 时，用一次低预算 LLM 调用
+       把旧对话总结成结构化检查点，插在保留消息之前 —— 丢掉的语义找回来了；
+       总结失败降级为直接丢弃，不影响主流程。
+
+    预算 = 模型窗口 - 输出预留(max_tokens) - system prompt - headroom(8192)。
+    """
+    from utils.context_budget import (
+        build_history_budget,
+        estimate_tokens,
+        resolve_model_window,
+        should_compact,
+        summarize_dropped_messages,
+        trim_history,
+        wrap_checkpoint,
+    )
+
+    window = resolve_model_window("", api_model)
+    system_tokens = estimate_tokens(system_content)
+    budget = build_history_budget(window, chat_max_tokens, system_tokens)
+
+    items = [{"role": m.role, "content": m.content} for m in req.messages]
+    kept, stats = trim_history(items, budget)
+
+    # checkpoint 压缩：丢得多才值得一次额外 LLM 调用
+    checkpoint_message = None
+    if should_compact(stats["dropped_items"], stats["dropped_tokens"]):
+        summary = await summarize_dropped_messages(
+            stats["dropped_items"], api_key, api_base_url, api_model,
+        )
+        if summary:
+            checkpoint_message = wrap_checkpoint(summary)
+            logger.info(
+                "checkpoint 压缩完成: 摘要 %d 字符替换 %d 条旧消息（~%d token）",
+                len(summary), stats["dropped"], stats["dropped_tokens"],
+            )
+
+    if stats["dropped"] or stats["pruned"] or checkpoint_message:
+        logger.info(
+            "历史预算裁剪: 窗口=%d 预算=%d system_tokens=%d 原始=%d 保留=%d 丢弃=%d 修剪=%d checkpoint=%s",
+            window, budget, system_tokens, len(req.messages), stats["kept"],
+            stats["dropped"], stats["pruned"], "有" if checkpoint_message else "无",
+        )
+
+    messages: list[ChatMessage] = []
+    if checkpoint_message:
+        # checkpoint 计入预算之外的安全垫（约几百 token，headroom 已覆盖）
+        messages.append(ChatMessage(role=checkpoint_message["role"], content=checkpoint_message["content"]))
+    messages.extend(
+        ChatMessage(role=item["role"], content=item["content"]) for item in kept
+    )
+    return messages
+
+
 def _build_chat_system_prompt(
     selected_skills: list[str] | None = None,
     has_tools: bool = False,
     mode: str = "general",
     context: str | None = None,
+    has_testcase_tools: bool = False,
 ) -> str:
     """构建 system prompt：模式提示词 + Skills 方法论 + 工具说明 + 业务上下文。"""
     from utils.helpers import _load_skill_bodies
+
+    from app.services.chat_prompts import TESTCASE_TOOLS_HEADER
 
     system_content = MODE_PROMPTS[_normalize_mode(mode)]
 
@@ -91,6 +165,10 @@ def _build_chat_system_prompt(
     # 注入 MCP 工具说明
     if has_tools:
         system_content += MCP_TOOL_HEADER
+
+    # 注入用例操作工具说明（testcase_optimize 模式）
+    if has_testcase_tools:
+        system_content += TESTCASE_TOOLS_HEADER
 
     # 注入需求清单模板（仅需求澄清模式，供"整理需求清单"时按骨架输出）
     if _normalize_mode(mode) == "requirement_clarify":
@@ -147,6 +225,26 @@ def _load_user_mcp_configs(session, current_user) -> list[dict]:
         return load_user_mcp_configs(session, current_user)
     except Exception as e:
         logger.warning("加载 MCP 配置失败: %s", e)
+        return []
+
+
+def _load_testcase_tools(
+    mode: str,
+    testcase_session_id: Optional[int],
+    current_user,
+    testcase_module_id: Optional[int] = None,
+) -> list:
+    """加载 AI 用例对话写操作工具（查询/新增/更新/删除）；仅 testcase_optimize 模式。
+
+    与 MCP 工具相互独立：这里失败只降级为无写工具，不影响对话主流程。
+    """
+    if mode != "testcase_optimize" or not testcase_session_id:
+        return []
+    try:
+        from app.services.testcase_chat_tools import load_testcase_write_tools
+        return load_testcase_write_tools(mode, testcase_session_id, current_user, testcase_module_id)
+    except Exception as e:
+        logger.warning("加载用例操作工具失败: %s", e)
         return []
 
 
@@ -386,22 +484,32 @@ async def chat(
         raise HTTPException(status_code=500, detail="未配置 API Key")
 
     # 加载 MCP 工具（业务模式跳过：上下文已注入，无需取数工具）
-    all_tools = await _load_chat_tools(session, current_user, _normalize_mode(req.mode))
+    mode = _normalize_mode(req.mode)
+    all_tools = await _load_chat_tools(session, current_user, mode)
+
+    # 用例操作工具（testcase_optimize 模式且携带会话 ID 时挂载）
+    all_tools = all_tools + _load_testcase_tools(mode, req.testcase_session_id, current_user, req.testcase_module_id)
 
     # 构建 system prompt
     system_content = _build_chat_system_prompt(
         req.selected_skills,
         has_tools=bool(all_tools),
-        mode=_normalize_mode(req.mode),
+        mode=mode,
         context=req.context,
+        has_testcase_tools=bool(req.testcase_session_id) and mode == "testcase_optimize",
     )
+
+    # 长回复（14 节需求清单 / 用例缺口分析）需要充足输出预算，避免 finish_reason=length 截断
+    chat_max_tokens = 16384
+    # 历史预算裁剪：输入 + 输出必须在模型窗口内（轻量 compaction）
+    budgeted_messages = await _budgeted_history(req, system_content, chat_max_tokens, api_key, api_base_url, api_model)
 
     # 构建消息
     langchain_messages = []
     from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
     langchain_messages.append(SystemMessage(content=system_content))
-    for msg in req.messages:
+    for msg in budgeted_messages:
         if msg.role == "user":
             langchain_messages.append(HumanMessage(content=msg.content))
         elif msg.role == "assistant":
@@ -412,8 +520,6 @@ async def chat(
 
         logger.info("创建 LLM 模型: base_url=%s model=%s tools=%d",
                     api_base_url, api_model, len(all_tools))
-        # 长回复（14 节需求清单 / 用例缺口分析）需要充足输出预算，避免 finish_reason=length 截断
-        chat_max_tokens = 16384
         model = build_chat_model(
             api_key=api_key,
             api_base_url=api_base_url,
@@ -531,30 +637,35 @@ async def chat_stream(
     mode = _normalize_mode(req.mode)
     request_id = uuid.uuid4().hex[:12]
 
-    # 与 /chat 相同的准备工作（工具 / prompt / 消息）；业务模式跳过 MCP 加载
+    # 与 /chat 相同的准备工作（工具 / prompt / 消息）；业务模式跳过 MCP 加载，
+    # 但 testcase_optimize 模式会挂载用例操作工具（走 Agent 路径）。
     all_tools = await _load_chat_tools(session, current_user, mode)
+    all_tools = all_tools + _load_testcase_tools(mode, req.testcase_session_id, current_user, req.testcase_module_id)
 
     system_content = _build_chat_system_prompt(
         req.selected_skills,
         has_tools=bool(all_tools),
         mode=mode,
         context=req.context,
+        has_testcase_tools=bool(req.testcase_session_id) and mode == "testcase_optimize",
     )
 
     from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-
-    langchain_messages = [SystemMessage(content=system_content)]
-    for msg in req.messages:
-        if msg.role == "user":
-            langchain_messages.append(HumanMessage(content=msg.content))
-        elif msg.role == "assistant":
-            langchain_messages.append(AIMessage(content=msg.content))
 
     # 需求澄清要输出整份 14 节清单，用例优化常输出长缺口分析：统一给足输出空间，
     # 否则 DeepSeek 默认/低上限会在长回复中途截断（finish_reason=length）。
     # 注意：thinking 开启时 reasoning_tokens 计入 max_tokens 预算（实测），
     # 长思考会把正文挤掉 —— 开思考时再抬高上限。
     chat_max_tokens = 32768 if req.show_thinking else 16384
+    # 历史预算裁剪：thinking 开启时输出预留更大，历史预算相应收紧（轻量 compaction）
+    budgeted_messages = await _budgeted_history(req, system_content, chat_max_tokens, api_key, api_base_url, api_model)
+
+    langchain_messages = [SystemMessage(content=system_content)]
+    for msg in budgeted_messages:
+        if msg.role == "user":
+            langchain_messages.append(HumanMessage(content=msg.content))
+        elif msg.role == "assistant":
+            langchain_messages.append(AIMessage(content=msg.content))
 
     async def _event_stream():
         try:
@@ -617,7 +728,7 @@ async def chat_stream(
                     api_base_url=api_base_url,
                     api_model=api_model,
                     system_content=system_content,
-                    history_messages=req.messages,
+                    history_messages=budgeted_messages,
                     max_tokens=chat_max_tokens,
                     show_thinking=bool(req.show_thinking),
                     request_id=request_id,

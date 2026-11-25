@@ -1014,6 +1014,7 @@ export const chatApiStream = (
     context?: string;
     mode?: string;
     show_thinking?: boolean;
+    testcase_session_id?: number;
   },
   handlers: ChatStreamHandlers,
 ): ChatStreamControl => {

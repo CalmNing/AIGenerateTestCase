@@ -19,6 +19,7 @@ from app.routes.proxy import (
     build_param_map, substitute_variables, substitute_in_headers,
     substitute_in_data, substitute_in_params, is_valid_url,
 )
+from utils.log_redact import redact_base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ async def execute_scheduled_task(task_id: int, *, force_run: bool = False):
         group_env_id, _group_vars = _group_context(db, task)
         env_id = task.environment_id if task.environment_id is not None else group_env_id
         logger.info("Task [%s] param_map (env=%s, task_params=%s): %s",
-                     task.name, task.environment_id, task.parameters, param_map)
+                     task.name, task.environment_id, task.parameters, redact_base64(param_map))
         unresolved: set[str] = set()
 
         for req_id in task.request_ids:

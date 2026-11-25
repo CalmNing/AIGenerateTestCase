@@ -13,6 +13,7 @@ from db.db import engine
 from db.models import ApiEndpoint, ApiProject, MockConfig, GlobalParameter, MockLog
 from app.services.mock_matcher import match_address, match_config_path, match_host
 from utils.js_expression import substitute_js_expressions
+from utils.log_redact import redact_base64
 from utils.template_builtins import substitute_builtins
 
 logger = logging.getLogger(__name__)
@@ -263,7 +264,7 @@ def _save_mock_log(config_id, config_name, request_method, request_path,
                    request_headers, request_query_params, request_body,
                    response_status_code, response_headers, response_body,
                    matched, user_id):
-    """保存Mock请求日志到数据库"""
+    """保存Mock请求日志到数据库（请求/响应体做 base64 脱敏，避免记录过大）"""
     try:
         with Session(engine) as session:
             log = MockLog(
@@ -273,10 +274,10 @@ def _save_mock_log(config_id, config_name, request_method, request_path,
                 request_path=request_path,
                 request_headers=request_headers,
                 request_query_params=request_query_params,
-                request_body=request_body,
+                request_body=redact_base64(request_body) if isinstance(request_body, str) else request_body,
                 response_status_code=response_status_code,
                 response_headers=response_headers,
-                response_body=response_body,
+                response_body=redact_base64(response_body) if isinstance(response_body, str) else response_body,
                 matched=matched,
                 user_id=user_id,
             )
@@ -638,7 +639,7 @@ async def resolve_mock_response(request_path: str, request_method: str,
     if matched_config.response_body:
 
         body = _substitute_variables(matched_config.response_body, matched_config.environment_id, path_params)
-        logger.info("Original body: %s", body)
+        logger.info("Original body: %s", redact_base64(body))
         logger.info("Body type: %s", type(body))
 
         # 处理分页逻辑
@@ -646,7 +647,7 @@ async def resolve_mock_response(request_path: str, request_method: str,
             try:
                 # 解析响应体
                 parsed_body = _smart_parse_json(body)
-                logger.info("Parsed response body: %s", parsed_body)
+                logger.info("Parsed response body: %s", redact_base64(parsed_body))
                 logger.info("Parsed body type: %s", type(parsed_body))
 
                 data_array = None

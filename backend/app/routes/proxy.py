@@ -16,6 +16,7 @@ from app.deps import CurrentUser
 from app.permissions import Permission, get_user_permissions
 from utils.base_response import Response
 from utils.js_expression import substitute_js_expressions
+from utils.log_redact import redact_base64
 from utils.template_builtins import substitute_builtins
 
 router = APIRouter(prefix="/proxy", tags=["proxy"])
@@ -256,15 +257,20 @@ class TestVariableRequest(BaseModel):
 
 
 def _body_to_text(data) -> Optional[str]:
-    """把请求/响应体统一序列化为文本，便于落库展示"""
+    """把请求/响应体统一序列化为文本，便于落库展示
+
+    体里常见的图片/文件 base64 串会被替换成占位符，避免日志与
+    推送记录被撑到几十万字符；需要原始数据时从业务侧重新生成。
+    """
     if data is None:
         return None
-    if isinstance(data, str):
-        return data
-    try:
-        return json.dumps(data, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(data)
+    text = data if isinstance(data, str) else None
+    if text is None:
+        try:
+            text = json.dumps(data, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(data)
+    return redact_base64(text)
 
 
 
@@ -299,6 +305,9 @@ def _trim_pre_step_results(results: list) -> list:
 
     保留每个步骤的请求方法/地址/状态码/提取变量/错误，以及响应体摘要
     （超长截断），方便在推送记录里回看前置请求的响应内容。
+
+    提取变量与响应体先做 base64 脱敏：前置步骤经常提取图片 base64，
+    原样落库会把单条记录撑到几十万字符。
     """
     trimmed: list = []
     for item in results or []:
@@ -311,12 +320,12 @@ def _trim_pre_step_results(results: list) -> list:
             "method": item.get("method"),
             "url": item.get("url"),
             "status_code": item.get("status_code"),
-            "extracted": item.get("extracted") or {},
+            "extracted": redact_base64(item.get("extracted") or {}),
             "ok": item.get("ok"),
             "error": item.get("error"),
         }
         if item.get("type") == "params":
-            entry["params"] = item.get("params") or {}
+            entry["params"] = redact_base64(item.get("params") or {})
         elif item.get("type") == "set_variable":
             entry["key"] = item.get("key")
             value = item.get("value")
@@ -416,7 +425,8 @@ async def _forward_once(
             detail=f"以下变量未在环境参数中定义: {unresolved_list}",
         )
     logger.info("Proxy request: url=%s, method=%s, headers=%s, params=%s, json=%s",
-                     final_url, request.method, final_headers, final_params, final_data)
+                     final_url, request.method, redact_base64(final_headers),
+                     redact_base64(final_params), redact_base64(final_data))
     logger.info("final_data_type: %s", type(final_data))
     if not is_valid_url(final_url):
         _save_push_log(
@@ -459,7 +469,7 @@ async def _forward_once(
             # 尝试解析响应为JSON
             try:
                 response_data = response.json()
-                logger.info("response_data: %s", response_data)
+                logger.info("response_data: %s", redact_base64(response_data))
             except Exception:
                 response_data = response.text
 
@@ -512,7 +522,7 @@ async def forward_core(
     ):
         environment_id = None
     param_map = build_param_map(db, environment_id, [])
-    logger.info("param_map: %s", param_map)
+    logger.info("param_map: %s", redact_base64(param_map))
 
     # 文件参数：fileId 按 key 注入变量表（与定时任务执行链路一致），
     # 请求体/请求头里的 {{key}} 占位符即可解析成 fileId 值

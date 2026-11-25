@@ -38,6 +38,8 @@ const ScheduledTaskManager: React.FC = () => {
   const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([]);
   /** 左侧选中的分组；null = 全部任务 */
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+  /** 执行环境筛选；undefined = 全部环境，'none' = 未指定环境 */
+  const [filterEnvId, setFilterEnvId] = useState<number | 'none' | undefined>(undefined);
   const [selectedRequestToAdd, setSelectedRequestToAdd] = useState<number | undefined>(undefined);
   const [requestIds, setRequestIds] = useState<number[]>([]);
   const [taskParameters, setTaskParameters] = useState<Array<{ key: string; value: string; type?: 'text' | 'file' | 'image_base64'; file?: UploadedFileResult }>>([]);
@@ -436,6 +438,23 @@ const ScheduledTaskManager: React.FC = () => {
     return '-';
   };
 
+  /** 分组 id -> 分组绑定环境的映射（任务未指定环境时继承分组环境） */
+  const groupEnvMap = useMemo(() => {
+    const map = new Map<number, number | null>();
+    const walk = (nodes: TaskGroup[]) => {
+      (nodes || []).forEach((g) => {
+        map.set(g.id, g.environment_id ?? null);
+        walk(g.children);
+      });
+    };
+    walk(taskGroups);
+    return map;
+  }, [taskGroups]);
+
+  /** 任务实际生效的执行环境：任务未指定时回退到所属分组绑定的环境（与调度器执行逻辑一致） */
+  const effectiveEnvId = (t: ScheduledTask): number | null =>
+    t.environment_id ?? (t.group_id != null ? (groupEnvMap.get(t.group_id) ?? null) : null);
+
   const columns = [
     {
       title: '任务名称',
@@ -470,10 +489,22 @@ const ScheduledTaskManager: React.FC = () => {
       title: '执行环境',
       key: 'environment',
       render: (_: any, record: ScheduledTask) => {
-        const env = environments.find(e => e.id === record.environment_id);
-        return <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{env ? env.name : '-'}</span>;
+        const envId = effectiveEnvId(record);
+        const env = environments.find(e => e.id === envId);
+        const inherited = record.environment_id == null && envId != null;
+        if (!env) {
+          return <span style={{ fontSize: 13, color: 'var(--color-text-disabled)' }}>-</span>;
+        }
+        return (
+          <span style={{ fontSize: 13, color: 'var(--color-text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {env.name}
+            {inherited && (
+              <span style={{ fontSize: 11, color: 'var(--color-text-disabled)' }}>(继承)</span>
+            )}
+          </span>
+        );
       },
-      width: 100,
+      width: 110,
       ellipsis: true,
     },
     {
@@ -561,8 +592,15 @@ const ScheduledTaskManager: React.FC = () => {
       scoped = tasks.filter((t) => t.group_id != null && groupIds.has(t.group_id));
     }
     const keyword = (searchTask || '').toLowerCase();
-    return scoped.filter((t) => !keyword || t.name.toLowerCase().includes(keyword));
-  }, [tasks, taskGroups, selectedGroupId, searchTask]);
+    return scoped.filter((t) => {
+      if (keyword && !t.name.toLowerCase().includes(keyword)) return false;
+      if (filterEnvId !== undefined) {
+        const envId = effectiveEnvId(t);
+        if (filterEnvId === 'none' ? envId != null : envId !== filterEnvId) return false;
+      }
+      return true;
+    });
+  }, [tasks, taskGroups, selectedGroupId, searchTask, filterEnvId]);
 
   return (
     <div className="stm-container">
@@ -585,6 +623,21 @@ const ScheduledTaskManager: React.FC = () => {
             size="small"
             onChange={(e) => setSearchTask(e.target.value)}
             onSearch={(val) => setSearchTask(val)}
+          />
+          <label>执行环境</label>
+          <Select
+            placeholder="全部环境"
+            allowClear
+            size="small"
+            style={{ width: 160 }}
+            value={filterEnvId}
+            onChange={(v) => setFilterEnvId(v)}
+            options={[
+              ...environments.map((e) => ({ label: e.name, value: e.id })),
+              { label: '未指定环境', value: 'none' },
+            ]}
+            optionFilterProp="label"
+            showSearch
           />
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>

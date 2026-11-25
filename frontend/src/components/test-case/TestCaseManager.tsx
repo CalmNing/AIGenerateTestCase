@@ -257,6 +257,39 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
     tc.status === TestCaseStatus.PASSED ? '已通过'
       : tc.status === TestCaseStatus.FAILED ? '未通过' : '未执行';
 
+  // 需求基准：与生成用例同源（当前会话 + 当前模块的需求文档，排除生成历史），
+  // 作为对话评审覆盖的事实基准注入上下文。
+  const [requirementBasis, setRequirementBasis] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setRequirementBasis('');
+      if (!selectedSession?.id) return;
+      try {
+        const { requirementDocApi } = await import('../../services/api');
+        const filters: { session_id: number; module_id?: number } = { session_id: selectedSession.id };
+        if (selectedModule && selectedModule !== 0 && Number.isFinite(Number(selectedModule))) {
+          filters.module_id = Number(selectedModule);
+        }
+        const res = await requirementDocApi.list(filters);
+        if (cancelled) return;
+        if (res.code === 200 && res.data) {
+          const docs = res.data.filter((d) => d.source_type !== 'generation');
+          // 多篇时按更新时间取最近一篇；没有需求文档则保持为空（提示词兼容缺失场景）
+          const latest = docs.length > 0
+            ? [...docs].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))[0]
+            : null;
+          const snapshot = (latest?.content_snapshot || '').trim();
+          setRequirementBasis(snapshot ? '《' + (latest!.title || '未命名需求') + '》' + '\n' + snapshot : '');
+        }
+      } catch (e) {
+        console.error('加载需求基准失败', e);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [selectedSession?.id, selectedModule]);
+
   // 选中用例的完整详情（多行文本，供 AI 引用步骤/预期）
   const selectedTestcase = useMemo(
     () => (selectedTestcaseId ? testcases.find((tc) => tc.id === selectedTestcaseId) ?? null : null),
@@ -266,6 +299,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
   const testcaseDetailText = (tc: TestCase) => {
     const lines = [
       '【当前选中用例】',
+      '用例ID：' + tc.id,
       '用例名称：' + tc.case_name,
       '用例级别：' + formatTestCaseLevel(tc.case_level),
       '状态：' + statusLabel(tc) + (tc.bug_id ? ' · Bug ID: ' + tc.bug_id : ''),
@@ -286,17 +320,19 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       : '全部模块';
     const lines: string[] = [
       '【测试会话】' + (selectedSession.name || ('会话 ' + selectedSession.id)),
-      '【模块范围】' + moduleName,
+      '【模块范围】' + (selectedModule !== 0 ? '[module=' + selectedModule + '] ' : '') + moduleName + (selectedModule === 0 ? '（未限定模块：新增用例需向用户确认归属模块）' : ''),
       '【用例总数】' + testcases.length + ' 条（当前筛选结果）',
-      '',
-      '【用例清单' + (testcases.length > 60 ? '（仅前 60 条）' : '') + '】',
     ];
+    if (requirementBasis) {
+      lines.push('', '【需求基准】（评审覆盖的唯一事实来源）', requirementBasis);
+    }
+    lines.push('', '【用例清单' + (testcases.length > 60 ? '（仅前 60 条）' : '') + '】');
     if (testcases.length === 0) {
       lines.push('（当前筛选下没有测试用例）');
     } else {
       testcases.slice(0, 60).forEach((tc, idx) => {
         lines.push(
-          (idx + 1) + '. [' + formatTestCaseLevel(tc.case_level) + '] ' + tc.case_name
+          (idx + 1) + '. [id=' + tc.id + '] [' + formatTestCaseLevel(tc.case_level) + '] ' + tc.case_name
           + ' — ' + statusLabel(tc) + (tc.bug_id ? ' — Bug ' + tc.bug_id : ''),
         );
       });
@@ -305,7 +341,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
       lines.push('', testcaseDetailText(selectedTestcase));
     }
     return lines.join('\n');
-  }, [selectedSession, selectedModule, modules, testcases, selectedTestcase]);
+  }, [selectedSession, selectedModule, modules, testcases, selectedTestcase, requirementBasis]);
 
   return (
     <div className="tcm-container">
@@ -521,7 +557,7 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
         scopeKey={selectedSession ? 'case-opt-' + selectedSession.id : undefined}
         welcomeHint={
           selectedSession
-            ? '我会基于当前会话「' + (selectedSession.name || '') + '」的用例清单与你讨论：分析覆盖缺口（功能/边界/异常/场景）、评审步骤与预期可执行性、给出补充用例建议。'
+            ? '我会基于当前会话「' + (selectedSession.name || '') + '」的需求基准与用例清单与你讨论：对照需求分析覆盖缺口（功能/边界/异常/场景）、评审步骤与预期可执行性、给出补充用例建议；也可以按你的要求直接新增、修改或删除用例（修改/删除前我会先与你确认）。'
             : '请先从左侧选择一个会话。'
         }
         quickActions={[
@@ -529,6 +565,8 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
           { label: '给出补充用例建议（可引入）', prompt: '请针对刚才指出的覆盖缺口给出补充用例建议，每条建议严格按“### 建议：用例名称”小节格式输出（含用例级别、前置条件、测试步骤、预期结果、关联说明），我会在回复下方一键引入这些用例。' },
         ]}
         onImportCases={handleImportCases}
+        extraBody={selectedSession ? { testcase_session_id: selectedSession.id, testcase_module_id: selectedModule !== 0 ? Number(selectedModule) : undefined } : undefined}
+        onCaseChanged={() => { if (selectedSession) onLoadTestcases(selectedSession.id, filters); }}
         width="66vw"
       />
     </div>

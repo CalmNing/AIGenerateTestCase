@@ -84,7 +84,7 @@ def build_chat_model(
     if enable_cache:
         extra_body["enable_prompt_cache"] = True
 
-    return ChatOpenAI(
+    return DeepSeekCompatChatOpenAI(
         model=(api_model or "deepseek-v4-flash"),
         temperature=temperature,
         api_key=SecretStr(api_key),
@@ -102,3 +102,30 @@ def normalize_priority(priority: Optional[str]) -> str:
     if not priority:
         return "medium"
     return _PRIORITY_MAP.get(priority.upper(), "medium")
+
+
+class DeepSeekCompatChatOpenAI(ChatOpenAI):
+    """保留 DeepSeek reasoning_content 的 ChatOpenAI。
+
+    langchain_openai 的流式 delta 转换（_convert_delta_to_message_chunk）
+    只保留 function_call/tool_calls，把 delta.reasoning_content 直接丢弃，
+    导致 Agent 路径（astream_events → on_chat_model_stream）拿不到思考增量。
+    这里在转换完成后把原始 delta 的 reasoning_content 补进 additional_kwargs，
+    chat.py 的 _sse_chunk 已按该键读取。plain-http 直连路径不受影响。
+    """
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        generation_chunk = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info
+        )
+        if generation_chunk is not None:
+            try:
+                choices = chunk.get("choices", []) or chunk.get("chunk", {}).get("choices", [])
+                if choices:
+                    reasoning = (choices[0].get("delta") or {}).get("reasoning_content")
+                    if reasoning:
+                        msg = generation_chunk.message
+                        msg.additional_kwargs = {**(msg.additional_kwargs or {}), "reasoning_content": reasoning}
+            except Exception:  # noqa: BLE001 - 补丁失败不影响原转换
+                pass
+        return generation_chunk

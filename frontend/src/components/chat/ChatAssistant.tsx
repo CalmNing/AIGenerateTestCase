@@ -72,6 +72,10 @@ interface ChatAssistantProps {
   importLabel?: string;
   /** 是否启用会话存储（存储会话/选择上次对话继续），默认启用 */
   persistSessions?: boolean;
+  /** 附加请求体字段（如 testcase_session_id），随每轮对话请求发送 */
+  extraBody?: Record<string, unknown>;
+  /** 工具修改/删除用例后触发（用于刷新用例列表）；同一轮多次触发会防抖合并 */
+  onCaseChanged?: () => void;
 }
 
 const newThreadId = (scope?: string) =>
@@ -96,6 +100,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
   onImportCases,
   importLabel = '引入用例',
   persistSessions = true,
+  extraBody,
+  onCaseChanged,
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -315,6 +321,20 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
     setMessages((prev) => prev.map((m) => (m.timestamp === timestamp ? { ...m, ...patch(m) } : m)));
   }, []);
 
+  // 用例被 AI 工具修改/删除后的刷新回调：800ms 防抖合并一轮回复中的多次工具调用
+  const caseChangedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifyCaseChanged = useCallback(() => {
+    if (!onCaseChanged) return;
+    if (caseChangedTimerRef.current) clearTimeout(caseChangedTimerRef.current);
+    caseChangedTimerRef.current = setTimeout(() => {
+      caseChangedTimerRef.current = null;
+      onCaseChanged();
+    }, 800);
+  }, [onCaseChanged]);
+  useEffect(() => () => {
+    if (caseChangedTimerRef.current) clearTimeout(caseChangedTimerRef.current);
+  }, []);
+
   // 共享流式执行：创建占位 assistant 消息并按 SSE 事件增量填充
   const runStream = useCallback(
     (history: Array<{ role: string; content: string }>, assistantTimestamp: number) => {
@@ -337,11 +357,15 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
           context,
           mode,
           show_thinking: showThinking,
+          ...(extraBody as Record<string, unknown> | undefined),
         },
         {
           onReasoning: (delta) => patchStreaming(assistantTimestamp, (m) => ({ reasoning: (m.reasoning || '') + delta })),
           onContent: (delta) => patchStreaming(assistantTimestamp, (m) => ({ content: m.content + delta })),
-          onTool: (toolName) => patchStreaming(assistantTimestamp, (m) => ({ toolEvents: [...(m.toolEvents || []), toolName] })),
+          onTool: (toolName) => {
+            patchStreaming(assistantTimestamp, (m) => ({ toolEvents: [...(m.toolEvents || []), toolName] }));
+            if (onCaseChanged && /update_testcase|delete_testcases/.test(toolName)) notifyCaseChanged();
+          },
           onError: (errorMsg) =>
             patchStreaming(assistantTimestamp, (m) => ({
               content: m.content
@@ -355,7 +379,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
       );
       streamControlRef.current = control;
     },
-    [patchStreaming, selectedSkills, clientSessionId, context, mode, showThinking]
+    [patchStreaming, selectedSkills, clientSessionId, context, mode, showThinking, extraBody, onCaseChanged, notifyCaseChanged]
   );
 
   const handleSend = useCallback(async () => {

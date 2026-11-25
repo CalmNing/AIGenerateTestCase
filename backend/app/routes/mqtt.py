@@ -26,6 +26,7 @@ from app.permissions import Permission, get_user_permissions
 from app.routes.proxy import build_param_map, substitute_variables
 from db.models import PushLog
 from utils.base_response import Response
+from utils.log_redact import redact_base64
 
 router = APIRouter(prefix="/mqtt", tags=["mqtt"])
 logging.basicConfig(level=logging.INFO)
@@ -308,8 +309,8 @@ def _save_mqtt_log(
             final_headers={},
             request_params={},
             final_params={},
-            request_body=request.payload or "",
-            final_body=final_payload or "",
+            request_body=redact_base64(request.payload or ""),
+            final_body=redact_base64(final_payload or ""),
             response_status=0,
             response_headers={},
             mocked=False,

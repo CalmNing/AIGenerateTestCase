@@ -78,6 +78,45 @@ def test_agent_memory_context_yields_checkpointer_and_store():
     assert cp is not None
 
 
+def test_agent_memory_context_body_exception_propagates():
+    """回归：with 块内抛异常必须原样传播。
+
+    旧实现把 yield 放在 try/except Exception 内：body 异常经 athrow()
+    掷回生成器后被 except 捕获并二次 yield，触发
+    RuntimeError: generator didn't stop after athrow()，真实错误被吞。
+    """
+    async def _run():
+        async with agent_memory.agent_memory_context() as (cp, store):
+            assert cp is not None
+            raise ValueError("REAL-BODY-ERROR")
+
+    try:
+        asyncio.run(_run())
+    except RuntimeError as e:
+        raise AssertionError(f"body 异常被 athrow 掩盖: {e}") from e
+    except ValueError as e:
+        assert str(e) == "REAL-BODY-ERROR"
+    else:
+        raise AssertionError("body 异常没有传播")
+
+
+def test_agent_memory_context_body_exception_still_closes_sqlite(monkeypatch):
+    """SQLite 路径下 body 抛异常，连接也必须正常关闭且异常照常传播。"""
+    real_ctx = agent_memory.agent_memory_context
+
+    async def _run():
+        async with real_ctx() as (cp, store):
+            raise RuntimeError("agent exploded")
+
+    try:
+        asyncio.run(_run())
+    except RuntimeError as e:
+        assert "agent exploded" in str(e)
+        assert "athrow" not in str(e)
+    else:
+        raise AssertionError("异常未传播")
+
+
 def test_agent_memory_disabled_falls_back_to_memory(monkeypatch):
     """配置关闭记忆时，仍必须产出可用的 checkpointer（降级而非崩溃）。"""
     from config import config_manager

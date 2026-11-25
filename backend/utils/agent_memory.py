@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional, Tuple
 
@@ -162,9 +163,9 @@ def _memory_fallbacks() -> Tuple[Any, Any]:
 
 @asynccontextmanager
 async def agent_memory_context() -> AsyncIterator[Tuple[Any, Any]]:
-    """异步上下文管理器，产出 `(checkpointer, store)`。
+    """异步上下文管理器，产出 (checkpointer, store)。
 
-    优先落盘（SQLite），任何异常都降级到内存实现，保证调用方拿到可用对象：
+    优先落盘（SQLite），**初始化失败**时降级到内存实现，保证调用方拿到可用对象：
 
         async with agent_memory_context() as (checkpointer, store):
             agent = create_agent(..., checkpointer=checkpointer, store=store)
@@ -172,25 +173,44 @@ async def agent_memory_context() -> AsyncIterator[Tuple[Any, Any]]:
 
     注意：AsyncSqliteSaver / AsyncSqliteStore 的生命周期与上下文绑定，
     因此必须在 `async with` 内部完成 agent 调用（生成链路本身就是 async，无额外成本）。
+
+    关键实现约束：yield 绝不能放在 try/except Exception 内部 ——
+    with 块（agent 执行体）抛出的异常会经 athrow() 掷回生成器，若被 except
+    捕获后再次 yield，Python 会抛 RuntimeError: generator didn't stop
+    after athrow()，把真实错误吞掉（且此时 SQLite 连接尚未正常关闭）。
+    降级只针对"初始化失败"，用异常抛出点与 yield 分离来保证。
     """
     path = _db_path()
     if path:
+        # 仅初始化（imports + 连接建立）放在 try 内；失败才降级内存。
         try:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             from langgraph.store.sqlite.aio import AsyncSqliteStore
 
-            async with AsyncSqliteSaver.from_conn_string(path) as checkpointer:
-                async with AsyncSqliteStore.from_conn_string(path) as store:
-                    logger.debug("Agent 记忆已启用（SQLite: %s）", path)
-                    yield checkpointer, store
-                    return
+            saver_cm = AsyncSqliteSaver.from_conn_string(path)
+            store_cm = AsyncSqliteStore.from_conn_string(path)
+            checkpointer = await saver_cm.__aenter__()
+            store = await store_cm.__aenter__()
         except Exception as exc:
             logger.warning("SQLite 记忆初始化失败，降级为内存记忆: %s", exc)
+            path = None
+        else:
+            try:
+                logger.debug("Agent 记忆已启用（SQLite: %s）", path)
+                yield checkpointer, store
+            finally:
+                # body 结束（含异常路径）后对称退出两个 CM：连接保证关闭，
+                # body 的异常原样向上传播，不被本层吞掉或二次包装。
+                try:
+                    await store_cm.__aexit__(*sys.exc_info())
+                finally:
+                    await saver_cm.__aexit__(*sys.exc_info())
+                logger.debug("Agent 记忆 SQLite 已关闭")
+            return
 
     checkpointer, store = _memory_fallbacks()
     logger.debug("Agent 记忆使用内存降级实现")
     yield checkpointer, store
-
 
 def reset_memory_singletons() -> None:
     """仅测试用：清空内存降级单例。"""
