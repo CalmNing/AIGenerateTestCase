@@ -15,6 +15,8 @@ export interface Message {
   streaming?: boolean;
   /** 工具调用轨迹（仅 Agent 模式） */
   toolEvents?: string[];
+  /** 用户消息附带的截图（data URL），后端转多模态 blocks */
+  images?: string[];
 }
 
 interface ChatMessageProps {
@@ -104,7 +106,18 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
             </details>
           )}
           {isUser ? (
-            <Text style={{ color: '#fff', whiteSpace: 'pre-wrap' }}>{message.content}</Text>
+            <>
+              {message.images && message.images.length > 0 && (
+                <div className="chat-message-images">
+                  {message.images.map((src, i) => (
+                    <img key={i} src={src} alt={'截图' + (i + 1)} className="chat-message-image" />
+                  ))}
+                </div>
+              )}
+              {message.content && (
+                <Text style={{ color: '#fff', whiteSpace: 'pre-wrap' }}>{message.content}</Text>
+              )}
+            </>
           ) : (
             <div className="chat-markdown">{renderContent(message.content)}</div>
           )}

@@ -11,8 +11,7 @@ import {
   Spin,
   message as antMessage,
 } from 'antd';
-import {
-  SendOutlined,
+import {SendOutlined,
   SettingOutlined,
   RobotOutlined,
   CopyOutlined,
@@ -23,6 +22,8 @@ import {
   PlusOutlined,
   DeleteOutlined,
   MessageOutlined,
+  CloseOutlined,
+  PictureOutlined,
 } from '@ant-design/icons';
 import {
   chatApiStream,
@@ -43,6 +44,8 @@ export interface ChatQuickAction {
   label: string;
   /** 点击后作为用户消息发送的预设内容 */
   prompt: string;
+  /** true 时点击仅把 prompt 填入输入框（可继续编辑），不直接发送 */
+  fillOnly?: boolean;
 }
 
 interface ChatAssistantProps {
@@ -110,6 +113,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
   const [availableSkills, setAvailableSkills] = useState<any[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   // 思考过程开关（DeepSeek thinking），默认开启，记忆用户偏好
+  // 待发送的截图附件（data URL，单张 ≤2MB，最多 4 张）
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [showThinking, setShowThinking] = useState<boolean>(() => {
     const saved = localStorage.getItem('chatShowThinking');
     return saved === null ? true : saved === 'true';
@@ -167,6 +172,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
           content: m.content,
           reasoning: m.reasoning || '',
           toolEvents: m.toolEvents || [],
+          ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
         }));
         if (activeConversationId) {
           const res = await chatHistoryApi.update(activeConversationId, { messages: payload, thread_id: clientSessionId });
@@ -242,6 +248,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
         content: m.content || '',
         reasoning: m.reasoning || '',
         toolEvents: m.toolEvents || [],
+        ...(Array.isArray((m as any).images) && (m as any).images.length > 0 ? { images: (m as any).images } : {}),
         timestamp: detail.updated_at ? new Date(detail.updated_at).getTime() + idx : Date.now() + idx,
       }));
       setMessages(restored);
@@ -337,7 +344,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
   // 共享流式执行：创建占位 assistant 消息并按 SSE 事件增量填充
   const runStream = useCallback(
-    (history: Array<{ role: string; content: string }>, assistantTimestamp: number) => {
+    (history: Array<{ role: string; content: string; images?: string[] }>, assistantTimestamp: number) => {
       const finalize = (patch?: Partial<Message>) => {
         patchStreaming(assistantTimestamp, (m) => ({
           streaming: false,
@@ -384,9 +391,14 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
-    if (!text || loading) return;
+    if ((!text && pendingImages.length === 0) || loading) return;
 
-    const userMessage: Message = { role: 'user', content: text, timestamp: Date.now() };
+    const userMessage: Message = {
+      role: 'user',
+      content: text || '（见截图）',
+      timestamp: Date.now(),
+      ...(pendingImages.length > 0 ? { images: [...pendingImages] } : {}),
+    };
     const assistantTimestamp = Date.now() + 1;
     const assistantMessage: Message = {
       role: 'assistant',
@@ -399,15 +411,59 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setInputValue('');
+    setPendingImages([]);
     setLoading(true);
 
-    // 构建对话历史（只发送最近 20 条；占位 assistant 消息不发送）
+    // 构建对话历史（只发送最近 20 条；占位 assistant 消息不发送）；截图随消息发送
     const history = [...messages, userMessage].slice(-20).map((m) => ({
       role: m.role,
       content: m.content,
+      ...(m.images && m.images.length > 0 ? { images: m.images } : {}),
     }));
-    runStream(history, assistantTimestamp);
-  }, [inputValue, loading, messages, runStream]);
+    runStream(history as Array<{ role: string; content: string; images?: string[] }>, assistantTimestamp);
+  }, [inputValue, loading, messages, pendingImages, runStream]);
+
+  // 截图附件：文件转 data URL；超 2MB 拒绝（后端限制一致）
+  const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+  const addImageFiles = useCallback((files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    if (images.length === 0) return;
+    images.forEach((file) => {
+      if (file.size > MAX_IMAGE_BYTES) {
+        antMessage.error('截图 ' + file.name + ' 超过 2MB，请压缩后再发');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '');
+        if (!dataUrl.startsWith('data:image/')) return;
+        setPendingImages((prev) => {
+          if (prev.length >= 4) {
+            antMessage.warning('一次最多发 4 张截图');
+            return prev;
+          }
+          return [...prev, dataUrl];
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  // 输入区粘贴截图：clipboard 里有图片文件时拦截并转为附件
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (files.length > 0) {
+      e.preventDefault();
+      addImageFiles(files);
+    }
+  }, [addImageFiles]);
+
+  // 快捷操作（fillOnly）：把预设内容填入输入框，不直接发送；已有内容时换行追加
+  const handleFillPrompt = useCallback((prompt: string) => {
+    setInputValue((prev) => (prev.trim() ? prev.replace(/\s+$/, '') + '\n\n' + prompt : prompt));
+    // 填入后聚焦输入框，方便用户继续编辑
+    setTimeout(() => inputRef.current?.focus?.(), 0);
+  }, []);
 
   // 快捷操作：点击即发送预设消息
   const handleQuickAction = useCallback(
@@ -525,11 +581,32 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
               key={action.label}
               size="small"
               disabled={loading}
-              onClick={() => handleQuickAction(action)}
+              onClick={() =>
+                action.fillOnly
+                  ? handleFillPrompt(action.prompt)
+                  : handleQuickAction(action)
+              }
             >
               {action.label}
             </Button>
           ))}
+        </div>
+      )}
+      {pendingImages.length > 0 && (
+        <div className="chat-pending-images">
+          {pendingImages.map((src, idx) => (
+            <div key={idx} className="chat-pending-image">
+              <img src={src} alt={'截图' + (idx + 1)} />
+              <Button
+                size="small"
+                type="text"
+                danger
+                icon={<CloseOutlined />}
+                onClick={() => setPendingImages((prev) => prev.filter((_, i) => i !== idx))}
+              />
+            </div>
+          ))}
+          <span className="chat-pending-images-hint">截图将随消息发送（每张 ≤2MB）</span>
         </div>
       )}
       <div className="chat-input-area">
@@ -538,7 +615,8 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+          onPaste={handlePaste}
+          placeholder="输入消息... (Enter 发送, Shift+Enter 换行; 可直接粘贴截图)"
           autoSize={{ minRows: 3, maxRows: 10 }}
           disabled={loading}
         />
@@ -547,13 +625,31 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({
             <Button danger icon={<PauseOutlined />} onClick={handleStop} />
           </Tooltip>
         ) : (
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={handleSend}
-            disabled={!inputValue.trim()}
-          />
+          <Tooltip title="插入截图（也可直接 Ctrl+V 粘贴）">
+            <Button
+              icon={<PictureOutlined />}
+              onClick={() => document.getElementById('chat-image-input-' + (clientSessionId || 'x'))?.click()}
+              disabled={loading}
+            />
+          </Tooltip>
         )}
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={handleSend}
+          disabled={!inputValue.trim() && pendingImages.length === 0}
+        />
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          id={'chat-image-input-' + (clientSessionId || 'x')}
+          onChange={(e) => {
+            addImageFiles(Array.from(e.target.files || []));
+            e.target.value = '';
+          }}
+        />
       </div>
     </div>
   );

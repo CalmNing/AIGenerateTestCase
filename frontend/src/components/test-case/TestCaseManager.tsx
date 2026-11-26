@@ -557,12 +557,24 @@ const TestCaseManager: React.FC<TestCaseManagerProps> = ({
         scopeKey={selectedSession ? 'case-opt-' + selectedSession.id : undefined}
         welcomeHint={
           selectedSession
-            ? '我会基于当前会话「' + (selectedSession.name || '') + '」的需求基准与用例清单与你讨论：对照需求分析覆盖缺口（功能/边界/异常/场景）、评审步骤与预期可执行性、给出补充用例建议；也可以按你的要求直接新增、修改或删除用例（修改/删除前我会先与你确认）。'
+            ? '我会基于当前会话「' + (selectedSession.name || '') + '」的需求基准与用例清单与你讨论：对照需求分析覆盖缺口（功能/边界/异常/场景）、评审步骤与预期可执行性、给出补充用例建议；也可以按你的要求直接新增、修改或删除用例（修改/删除前我会先与你确认）；支持粘贴页面链接，我会用真实浏览器访问页面、对照实际元素优化用例（页面需要登录时会向你要账号密码，建议把凭证配到「全局参数」避免重复输入）。'
             : '请先从左侧选择一个会话。'
         }
         quickActions={[
-          { label: '分析覆盖缺口', prompt: '请分析当前用例清单的覆盖缺口（功能/边界/异常/场景四类），按优先级列出，并引用用例名称定位问题。' },
-          { label: '给出补充用例建议（可引入）', prompt: '请针对刚才指出的覆盖缺口给出补充用例建议，每条建议严格按“### 建议：用例名称”小节格式输出（含用例级别、前置条件、测试步骤、预期结果、关联说明），我会在回复下方一键引入这些用例。' },
+          { label: '分析覆盖缺口', prompt: '请分析当前用例清单的覆盖缺口（功能/边界/异常/场景四类），按优先级列出，并引用用例名称定位问题。', fillOnly: true },
+          { label: '给出补充用例建议（可引入）', prompt: '请针对刚才指出的覆盖缺口给出补充用例建议，每条建议严格按“### 建议：用例名称”小节格式输出（含用例级别、前置条件、测试步骤、预期结果、关联说明），我会在回复下方一键引入这些用例。', fillOnly: true },
+          {
+            label: '按页面实际实现优化用例',
+            fillOnly: true,
+            prompt: [
+              '请按页面实际实现优化以下用例：' + (selectedTestcase ? '「' + selectedTestcase.case_name + '」(id=' + selectedTestcase.id + ')' : '（未点选用例：请根据页面实际功能，从用例清单中自动匹配对应的用例，可能不止一条）'),
+              '页面链接：<在这里粘贴目标页面链接，如 https://cd.luban.fit/#/home/project/...>',
+              '要求：',
+              '1. 先访问页面拿到实际交互元素；页面有多个页签时用 clicks 逐个切换采集全部页签（如页面需要登录，我会提供账号密码；我也可以直接粘贴页面截图补充视觉细节）；',
+              '2. 对照页面实际元素核对该用例的步骤与预期：按钮/字段名称是否一致、操作路径是否走得通、预期提示文案与页面实际是否一致、页面新出现的字段是否需要补充；',
+              '3. 先给出差异清单让我确认，确认后再把用例改成可真实执行的版本。',
+            ].join('\n'),
+          },
         ]}
         onImportCases={handleImportCases}
         extraBody={selectedSession ? { testcase_session_id: selectedSession.id, testcase_module_id: selectedModule !== 0 ? Number(selectedModule) : undefined } : undefined}

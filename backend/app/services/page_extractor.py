@@ -982,6 +982,43 @@ FIND_TRIGGERS_JS = r"""
 # 不用 JS el.click():部分平台(如 sg-security)校验 event.isTrusted,合成点击无效;
 # 不用 Playwright locator/ElementHandle:列表页轮询重渲染频繁替换节点,
 # 定位等待期内节点必被替换,且 closed shadow root 微前端下选择器引擎不可用。
+# 定向点击目标查找(页签/菜单/按钮通吃):
+# - FIND_POINT_JS 只搜 button/a/[role=button](探针兜底够用);
+# - 纯前端页签常是 div/span/li + role=tab 或纯文本节点,需要更大的候选集。
+FIND_CLICK_TARGET_JS = r"""
+(args) => {
+""" + WUJIE_SCOPE_JS + r"""
+  const re = new RegExp(args.pattern);
+  const isVisible = (el) => {
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const searchRoot = wujieScope && wujieScope.shadowRoot ? wujieScope.shadowRoot : document;
+  // 候选:按钮/链接/页签/菜单项 + 有 tabindex 的可点 div/span(低代码平台的页签渲染)
+  const candidates = searchRoot.querySelectorAll(
+    "button, a[href], [role='button'], [role='tab'], [role='menuitem'], [role='option'],"
+    + "li, span, div"
+  );
+  let best = null;
+  for (const el of candidates) {
+    const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    const want = String(args.text == null ? '' : args.text).replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 30) continue;
+    if (!(re.test(t) && t === want)) continue;
+    // 偏好「叶子」元素:innerText 等于目标且子元素不再缩小时点它(避免点到整栏容器)
+    if (best === null || el.innerText.length <= best.innerText.length) {
+      best = el;
+    }
+  }
+  if (!best) return null;
+  best.scrollIntoView({block: 'center', behavior: 'instant'});
+  const r = best.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+}
+"""
+
 FIND_POINT_JS = r"""
 (args) => {
 """ + WUJIE_SCOPE_JS + r"""
@@ -1182,6 +1219,29 @@ def _loose_text_pattern(text: str) -> str:
         return r"^$"
     return r"^\s*" + r"\s*".join(chars) + r"\s*$"
 
+
+async def _click_by_text(page, text: str) -> bool:
+    """定向点击:按文案跨 frame 找可点元素(含页签/菜单)并坐标点击。
+
+    与 _click_button_by_text 的差异:候选集更大(button/a/tab/menuitem/li/span[tabindex]),
+    支持纯前端页签切换这类「文案可见但不是 button」的场景。
+    """
+    pattern = _loose_text_pattern(text)
+    for frame in page.frames:
+        try:
+            point = await frame.evaluate(
+                FIND_CLICK_TARGET_JS, {"pattern": pattern, "text": text}
+            )
+            if not point:
+                continue
+            offset = await _frame_viewport_offset(page, frame)
+            if offset is None:
+                continue
+            await page.mouse.click(offset["x"] + point["x"], offset["y"] + point["y"])
+            return True
+        except Exception:
+            continue
+    return False
 
 async def _click_button_by_text(page, text: str) -> bool:
     """跨 frame 按文案找按钮并坐标点击(用于兜底点「取消」关浮层)。
@@ -1530,6 +1590,7 @@ async def extract_elements(
     max_total_triggers: int = 24,
     skipped_out: Optional[list] = None,
     settle_timeout_ms: int = SETTLE_TIMEOUT_MS,
+    post_open_clicks: Optional[list[str]] = None,
 ) -> list[dict]:
     """打开页面并采集原始交互元素属性(真浏览器,延迟导入)。
 
@@ -1541,7 +1602,9 @@ async def extract_elements(
          的页面正文常渲染在 iframe 里,主 frame 往往只有外壳(搜索框、头像),
          只扫主 frame 会漏掉绝大部分元素。非 main frame 采集到的元素附带
          `frame` 字段(该 frame 的 URL),供验证/执行阶段路由到正确 frame。
-      2. 交互探针(可深度):自动点击「新增/新建」等触发按钮,等弹窗/抽屉渲染后
+      2. 定向点击(post_open_clicks):先按文案依次点击(如切换页签),每次点击后
+         重新落稳再采集 —— 用于纯前端页签/无路由切换的页面。
+      3. 交互探针(可深度):自动点击「新增/新建」等触发按钮,等弹窗/抽屉渲染后
          重跑采集脚本,仅保留祖先层中没有的元素(附带 `probePath`/`probeTrigger`),
          关闭弹窗继续。`max_depth>1` 时对弹窗内新出现的触发按钮递归下探
          (最多 max_depth 层浮层;仅浮层,不跟路由跳转)。`trigger_texts` 可自定义
@@ -1566,6 +1629,18 @@ async def extract_elements(
                 page, activity=activity, timeout_ms=settle_timeout_ms
             )
             logger.info(f"[page_extractor] 页面落稳:交互元素 {settled} 个")
+
+            # ---- 定向点击:切换纯前端页签等无路由交互,点击后重新落稳再采集 ----
+            if post_open_clicks:
+                for click_text in post_open_clicks:
+                    clicked = await _click_by_text(page, click_text)
+                    if not clicked:
+                        logger.warning(f"[page_extractor] 定向点击未找到目标: {click_text}")
+                        continue
+                    await _wait_for_settle(
+                        page, activity=activity, timeout_ms=settle_timeout_ms
+                    )
+                    logger.info(f"[page_extractor] 定向点击后落稳: {click_text}")
             scopes: list[str] = []
             raw = await _collect_all_frames(page, skipped_out, scopes)
             if scopes:

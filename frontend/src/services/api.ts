@@ -1008,7 +1008,7 @@ export interface ChatStreamControl {
  */
 export const chatApiStream = (
   payload: {
-    messages: Array<{ role: string; content: string }>;
+    messages: Array<{ role: string; content: string; images?: string[] }>;
     selected_skills?: string[];
     client_session_id?: string;
     context?: string;

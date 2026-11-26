@@ -129,7 +129,7 @@ def trim_history(
     est = estimate_fn or estimate_message_tokens
     stats = {"dropped": 0, "pruned": 0, "kept": len(messages)}
 
-    # 先逐条修剪长消息
+    # 先逐条修剪长消息（images 等附加字段原样保留）
     pruned_items = []
     for msg in messages:
         content = msg.content if hasattr(msg, "content") else msg.get("content", "")
@@ -137,7 +137,13 @@ def trim_history(
         new_content = prune_long_message(content)
         if new_content != content:
             stats["pruned"] += 1
-        pruned_items.append({"role": role, "content": new_content})
+        item = {"role": role, "content": new_content}
+        # dict 输入的附加键（images 等）原样带回
+        if not hasattr(msg, "content") and isinstance(msg, dict):
+            for key, value in msg.items():
+                if key not in item:
+                    item[key] = value
+        pruned_items.append(item)
 
     # 从最旧开始丢弃
     kept = list(pruned_items)

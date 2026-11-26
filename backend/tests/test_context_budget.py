@@ -305,3 +305,60 @@ def test_deepseek_compat_model_preserves_reasoning_in_stream_chunks():
     gen2 = model._convert_chunk_to_generation_chunk(chunk2, None, None)
     assert gen2.message.content == "答"
     assert not gen2.message.additional_kwargs.get("reasoning_content")
+
+
+# ===== 截图多模态 =====
+
+def test_user_content_blocks_with_image():
+    from app.routes.chat import ChatMessage, _user_content_blocks
+
+    msg = ChatMessage(role="user", content="按这张截图核对", images=["data:image/png;base64,AAA"])
+    blocks = _user_content_blocks(msg)
+    assert isinstance(blocks, list)
+    assert blocks[0] == {"type": "text", "text": "按这张截图核对"}
+    assert blocks[1]["type"] == "image_url"
+    assert blocks[1]["image_url"]["url"].startswith("data:image/")
+
+
+def test_user_content_blocks_plain_text_passthrough():
+    from app.routes.chat import ChatMessage, _user_content_blocks
+
+    assert _user_content_blocks(ChatMessage(role="user", content="hi")) == "hi"
+    bad = ChatMessage(role="user", content="x", images=["http://a/b.png"])
+    assert _user_content_blocks(bad) == "x"
+    assistant = ChatMessage(role="assistant", content="回复", images=["data:image/png;base64,A"])
+    assert _user_content_blocks(assistant) == "回复"
+
+# ===== 截图穿透预算裁剪 =====
+
+def test_trim_history_preserves_images_key():
+    """回归：images 字段曾在校验/裁剪管道中被丢弃，截图传不到模型。"""
+    from utils.context_budget import trim_history
+
+    msgs = [
+        {"role": "user", "content": "旧消息", "images": ["data:image/png;base64,OLD"]},
+        {"role": "assistant", "content": "好"},
+        {"role": "user", "content": "看截图", "images": ["data:image/png;base64,NEW"]},
+    ]
+    kept, stats = trim_history(msgs, 10 ** 9)
+    carry = [m for m in kept if m.get("images")]
+    assert len(carry) == 2, "images 键必须原样保留"
+
+
+def test_budgeted_history_keeps_images():
+    """端到端：_budgeted_history 输出的 ChatMessage 必须带 images。"""
+    import asyncio
+
+    from app.routes.chat import ChatMessage, ChatRequest, _budgeted_history
+
+    img = "data:image/png;base64,iVBORw0KGgo"
+    req = ChatRequest(messages=[
+        ChatMessage(role="user", content="旧" * 1000, images=["data:image/png;base64,OLD"]),
+        ChatMessage(role="assistant", content="回" * 1000),
+        ChatMessage(role="user", content="看这张", images=[img]),
+    ])
+    out = asyncio.run(_budgeted_history(
+        req, "system", 16384, "k", "https://api.deepseek.com", "deepseek-v4-flash",
+    ))
+    carry = [m for m in out if m.images]
+    assert carry and carry[-1].images == [img], "最新截图必须穿过预算管道"

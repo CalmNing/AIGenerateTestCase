@@ -5,7 +5,7 @@ MCP 工具调用和 Skills 方法论注入。
 """
 import logging
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -37,6 +37,9 @@ _CONTEXT_SECTION_TITLE = "## 当前业务上下文"
 class ChatMessage(BaseModel):
     role: str  # "user" 或 "assistant"
     content: str
+    # 用户消息附带的截图（data URL，data:image/png;base64,...）。仅 user 角色有效；
+    # 有图时 content 构造为多模态 blocks 交给模型。上限单张 2MB（与文档解析一致）。
+    images: Optional[list[str]] = None
 
 
 class ChatRequest(BaseModel):
@@ -76,6 +79,21 @@ def _truncate_context(context: str) -> str:
     return context[:_CONTEXT_HEAD_KEEP] + _CONTEXT_ELLIPSIS + context[-_CONTEXT_TAIL_KEEP:]
 
 
+def _user_content_blocks(msg) -> Any:
+    """用户消息转 LangChain content：带截图时构造多模态 blocks，否则纯文本。
+
+    images 是 data URL 列表（data:image/png;base64,...）；单张超 2MB 或非 data:
+    前缀的忽略（前端已限制，这里兜底）。截图让模型能看到页面实况，配合
+    browse_page 的元素摘要做「用例 vs 页面实际」比对。
+    """
+    images = getattr(msg, "images", None) or []
+    if msg.role != "user" or not images:
+        return msg.content
+    blocks: list = [{"type": "text", "text": msg.content or "（见图）"}]
+    for data_url in images:
+        if isinstance(data_url, str) and data_url.startswith("data:image/") and len(data_url) <= 3 * 1024 * 1024:
+            blocks.append({"type": "image_url", "image_url": {"url": data_url}})
+    return blocks if len(blocks) > 1 else msg.content
 async def _budgeted_history(
     req,
     system_content: str,
@@ -109,7 +127,10 @@ async def _budgeted_history(
     system_tokens = estimate_tokens(system_content)
     budget = build_history_budget(window, chat_max_tokens, system_tokens)
 
-    items = [{"role": m.role, "content": m.content} for m in req.messages]
+    items = [
+        {"role": m.role, "content": m.content, "images": list(getattr(m, "images", None) or [])}
+        for m in req.messages
+    ]
     kept, stats = trim_history(items, budget)
 
     # checkpoint 压缩：丢得多才值得一次额外 LLM 调用
@@ -137,7 +158,12 @@ async def _budgeted_history(
         # checkpoint 计入预算之外的安全垫（约几百 token，headroom 已覆盖）
         messages.append(ChatMessage(role=checkpoint_message["role"], content=checkpoint_message["content"]))
     messages.extend(
-        ChatMessage(role=item["role"], content=item["content"]) for item in kept
+        ChatMessage(
+            role=item["role"],
+            content=item["content"],
+            images=item.get("images") or None,
+        )
+        for item in kept
     )
     return messages
 
@@ -242,10 +268,17 @@ def _load_testcase_tools(
         return []
     try:
         from app.services.testcase_chat_tools import load_testcase_write_tools
-        return load_testcase_write_tools(mode, testcase_session_id, current_user, testcase_module_id)
+        write_tools = load_testcase_write_tools(mode, testcase_session_id, current_user, testcase_module_id)
     except Exception as e:
         logger.warning("加载用例操作工具失败: %s", e)
-        return []
+        write_tools = []
+    try:
+        from app.services.page_insight_tools import load_page_insight_tools
+        insight_tools = load_page_insight_tools(mode, testcase_session_id, current_user)
+    except Exception as e:
+        logger.warning("加载页面洞察工具失败: %s", e)
+        insight_tools = []
+    return write_tools + insight_tools
 
 
 async def _load_chat_tools(session, current_user, mode: str) -> list:
@@ -361,7 +394,15 @@ async def _stream_plain_model_http(
     url = api_base_url.rstrip("/") + "/chat/completions"
     messages = [{"role": "system", "content": system_content}]
     for msg in history_messages:
-        messages.append({"role": msg.role, "content": msg.content})
+        images = getattr(msg, "images", None)
+        if msg.role == "user" and images:
+            # 多模态消息：文本 + 截图（image_url blocks，OpenAI 兼容格式）
+            blocks: list = [{"type": "text", "text": msg.content or "（见图）"}]
+            for data_url in images:
+                blocks.append({"type": "image_url", "image_url": {"url": data_url}})
+            messages.append({"role": "user", "content": blocks})
+        else:
+            messages.append({"role": msg.role, "content": msg.content})
 
     body = {
         "model": api_model,
@@ -511,7 +552,7 @@ async def chat(
     langchain_messages.append(SystemMessage(content=system_content))
     for msg in budgeted_messages:
         if msg.role == "user":
-            langchain_messages.append(HumanMessage(content=msg.content))
+            langchain_messages.append(HumanMessage(content=_user_content_blocks(msg)))
         elif msg.role == "assistant":
             langchain_messages.append(AIMessage(content=msg.content))
 
@@ -663,7 +704,7 @@ async def chat_stream(
     langchain_messages = [SystemMessage(content=system_content)]
     for msg in budgeted_messages:
         if msg.role == "user":
-            langchain_messages.append(HumanMessage(content=msg.content))
+            langchain_messages.append(HumanMessage(content=_user_content_blocks(msg)))
         elif msg.role == "assistant":
             langchain_messages.append(AIMessage(content=msg.content))
 
